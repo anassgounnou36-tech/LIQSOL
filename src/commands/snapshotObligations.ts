@@ -91,15 +91,12 @@ async function main() {
     
     for (const { pubkey, account } of accounts) {
       try {
-        // Market pubkey is at offset 72 bytes after discriminator + tag + lastUpdate
-        // Simplified: Just check if account data contains the market pubkey
-        // For proper decoding, we'd use the decoder, but for snapshot we just need pubkeys
-        
-        // Obligation structure (simplified):
+        // Obligation structure (offsets from start of account data):
         // - 8 bytes: discriminator
         // - 1 byte: tag
         // - 64 bytes: lastUpdate struct
         // - 32 bytes: lendingMarket (market pubkey)
+        // Total offset to market: 8 + 1 + 64 = 73 bytes
         
         const marketOffset = 8 + 1 + 64; // 73 bytes
         if (account.data.length >= marketOffset + 32) {

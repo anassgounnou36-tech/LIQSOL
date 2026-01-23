@@ -21,7 +21,7 @@ The `data_base64` fields currently contain placeholder values (`TODO_FETCH_FROM_
 
 ### obligation_usdc_debt.json
 - **Account**: Obligation with SOL collateral and USDC debt
-- **Pubkey**: `11111111111111111111111111111114` (placeholder - needs real obligation address)
+- **Pubkey**: `H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo` (mock account for testing)
 - **Expected Fields**:
   - Market: `7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF`
 

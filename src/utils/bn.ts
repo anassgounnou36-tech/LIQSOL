@@ -4,7 +4,14 @@ export function toBigInt(v: unknown): bigint {
   if (typeof v === "bigint") return v;
   if (typeof v === "number") return BigInt(v);
   if (typeof v === "string") return BigInt(v);
-  if (v && typeof (v as BNLike).toString === "function") return BigInt((v as BNLike).toString());
+  // Validate BN-like object more carefully
+  if (v && typeof v === "object" && "toString" in v && typeof (v as BNLike).toString === "function") {
+    const str = (v as BNLike).toString();
+    // Validate the string is numeric before converting
+    if (/^-?\d+$/.test(str)) {
+      return BigInt(str);
+    }
+  }
   throw new Error(`Unsupported BN-like value: ${String(v)}`);
 }
 
