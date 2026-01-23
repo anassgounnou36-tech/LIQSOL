@@ -81,8 +81,9 @@ async function main() {
         // Decode obligation using IDL-based decoder
         const decoded = decodeObligation(account.data, pubkey);
         
-        // Filter by market pubkey
-        if (decoded.marketPubkey === marketPubkey.toString()) {
+        // Filter by market pubkey using PublicKey comparison for safety
+        const decodedMarket = new PublicKey(decoded.marketPubkey);
+        if (decodedMarket.equals(marketPubkey)) {
           obligationPubkeys.push(pubkey.toString());
         }
       } catch (error) {

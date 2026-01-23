@@ -285,7 +285,7 @@ describe("Kamino Decoder Tests", () => {
       expect(decoded.deposits[0]).toHaveProperty("mint");
       expect(decoded.deposits[0]).toHaveProperty("depositedAmount");
 
-      // Verify borrows structure  
+      // Verify borrows structure
       expect(decoded.borrows[0]).toHaveProperty("reserve");
       expect(decoded.borrows[0]).toHaveProperty("mint");
       expect(decoded.borrows[0]).toHaveProperty("borrowedAmount");
