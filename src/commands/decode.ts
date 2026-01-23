@@ -35,7 +35,7 @@ async function main() {
   let pubkey: PublicKey;
   try {
     pubkey = new PublicKey(pubkeyStr);
-  } catch (error) {
+  } catch {
     console.error("Invalid public key:", pubkeyStr);
     process.exit(1);
   }

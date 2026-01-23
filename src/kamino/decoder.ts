@@ -27,7 +27,14 @@ const accountsCoder = new BorshAccountsCoder(idlJson);
 /**
  * Extracts non-null oracle public keys from Reserve's TokenInfo configuration
  */
-function extractOraclePubkeys(tokenInfo: any): string[] {
+function extractOraclePubkeys(tokenInfo: {
+  pythConfiguration?: { price?: { toString: () => string } };
+  switchboardConfiguration?: {
+    priceAggregator?: { toString: () => string };
+    twapAggregator?: { toString: () => string };
+  };
+  scopeConfiguration?: { priceFeed?: { toString: () => string } };
+}): string[] {
   const oracles: string[] = [];
   const nullPubkey = "11111111111111111111111111111111";
 
@@ -74,11 +81,12 @@ function extractOraclePubkeys(tokenInfo: any): string[] {
  * @returns Decoded Reserve with structured fields
  */
 export function decodeReserve(
-  accountData: Buffer,
+  accountData: Uint8Array | Buffer,
   reservePubkey: PublicKey
 ): DecodedReserve {
   // Decode using Anchor BorshAccountsCoder
-  const decoded = accountsCoder.decode("reserve", accountData);
+  const dataBuffer = Buffer.from(accountData);
+  const decoded = accountsCoder.decode("reserve", dataBuffer);
 
   // Extract oracle pubkeys from config
   const oraclePubkeys = extractOraclePubkeys(decoded.config?.tokenInfo);
@@ -118,16 +126,22 @@ export function setReserveMintCache(reservePubkey: string, mint: string): void {
  * @returns Decoded Obligation with structured fields
  */
 export function decodeObligation(
-  accountData: Buffer,
+  accountData: Uint8Array | Buffer,
   obligationPubkey: PublicKey
 ): DecodedObligation {
   // Decode using Anchor BorshAccountsCoder
-  const decoded = accountsCoder.decode("obligation", accountData);
+  const dataBuffer = Buffer.from(accountData);
+  const decoded = accountsCoder.decode("obligation", dataBuffer);
 
   // Map deposits (collateral)
-  const deposits = decoded.deposits
-    .filter((d: any) => d.depositedAmount > 0)
-    .map((d: any) => ({
+  const deposits = (
+    decoded.deposits as Array<{
+      depositReserve: { toString: () => string };
+      depositedAmount: number | bigint;
+    }>
+  )
+    .filter((d) => d.depositedAmount > 0)
+    .map((d) => ({
       reserve: d.depositReserve.toString(),
       mint:
         reserveMintCache.get(d.depositReserve.toString()) ||
@@ -136,9 +150,14 @@ export function decodeObligation(
     }));
 
   // Map borrows
-  const borrows = decoded.borrows
-    .filter((b: any) => b.borrowedAmountSf > 0)
-    .map((b: any) => ({
+  const borrows = (
+    decoded.borrows as Array<{
+      borrowReserve: { toString: () => string };
+      borrowedAmountSf: number | bigint;
+    }>
+  )
+    .filter((b) => b.borrowedAmountSf > 0)
+    .map((b) => ({
       reserve: b.borrowReserve.toString(),
       mint:
         reserveMintCache.get(b.borrowReserve.toString()) ||

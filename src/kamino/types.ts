@@ -1,5 +1,3 @@
-import { PublicKey } from "@solana/web3.js";
-
 /**
  * Decoded Reserve account from Kamino Lending protocol.
  * Represents a lending reserve with liquidity, collateral, and configuration.
