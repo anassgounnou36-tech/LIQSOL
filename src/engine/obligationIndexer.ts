@@ -1,4 +1,4 @@
-import { Connection, PublicKey, AccountInfo } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { logger } from "../observability/logger.js";
