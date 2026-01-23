@@ -4,6 +4,7 @@ import { BorshAccountsCoder } from "@coral-xyz/anchor";
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { Buffer } from "buffer";
 import { decodeReserve, decodeObligation } from "../kamino/decoder.js";
 
 const __filename = fileURLToPath(import.meta.url);

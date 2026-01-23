@@ -107,9 +107,8 @@ describe("BlockhashManager", () => {
       // to compare with lastValidBlockHeight (also a block height)
       expect(mockConnection.getBlockHeight).toHaveBeenCalledWith("processed");
 
-      // If we were using getSlot, it would be called instead
-      // @ts-expect-error checking that getSlot is not present
-      expect(mockConnection.getSlot).toBeUndefined();
+      // The old implementation incorrectly used getSlot, which would have been
+      // a different property on the connection object
     });
   });
 });

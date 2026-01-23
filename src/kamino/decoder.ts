@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { Buffer } from "buffer";
 import { DecodedReserve, DecodedObligation } from "./types.js";
 
 // Get the directory of the current module
@@ -109,12 +110,39 @@ export function decodeReserve(
 }
 
 /**
- * Helper to get reserve mint for a reserve pubkey (used by obligation decoder)
- * This would need to be fetched from the chain in a real scenario.
- * For testing, this can be populated from fixture data.
+ * Placeholder value used when reserve mint information is not available
+ * during obligation decoding. In production, mints should be fetched from
+ * the chain or provided via setReserveMintCache().
+ */
+const UNKNOWN_MINT_PLACEHOLDER = "unknown-mint-fetch-required";
+
+/**
+ * Cache mapping reserve pubkeys to their associated token mints.
+ * This is used by decodeObligation() to populate mint fields in deposits and borrows.
+ * 
+ * Note: Obligation accounts store reserve pubkeys but not the token mints.
+ * To get the mint, you need to either:
+ * 1. Fetch the Reserve account and extract the mint
+ * 2. Use this cache if you've already decoded the Reserve
+ * 
+ * Usage:
+ *   // After decoding a Reserve
+ *   const reserve = decodeReserve(reserveData, reservePubkey);
+ *   setReserveMintCache(reserve.reservePubkey, reserve.liquidityMint);
+ *   
+ *   // Later when decoding Obligation
+ *   const obligation = decodeObligation(obligationData, obligationPubkey);
+ *   // obligation.deposits[].mint will use cached values
  */
 const reserveMintCache = new Map<string, string>();
 
+/**
+ * Sets the token mint for a given reserve in the cache.
+ * Used to populate mint fields when decoding Obligation accounts.
+ * 
+ * @param reservePubkey - Public key of the reserve (as string)
+ * @param mint - Token mint public key (as string)
+ */
 export function setReserveMintCache(reservePubkey: string, mint: string): void {
   reserveMintCache.set(reservePubkey, mint);
 }
@@ -145,7 +173,7 @@ export function decodeObligation(
       reserve: d.depositReserve.toString(),
       mint:
         reserveMintCache.get(d.depositReserve.toString()) ||
-        "unknown-mint-fetch-required",
+        UNKNOWN_MINT_PLACEHOLDER,
       depositedAmount: d.depositedAmount.toString(),
     }));
 
@@ -161,7 +189,7 @@ export function decodeObligation(
       reserve: b.borrowReserve.toString(),
       mint:
         reserveMintCache.get(b.borrowReserve.toString()) ||
-        "unknown-mint-fetch-required",
+        UNKNOWN_MINT_PLACEHOLDER,
       borrowedAmount: b.borrowedAmountSf.toString(),
     }));
 
