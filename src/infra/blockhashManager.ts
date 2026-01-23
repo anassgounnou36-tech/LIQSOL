@@ -13,16 +13,16 @@ export class BlockhashManager {
   }
 
   async getFresh(): Promise<{ blockhash: string; lastValidBlockHeight: number }> {
-    const currentSlot = await this.conn.getSlot("processed");
+    const currentBlockHeight = await this.conn.getBlockHeight("processed");
 
     // Check if we need to refresh
     if (
       this.cachedBlockhash &&
       this.cachedLastValidBlockHeight !== undefined &&
-      currentSlot < this.cachedLastValidBlockHeight - this.safetyBlocks
+      currentBlockHeight < this.cachedLastValidBlockHeight - this.safetyBlocks
     ) {
       logger.debug(
-        { slot: currentSlot, cached_expiry: this.cachedLastValidBlockHeight },
+        { blockHeight: currentBlockHeight, cached_expiry: this.cachedLastValidBlockHeight },
         "using cached blockhash"
       );
       return {
@@ -37,7 +37,7 @@ export class BlockhashManager {
     this.cachedLastValidBlockHeight = lastValidBlockHeight;
 
     logger.debug(
-      { slot: currentSlot, lastValidBlockHeight },
+      { blockHeight: currentBlockHeight, lastValidBlockHeight },
       "refreshed blockhash"
     );
 
