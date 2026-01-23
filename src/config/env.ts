@@ -17,11 +17,14 @@ export const EnvSchema = z.object({
 
 export type Env = z.infer<typeof EnvSchema>;
 
-export function loadEnv(): Env {
+export function loadEnv(injectedEnv?: Record<string, string | undefined>): Env {
   // Load dotenv only when env is actually needed
-  dotenvConfig();
+  if (!injectedEnv) {
+    dotenvConfig();
+  }
 
-  const parsed = EnvSchema.safeParse(process.env);
+  const envToValidate = injectedEnv ?? process.env;
+  const parsed = EnvSchema.safeParse(envToValidate);
   if (!parsed.success) {
     const msg = parsed.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("\n");
     throw new Error(`Invalid .env:\n${msg}`);

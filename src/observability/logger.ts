@@ -1,13 +1,6 @@
 import pino from "pino";
-import { loadEnv } from "../config/env.js";
 
-let level = "info";
-try {
-  level = loadEnv().LOG_LEVEL;
-} catch {
-  // during tests or no env loaded yet
-}
-
+const level = process.env.LOG_LEVEL ?? "info";
 const isDev = process.env.NODE_ENV !== "production";
 
 export const logger = pino(
@@ -15,7 +8,11 @@ export const logger = pino(
   isDev
     ? pino.transport({
         target: "pino-pretty",
-        options: { colorize: true, translateTime: "SYS:standard", ignore: "pid,hostname" }
+        options: {
+          colorize: true,
+          translateTime: "SYS:standard",
+          ignore: "pid,hostname"
+        }
       })
     : undefined
 );
