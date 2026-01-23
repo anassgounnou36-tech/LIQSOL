@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+/**
+ * @deprecated This unified decode command is deprecated.
+ * Use separate commands instead:
+ *   - npm run decode:reserve <reserve_pubkey>
+ *   - npm run decode:obligation <obligation_pubkey>
+ */
 import { Connection, PublicKey } from "@solana/web3.js";
 import { loadEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";

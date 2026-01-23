@@ -245,7 +245,7 @@ describe("Kamino Decoder Tests", () => {
         expect(decoded).toHaveProperty("liquidationThreshold");
         expect(decoded).toHaveProperty("totalBorrowed");
         expect(decoded).toHaveProperty("availableLiquidity");
-      } catch (error) {
+      } catch {
         // Skip if fixture has encoding issues - this can be populated with real data later
         console.log("Skipping Reserve fixture test - needs real on-chain data");
       }
@@ -284,7 +284,7 @@ describe("Kamino Decoder Tests", () => {
         expect(decoded.borrows[0]).toHaveProperty("reserve");
         expect(decoded.borrows[0]).toHaveProperty("mint");
         expect(decoded.borrows[0]).toHaveProperty("borrowedAmount");
-      } catch (error) {
+      } catch {
         // Skip if fixture has encoding issues - this can be populated with real data later
         console.log("Skipping Obligation fixture test - needs real on-chain data");
       }

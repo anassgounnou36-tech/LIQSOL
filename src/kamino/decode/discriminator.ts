@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { Buffer } from "buffer";
 
 export function anchorDiscriminator(name: string): Buffer {
   const preimage = `account:${name}`;

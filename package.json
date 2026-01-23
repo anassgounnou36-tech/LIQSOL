@@ -11,6 +11,7 @@
     "healthcheck": "tsx src/commands/healthcheck.ts",
     "decode:reserve": "tsx src/commands/decodeReserve.ts",
     "decode:obligation": "tsx src/commands/decodeObligation.ts",
+    "snapshot:obligations": "tsx src/commands/snapshotObligations.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
