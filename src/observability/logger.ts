@@ -1,19 +1,21 @@
-import pino from 'pino';
+import pino from "pino";
+import { loadEnv } from "../config/env.js";
 
-const isDev = process.env.NODE_ENV !== 'production';
+let level = "info";
+try {
+  level = loadEnv().LOG_LEVEL;
+} catch {
+  // during tests or no env loaded yet
+}
+
+const isDev = process.env.NODE_ENV !== "production";
 
 export const logger = pino(
-  {
-    level: process.env.LOG_LEVEL || 'info',
-  },
+  { level },
   isDev
     ? pino.transport({
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'HH:MM:ss.l',
-          ignore: 'pid,hostname',
-        },
+        target: "pino-pretty",
+        options: { colorize: true, translateTime: "SYS:standard", ignore: "pid,hostname" }
       })
     : undefined
 );

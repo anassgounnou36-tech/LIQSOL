@@ -1,12 +1,15 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig } from "vitest/config";
+
+const enableCoverage = process.env.COVERAGE === "1";
 
 export default defineConfig({
   test: {
-    globals: false,
-    environment: 'node',
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html'],
-    },
-  },
+    environment: "node",
+    ...(enableCoverage && {
+      coverage: {
+        provider: "v8",
+        reporter: ["text", "json", "html"]
+      }
+    })
+  }
 });
