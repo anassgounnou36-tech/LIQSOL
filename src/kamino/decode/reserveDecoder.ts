@@ -109,7 +109,7 @@ export function decodeReserve(
     liquidityMint: decoded.liquidity.mintPubkey.toString(),
     collateralMint: decoded.collateral.mintPubkey.toString(),
     liquidityDecimals: Number(decoded.liquidity.mintDecimals),
-    collateralDecimals: Number(decoded.liquidity.mintDecimals), // Typically same as liquidity
+    collateralDecimals: Number(decoded.collateral.mintDecimals),
     oraclePubkeys,
     loanToValueRatio: Number(decoded.config.loanToValuePct),
     liquidationThreshold: Number(decoded.config.liquidationThresholdPct),
