@@ -11,6 +11,9 @@ export const EnvSchema = z.object({
 
   BOT_KEYPAIR_PATH: z.string().min(1),
 
+  KAMINO_MARKET_PUBKEY: z.string().min(1),
+  KAMINO_KLEND_PROGRAM_ID: z.string().min(1),
+
   LOG_LEVEL: z.enum(["fatal","error","warn","info","debug","trace"]).default("info"),
   NODE_ENV: z.enum(["development","production","test"]).default("development"),
 });

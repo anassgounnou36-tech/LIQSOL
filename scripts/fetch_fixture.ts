@@ -7,21 +7,36 @@ import { logger } from "../src/observability/logger.js";
 
 /**
  * Script to fetch account data from Solana and save as base64 fixture
- * Usage: tsx scripts/fetch_fixture.ts <pubkey> <fixture_name> [expected_market] [expected_mint]
+ * Usage: npm run fetch:fixture -- <pubkey> <output_name> [--expected-market <market>] [--expected-mint <mint>]
  * 
  * Example:
- *   tsx scripts/fetch_fixture.ts EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v reserve_usdc 7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF
+ *   npm run fetch:fixture -- EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v reserve_usdc --expected-market 7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF --expected-mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
  */
 
 async function main() {
   const args = process.argv.slice(2);
 
   if (args.length < 2) {
-    logger.error("Usage: tsx scripts/fetch_fixture.ts <pubkey> <fixture_name> [expected_market] [expected_mint]");
+    logger.error("Usage: npm run fetch:fixture -- <pubkey> <output_name> [--expected-market <market>] [--expected-mint <mint>]");
     process.exit(1);
   }
 
-  const [pubkeyStr, fixtureName, expectedMarket, expectedMint] = args;
+  const pubkeyStr = args[0];
+  const outputName = args[1];
+  
+  // Parse optional flags
+  let expectedMarket: string | undefined;
+  let expectedMint: string | undefined;
+  
+  for (let i = 2; i < args.length; i++) {
+    if (args[i] === "--expected-market" && i + 1 < args.length) {
+      expectedMarket = args[i + 1];
+      i++;
+    } else if (args[i] === "--expected-mint" && i + 1 < args.length) {
+      expectedMint = args[i + 1];
+      i++;
+    }
+  }
 
   // Validate pubkey
   let pubkey: PublicKey;
@@ -85,12 +100,12 @@ async function main() {
       process.cwd(),
       "test",
       "fixtures",
-      `${fixtureName}.json`
+      `${outputName}.json`
     );
     writeFileSync(fixturePath, JSON.stringify(fixture, null, 2));
 
     logger.info({ fixturePath }, "Fixture saved successfully");
-    logger.info({ pubkey: pubkey.toString(), fixtureName }, "Fixture generation complete");
+    logger.info({ pubkey: pubkey.toString(), outputName }, "Fixture generation complete");
   } catch (error) {
     logger.error({ error, pubkey: pubkey.toString() }, "Failed to fetch account");
     process.exit(1);

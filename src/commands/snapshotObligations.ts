@@ -5,6 +5,7 @@ import { join } from "path";
 import { loadEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
+import { decodeObligation } from "../kamino/decoder.js";
 
 /**
  * CLI tool for snapshotting obligations from a Kamino Lending market
@@ -22,34 +23,20 @@ async function main() {
   const env = loadEnv();
   
   // Get market and program from env
-  const marketPubkeyStr = process.env.KAMINO_MARKET_PUBKEY;
-  const programIdStr = process.env.KAMINO_KLEND_PROGRAM_ID;
-
-  if (!marketPubkeyStr) {
-    logger.error("KAMINO_MARKET_PUBKEY environment variable is required");
-    process.exit(1);
-  }
-
-  if (!programIdStr) {
-    logger.error("KAMINO_KLEND_PROGRAM_ID environment variable is required");
-    process.exit(1);
-  }
-
-  // Validate pubkeys
   let marketPubkey: PublicKey;
   let programId: PublicKey;
   
   try {
-    marketPubkey = new PublicKey(marketPubkeyStr);
+    marketPubkey = new PublicKey(env.KAMINO_MARKET_PUBKEY);
   } catch {
-    logger.error({ pubkey: marketPubkeyStr }, "Invalid KAMINO_MARKET_PUBKEY");
+    logger.error({ pubkey: env.KAMINO_MARKET_PUBKEY }, "Invalid KAMINO_MARKET_PUBKEY");
     process.exit(1);
   }
 
   try {
-    programId = new PublicKey(programIdStr);
+    programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID);
   } catch {
-    logger.error({ pubkey: programIdStr }, "Invalid KAMINO_KLEND_PROGRAM_ID");
+    logger.error({ pubkey: env.KAMINO_KLEND_PROGRAM_ID }, "Invalid KAMINO_KLEND_PROGRAM_ID");
     process.exit(1);
   }
 
@@ -86,31 +73,22 @@ async function main() {
 
     logger.info({ total: accounts.length }, "Fetched obligation accounts");
 
-    // Decode and filter by market
+    // Decode using IDL and filter by market
     const obligationPubkeys: string[] = [];
     
     for (const { pubkey, account } of accounts) {
       try {
-        // Obligation structure (offsets from start of account data):
-        // - 8 bytes: discriminator
-        // - 1 byte: tag
-        // - 64 bytes: lastUpdate struct
-        // - 32 bytes: lendingMarket (market pubkey)
-        // Total offset to market: 8 + 1 + 64 = 73 bytes
+        // Decode obligation using IDL-based decoder
+        const decoded = decodeObligation(account.data, pubkey);
         
-        const marketOffset = 8 + 1 + 64; // 73 bytes
-        if (account.data.length >= marketOffset + 32) {
-          const marketBytes = account.data.subarray(marketOffset, marketOffset + 32);
-          const accountMarket = new PublicKey(marketBytes);
-          
-          if (accountMarket.equals(marketPubkey)) {
-            obligationPubkeys.push(pubkey.toString());
-          }
+        // Filter by market pubkey
+        if (decoded.marketPubkey === marketPubkey.toString()) {
+          obligationPubkeys.push(pubkey.toString());
         }
       } catch (error) {
         logger.warn(
           { pubkey: pubkey.toString(), error },
-          "Failed to check market for obligation"
+          "Failed to decode obligation"
         );
       }
     }
