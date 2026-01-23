@@ -12,6 +12,7 @@
     "decode:reserve": "tsx src/commands/decodeReserve.ts",
     "decode:obligation": "tsx src/commands/decodeObligation.ts",
     "snapshot:obligations": "tsx src/commands/snapshotObligations.ts",
+    "fetch:fixture": "tsx scripts/fetch_fixture.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",

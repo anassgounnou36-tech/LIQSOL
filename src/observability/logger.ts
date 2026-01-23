@@ -11,8 +11,9 @@ export const logger = pino(
         options: {
           colorize: true,
           translateTime: "SYS:standard",
-          ignore: "pid,hostname"
+          ignore: "pid,hostname",
+          destination: 2 // Write to stderr (fd=2)
         }
       })
-    : undefined
+    : pino.destination(2) // Production: write to stderr (fd=2)
 );

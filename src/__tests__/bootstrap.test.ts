@@ -10,6 +10,8 @@ describe('Environment Tests', () => {
     const mockEnv = {
       RPC_PRIMARY: 'https://api.mainnet-beta.solana.com',
       BOT_KEYPAIR_PATH: '/tmp/keypair.json',
+      KAMINO_MARKET_PUBKEY: '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF',
+      KAMINO_KLEND_PROGRAM_ID: 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD',
       LOG_LEVEL: 'info',
       NODE_ENV: 'test'
     };
@@ -24,6 +26,8 @@ describe('Environment Tests', () => {
     const mockEnv = {
       RPC_PRIMARY: 'not-a-url',
       BOT_KEYPAIR_PATH: '/tmp/keypair.json',
+      KAMINO_MARKET_PUBKEY: '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF',
+      KAMINO_KLEND_PROGRAM_ID: 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD',
       NODE_ENV: 'test'
     };
     
