@@ -1,11 +1,32 @@
 import { describe, it, expect } from 'vitest';
+import { loadEnv } from '../config/env.js';
 
-describe('Bootstrap Tests', () => {
-  it('should pass basic test', () => {
-    expect(true).toBe(true);
+describe('Environment Tests', () => {
+  it('should throw when required vars are missing', () => {
+    expect(() => loadEnv({})).toThrow('Invalid .env');
   });
 
-  it('should have NODE_ENV defined', () => {
-    expect(process.env.NODE_ENV).toBeDefined();
+  it('should accept injected env vars', () => {
+    const mockEnv = {
+      RPC_PRIMARY: 'https://api.mainnet-beta.solana.com',
+      BOT_KEYPAIR_PATH: '/tmp/keypair.json',
+      LOG_LEVEL: 'info',
+      NODE_ENV: 'test'
+    };
+    
+    const env = loadEnv(mockEnv);
+    expect(env.RPC_PRIMARY).toBe('https://api.mainnet-beta.solana.com');
+    expect(env.LOG_LEVEL).toBe('info');
+    expect(env.NODE_ENV).toBe('test');
+  });
+
+  it('should throw when RPC_PRIMARY is not a valid URL', () => {
+    const mockEnv = {
+      RPC_PRIMARY: 'not-a-url',
+      BOT_KEYPAIR_PATH: '/tmp/keypair.json',
+      NODE_ENV: 'test'
+    };
+    
+    expect(() => loadEnv(mockEnv)).toThrow('Invalid .env');
   });
 });
