@@ -97,7 +97,7 @@ export function decodeReserve(
   }
 
   // Decode using Anchor BorshAccountsCoder
-  const decoded = accountsCoder.decode("reserve", dataBuffer);
+  const decoded = accountsCoder.decode("Reserve", dataBuffer);
 
   // Extract oracle pubkeys from config
   const oraclePubkeys = extractOraclePubkeys(decoded.config?.tokenInfo);

@@ -85,7 +85,7 @@ export function decodeObligation(
   }
 
   // Decode using Anchor BorshAccountsCoder
-  const decoded = accountsCoder.decode("obligation", dataBuffer);
+  const decoded = accountsCoder.decode("Obligation", dataBuffer);
 
   // Map deposits (collateral) - filter using gtZero
   const deposits = (
