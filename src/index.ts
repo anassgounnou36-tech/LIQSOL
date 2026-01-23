@@ -1,39 +1,32 @@
-import { Connection, Keypair } from '@solana/web3.js';
-import { readFileSync } from 'fs';
-import { env } from './config/env.js';
-import { logger } from './observability/logger.js';
+import { Connection, Keypair } from "@solana/web3.js";
+import fs from "node:fs";
+import { loadEnv } from "./config/env.js";
+import { logger } from "./observability/logger.js";
 
-async function main() {
-  // Initialize connection
-  const connection = new Connection(env.RPC_URL, 'confirmed');
-
-  // Load bot keypair
-  const keypairData = JSON.parse(readFileSync(env.BOT_KEYPAIR_PATH, 'utf-8'));
-  const botKeypair = Keypair.fromSecretKey(new Uint8Array(keypairData));
-
-  // Boot checks
-  const startTime = Date.now();
-  const slot = await connection.getSlot();
-  const latencyMs = Date.now() - startTime;
-
-  // Log boot success
-  logger.info({
-    event: 'boot_ok',
-    rpc_url: env.RPC_URL,
-    rpc_latency_ms: latencyMs,
-    current_slot: slot,
-    bot_pubkey: botKeypair.publicKey.toBase58(),
-    node_env: env.NODE_ENV,
-  });
-
-  // Additional startup logic would go here
+function loadKeypair(filePath: string): Keypair {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const arr = JSON.parse(raw);
+  if (!Array.isArray(arr)) throw new Error("Keypair file must be a JSON array");
+  return Keypair.fromSecretKey(Uint8Array.from(arr));
 }
 
-main().catch((error) => {
-  logger.fatal({
-    event: 'boot_failed',
-    error: error.message,
-    stack: error.stack,
-  });
+async function main() {
+  const env = loadEnv();
+
+  const conn = new Connection(env.RPC_PRIMARY, "confirmed");
+  const kp = loadKeypair(env.BOT_KEYPAIR_PATH);
+
+  const t0 = Date.now();
+  const slot = await conn.getSlot("processed");
+  const latencyMs = Date.now() - t0;
+
+  logger.info(
+    { event: "boot_ok", slot, rpc: env.RPC_PRIMARY, rpc_latency_ms: latencyMs, bot_pubkey: kp.publicKey.toBase58() },
+    "boot_ok"
+  );
+}
+
+main().catch((err) => {
+  logger.fatal({ event: "boot_failed", err }, "boot_failed");
   process.exit(1);
 });

@@ -1,33 +1,39 @@
-import { config } from 'dotenv';
-import { z } from 'zod';
-import { existsSync } from 'fs';
-import { resolve } from 'path';
+import { config as dotenvConfig } from "dotenv";
+import { z } from "zod";
+import fs from "node:fs";
+import path from "node:path";
 
-// Load .env file
-config();
+export const EnvSchema = z.object({
+  RPC_PRIMARY: z.string().url(),
+  RPC_SECONDARY: z.string().url().optional(),
+  WS_PRIMARY: z.string().url().optional(),
+  WS_SECONDARY: z.string().url().optional(),
 
-// Define schema with custom validation for file existence
-const envSchema = z.object({
-  BOT_KEYPAIR_PATH: z.string().min(1, 'BOT_KEYPAIR_PATH is required').refine(
-    (path) => {
-      const resolvedPath = resolve(path);
-      return existsSync(resolvedPath);
-    },
-    (path) => ({
-      message: `BOT_KEYPAIR_PATH does not exist: ${resolve(path)}`,
-    })
-  ),
-  RPC_URL: z.string().url('RPC_URL must be a valid URL'),
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  BOT_KEYPAIR_PATH: z.string().min(1),
+
+  LOG_LEVEL: z.enum(["fatal","error","warn","info","debug","trace"]).default("info"),
+  NODE_ENV: z.enum(["development","production","test"]).default("development"),
 });
 
-// Parse and validate environment variables
-const parsed = envSchema.safeParse(process.env);
+export type Env = z.infer<typeof EnvSchema>;
 
-if (!parsed.success) {
-  console.error('❌ Environment validation failed:');
-  console.error(parsed.error.format());
-  process.exit(1);
+export function loadEnv(): Env {
+  // Load dotenv only when env is actually needed
+  dotenvConfig();
+
+  const parsed = EnvSchema.safeParse(process.env);
+  if (!parsed.success) {
+    const msg = parsed.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("\n");
+    throw new Error(`Invalid .env:\n${msg}`);
+  }
+
+  // In tests, allow BOT_KEYPAIR_PATH to be dummy if you want; otherwise keep strict.
+  if (parsed.data.NODE_ENV !== "test") {
+    const resolved = path.resolve(parsed.data.BOT_KEYPAIR_PATH);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`BOT_KEYPAIR_PATH does not exist: ${resolved}`);
+    }
+  }
+
+  return parsed.data;
 }
-
-export const env = parsed.data;
