@@ -40,4 +40,11 @@ coverage/
 
 # Temporary files
 tmp/
-temp/IMPLEMENTATION_SUMMARY.md
+temp/
+
+# Data files
+data/
+*.jsonl
+
+# Implementation docs (can be removed if needed)
+IMPLEMENTATION_SUMMARY.md
