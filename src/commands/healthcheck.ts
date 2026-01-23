@@ -4,6 +4,9 @@ import { ConnectionManager } from "../infra/connectionManager.js";
 import { BlockhashManager } from "../infra/blockhashManager.js";
 import { WebsocketManager } from "../infra/websocketManager.js";
 
+const WS_POLL_INTERVAL_MS = 100;
+const WS_TIMEOUT_MS = 10000;
+
 async function main() {
   const env = loadEnv();
 
@@ -49,7 +52,7 @@ async function main() {
         slotUpdateReceived = true;
       });
 
-      // Wait for at least one slot update (with 10s timeout)
+      // Wait for at least one slot update (with timeout)
       await new Promise<void>((resolve, reject) => {
         const checkInterval = setInterval(() => {
           if (slotUpdateReceived) {
@@ -57,12 +60,12 @@ async function main() {
             clearTimeout(timeout);
             resolve();
           }
-        }, 100);
+        }, WS_POLL_INTERVAL_MS);
 
         const timeout = setTimeout(() => {
           clearInterval(checkInterval);
-          reject(new Error("No slot updates received within 10 seconds"));
-        }, 10000);
+          reject(new Error(`No slot updates received within ${WS_TIMEOUT_MS / 1000} seconds`));
+        }, WS_TIMEOUT_MS);
       });
 
       logger.info({ event: "ws_check_ok" }, "websocket check passed");

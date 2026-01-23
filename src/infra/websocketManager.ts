@@ -1,15 +1,31 @@
 import WebSocket from "ws";
 import { logger } from "../observability/logger.js";
 
+interface SlotSubscriptionResponse {
+  result?: number;
+}
+
+interface SlotNotification {
+  params?: {
+    result?: {
+      slot?: number;
+    };
+  };
+}
+
+type WebSocketMessage = SlotSubscriptionResponse | SlotNotification;
+
 export class WebsocketManager {
   private ws?: WebSocket;
   private wsUrl: string;
   private subscriptionId?: number;
   private onSlotCallback?: (slot: number) => void;
   private reconnectTimer?: NodeJS.Timeout;
+  private reconnectDelayMs: number;
 
-  constructor(wsUrl: string) {
+  constructor(wsUrl: string, reconnectDelayMs = 5000) {
     this.wsUrl = wsUrl;
+    this.reconnectDelayMs = reconnectDelayMs;
   }
 
   async connect(): Promise<void> {
@@ -28,17 +44,17 @@ export class WebsocketManager {
 
       this.ws.on("message", (data: WebSocket.RawData) => {
         try {
-          const msg = JSON.parse(data.toString());
+          const msg = JSON.parse(data.toString()) as WebSocketMessage;
           
           // Handle subscription confirmation
-          if (msg.result !== undefined) {
+          if ('result' in msg && msg.result !== undefined) {
             this.subscriptionId = msg.result;
             logger.debug({ subscriptionId: this.subscriptionId }, "slot subscription confirmed");
             return;
           }
 
           // Handle slot updates
-          if (msg.params?.result?.slot !== undefined) {
+          if ('params' in msg && msg.params?.result?.slot !== undefined) {
             const slot = msg.params.result.slot;
             if (this.onSlotCallback) {
               this.onSlotCallback(slot);
@@ -80,7 +96,7 @@ export class WebsocketManager {
       } catch (err) {
         logger.warn({ err }, "reconnect failed");
       }
-    }, 5000);
+    }, this.reconnectDelayMs);
   }
 
   close(): void {
