@@ -35,6 +35,7 @@ export class ObligationIndexer {
   private cache: ObligationCache = {};
   private obligationPubkeys: PublicKey[] = [];
   private intervalHandle: NodeJS.Timeout | null = null;
+  private isFetching: boolean = false;
 
   constructor(config: ObligationIndexerConfig) {
     this.connection = config.connection;
@@ -89,61 +90,72 @@ export class ObligationIndexer {
       return;
     }
 
-    logger.debug(
-      { count: this.obligationPubkeys.length, batchSize: this.batchSize },
-      "Starting obligation fetch"
-    );
-
-    // Process in batches
-    for (let i = 0; i < this.obligationPubkeys.length; i += this.batchSize) {
-      const batch = this.obligationPubkeys.slice(i, i + this.batchSize);
-      
-      try {
-        const accounts = await this.connection.getMultipleAccountsInfo(batch);
-        
-        for (let j = 0; j < accounts.length; j++) {
-          const accountInfo = accounts[j];
-          const pubkey = batch[j];
-
-          if (!accountInfo || !accountInfo.data) {
-            logger.debug({ pubkey: pubkey.toString() }, "Account not found or has no data");
-            continue;
-          }
-
-          try {
-            const decoded = decodeObligation(accountInfo.data, pubkey);
-            this.cache[pubkey.toString()] = {
-              decoded,
-              lastUpdated: Date.now(),
-            };
-          } catch (error) {
-            logger.warn(
-              { pubkey: pubkey.toString(), error },
-              "Failed to decode obligation"
-            );
-          }
-        }
-
-        logger.debug(
-          { 
-            batchStart: i, 
-            batchEnd: i + batch.length,
-            successCount: accounts.filter(a => a !== null).length
-          },
-          "Batch processed"
-        );
-      } catch (error) {
-        logger.error(
-          { batchStart: i, batchEnd: i + this.batchSize, error },
-          "Failed to fetch batch"
-        );
-      }
+    // Prevent overlapping fetches
+    if (this.isFetching) {
+      logger.debug("Fetch already in progress, skipping");
+      return;
     }
 
-    logger.info(
-      { cacheSize: Object.keys(this.cache).length },
-      "Obligation cache updated"
-    );
+    this.isFetching = true;
+
+    try {
+      logger.debug(
+        { count: this.obligationPubkeys.length, batchSize: this.batchSize },
+        "Starting obligation fetch"
+      );
+
+      // Process in batches
+      for (let i = 0; i < this.obligationPubkeys.length; i += this.batchSize) {
+        const batch = this.obligationPubkeys.slice(i, i + this.batchSize);
+        
+        try {
+          const accounts = await this.connection.getMultipleAccountsInfo(batch);
+          
+          for (const [j, accountInfo] of accounts.entries()) {
+            const pubkey = batch[j];
+
+            if (!accountInfo || !accountInfo.data) {
+              logger.debug({ pubkey: pubkey.toString() }, "Account not found or has no data");
+              continue;
+            }
+
+            try {
+              const decoded = decodeObligation(accountInfo.data, pubkey);
+              this.cache[pubkey.toString()] = {
+                decoded,
+                lastUpdated: Date.now(),
+              };
+            } catch (error) {
+              logger.warn(
+                { pubkey: pubkey.toString(), error },
+                "Failed to decode obligation"
+              );
+            }
+          }
+
+          logger.debug(
+            { 
+              batchStart: i, 
+              batchEnd: i + batch.length,
+              successCount: accounts.filter(a => a !== null).length
+            },
+            "Batch processed"
+          );
+        } catch (error) {
+          logger.error(
+            { batchStart: i, batchEnd: i + this.batchSize, error },
+            "Failed to fetch batch"
+          );
+        }
+      }
+
+      logger.info(
+        { cacheSize: Object.keys(this.cache).length },
+        "Obligation cache updated"
+      );
+    } finally {
+      this.isFetching = false;
+    }
   }
 
   /**
@@ -208,10 +220,12 @@ export class ObligationIndexer {
    * Get cache statistics
    */
   public getStats(): { totalObligations: number; cacheSize: number; lastUpdate: number | null } {
-    const lastUpdateTimes = Object.values(this.cache).map(c => c.lastUpdated);
+    const cacheEntries = Object.values(this.cache);
+    const lastUpdateTimes = cacheEntries.map(c => c.lastUpdated);
+    
     return {
       totalObligations: this.obligationPubkeys.length,
-      cacheSize: Object.keys(this.cache).length,
+      cacheSize: cacheEntries.length,
       lastUpdate: lastUpdateTimes.length > 0 ? Math.max(...lastUpdateTimes) : null,
     };
   }

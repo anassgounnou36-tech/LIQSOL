@@ -66,6 +66,7 @@ async function main() {
         {
           memcmp: {
             offset: 0,
+            // Use base58 encoding as required by Solana RPC memcmp filter (not base64)
             bytes: bs58.encode(obligationDiscriminator),
           },
         },
