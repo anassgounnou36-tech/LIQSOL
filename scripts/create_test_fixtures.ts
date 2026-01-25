@@ -36,7 +36,7 @@ function bn(num: number | bigint): any {
 }
 
 // Create a mock Reserve
-function createReserveFixture() {
+async function createReserveFixture() {
   console.log("Creating Reserve account data...");
 
   const reserveData = {
@@ -115,7 +115,7 @@ function createReserveFixture() {
   };
 
   try {
-    const encoded = accountsCoder.encode("Reserve", reserveData);
+    const encoded = await accountsCoder.encode("Reserve", reserveData);
     const fixture = {
       pubkey: USDC_RESERVE,
       note: "Mock USDC Reserve from Kamino Main Market for testing",
@@ -135,7 +135,7 @@ function createReserveFixture() {
 }
 
 // Create a mock Obligation
-function createObligationFixture() {
+async function createObligationFixture() {
   console.log("Creating Obligation account data...");
 
   const obligationData = {
@@ -166,9 +166,9 @@ function createObligationFixture() {
   };
 
   try {
-    const encoded = accountsCoder.encode("Obligation", obligationData);
+    const encoded = await accountsCoder.encode("Obligation", obligationData);
     const fixture = {
-      pubkey: "AYgFzMvCnMpNBRPFSHvvMVsBfuCgBLG6bBqvXXGXj2dh",
+      pubkey: "H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo",
       note: "Mock Obligation with SOL collateral and USDC debt for testing",
       data_base64: Buffer.from(encoded).toString("base64"),
       expected: {
@@ -184,5 +184,9 @@ function createObligationFixture() {
   }
 }
 
-createReserveFixture();
-createObligationFixture();
+async function main() {
+  await createReserveFixture();
+  await createObligationFixture();
+}
+
+main().catch(console.error);

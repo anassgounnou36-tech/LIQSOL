@@ -222,16 +222,19 @@ describe("Kamino Decoder Tests", () => {
   });
 
   describe("Real Fixture Decoding", () => {
-    // NOTE: These tests use mock fixtures that were manually created with Borsh encoding.
-    // To use REAL mainnet fixtures, run:
-    //   npm run fetch:fixture -- <reserve_pubkey> reserve_usdc --expected-market 7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF --expected-mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-    //   npm run fetch:fixture -- <obligation_pubkey> obligation_usdc_debt --expected-market 7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF
+    // NOTE: These tests require real mainnet fixtures.
+    // The fixtures in test/fixtures/ should contain base64-encoded account data from mainnet.
     //
-    // The current mock fixtures use these pubkeys (real on-chain accounts):
+    // To fetch REAL mainnet fixtures, run:
+    //   npm run fetch:fixture -- d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q reserve_usdc --expected-market 7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF --expected-mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+    //   npm run fetch:fixture -- H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo obligation_usdc_debt --expected-market 7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF
+    //
+    // Expected accounts (real on-chain):
     //   Reserve: d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q (USDC Reserve, Kamino Main Market)
     //   Obligation: H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo (SOL collateral + USDC debt)
     //
-    // TODO: Replace with real mainnet fixtures fetched using the script above
+    // These tests are currently skipped because the fixtures need to be fetched from mainnet.
+    // Once real data is available, these tests will enforce strict validation.
     
     it.skip("should decode Reserve fixture correctly (requires real mainnet data)", () => {
       const fixturePath = join(__dirname, "../../test/fixtures/reserve_usdc.json");
@@ -242,19 +245,27 @@ describe("Kamino Decoder Tests", () => {
       const pubkey = new PublicKey(fixture.pubkey);
       const decoded = decodeReserve(data, pubkey);
 
-      // Strict assertions as per requirements
+      // Strict assertions - these will enforce correctness once real data is available
       expect(decoded.reservePubkey).toBe(fixture.pubkey);
       expect(decoded.marketPubkey).toBe(fixture.expected.market);
       expect(decoded.liquidityMint).toBe(fixture.expected.liquidityMint);
 
-      // Verify structure
+      // Verify structure with strict checks
       expect(decoded).toHaveProperty("collateralMint");
       expect(decoded).toHaveProperty("liquidityDecimals");
+      expect(decoded).toHaveProperty("collateralDecimals");
       expect(decoded).toHaveProperty("oraclePubkeys");
       expect(decoded).toHaveProperty("loanToValueRatio");
       expect(decoded).toHaveProperty("liquidationThreshold");
       expect(decoded).toHaveProperty("totalBorrowed");
       expect(decoded).toHaveProperty("availableLiquidity");
+
+      // Strict type and value checks
+      expect(typeof decoded.liquidityDecimals).toBe("number");
+      expect(typeof decoded.collateralDecimals).toBe("number");
+      expect(decoded.liquidityDecimals).toBeGreaterThan(0);
+      expect(decoded.collateralDecimals).toBeGreaterThan(0);
+      expect(Array.isArray(decoded.oraclePubkeys)).toBe(true);
     });
 
     it.skip("should decode Obligation fixture correctly (requires real mainnet data)", () => {
@@ -266,7 +277,7 @@ describe("Kamino Decoder Tests", () => {
       const pubkey = new PublicKey(fixture.pubkey);
       const decoded = decodeObligation(data, pubkey);
 
-      // Strict assertions as per requirements
+      // Strict assertions - these will enforce correctness once real data is available
       expect(decoded.obligationPubkey).toBe(fixture.pubkey);
       expect(decoded.marketPubkey).toBe(fixture.expected.market);
 
@@ -276,19 +287,25 @@ describe("Kamino Decoder Tests", () => {
       expect(decoded).toHaveProperty("deposits");
       expect(decoded).toHaveProperty("borrows");
 
-      // Strict assertions: deposits and borrows must have entries
+      // Strict assertions: deposits and borrows must have entries for this specific obligation
       expect(decoded.deposits.length).toBeGreaterThan(0);
       expect(decoded.borrows.length).toBeGreaterThan(0);
 
-      // Verify deposits structure
+      // Verify deposits structure with strict checks
       expect(decoded.deposits[0]).toHaveProperty("reserve");
       expect(decoded.deposits[0]).toHaveProperty("mint");
       expect(decoded.deposits[0]).toHaveProperty("depositedAmount");
+      expect(typeof decoded.deposits[0].reserve).toBe("string");
+      expect(typeof decoded.deposits[0].depositedAmount).toBe("string");
+      expect(BigInt(decoded.deposits[0].depositedAmount)).toBeGreaterThan(0n);
 
-      // Verify borrows structure
+      // Verify borrows structure with strict checks
       expect(decoded.borrows[0]).toHaveProperty("reserve");
       expect(decoded.borrows[0]).toHaveProperty("mint");
       expect(decoded.borrows[0]).toHaveProperty("borrowedAmount");
+      expect(typeof decoded.borrows[0].reserve).toBe("string");
+      expect(typeof decoded.borrows[0].borrowedAmount).toBe("string");
+      expect(BigInt(decoded.borrows[0].borrowedAmount)).toBeGreaterThan(0n);
     });
   });
 });

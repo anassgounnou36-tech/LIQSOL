@@ -1,243 +1,189 @@
-# Kamino Decoding Implementation Summary
+# PR4 Implementation Summary
 
 ## Overview
-This implementation adds deterministic Kamino lending protocol decoding capabilities with CLI commands and comprehensive tests, while also fixing a critical bug in BlockhashManager.
+PR4 implements critical fixes and new features for the LIQSOL Kamino lending bot:
+1. Fixed snapshot memcmp bytes to use base58 encoding
+2. Fixed collateralDecimals in reserve decoder
+3. Created obligation indexer for tracking obligations
+4. Enhanced tests with strict assertions
 
-## Implementation Highlights
+## Changes Made
 
-### 1. BlockhashManager Bug Fix
-**Problem**: The `getFresh()` method was comparing `currentSlot` (from `getSlot()`) with `lastValidBlockHeight` - these are different metrics and shouldn't be compared.
+### 1. Snapshot Obligations Fix (src/commands/snapshotObligations.ts)
+**Problem**: The memcmp filter was using base64 encoding instead of base58
+**Solution**: 
+- Added `bs58` dependency
+- Changed discriminator encoding from `.toString("base64")` to `bs58.encode()`
+- This ensures the snapshot command correctly filters Obligation accounts
 
-**Solution**: Changed to use `getBlockHeight()` instead of `getSlot()` for proper apples-to-apples comparison.
-
-**Impact**: Ensures blockhash caching logic works correctly, preventing premature or delayed blockhash refreshes.
-
-### 2. Deterministic Dependencies
-- `@coral-xyz/anchor@0.29.0` - Exact version, no caret (^) or tilde (~)
-- `@kamino-finance/klend-sdk@7.3.9` - Exact version, no caret (^) or tilde (~)
-
-This ensures reproducible builds and eliminates dependency version drift.
-
-### 3. Kamino IDL Integration
-- **IDL Location**: `src/kamino/idl/klend.json`
-- **Version**: 1.12.6
-- **Source**: Extracted from `@kamino-finance/klend-sdk@7.3.9`
-- **Program ID**: `KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD` (mainnet)
-- **Documentation**: Full provenance in `src/kamino/idl/README.md`
-
-### 4. Decoder Architecture
-
-#### Design Principles
-1. **Use Anchor BorshAccountsCoder** - No hardcoded offsets or layouts
-2. **Structured Output** - Typed interfaces, not raw decoded blobs
-3. **String Amounts** - Prevent precision loss with large numbers
-4. **Oracle Extraction** - Collect all price feeds (Pyth, Switchboard, Scope)
-
-#### Key Functions
-
-**`decodeReserve(accountData, reservePubkey)`**
-- Input: Raw account data + pubkey
-- Output: `DecodedReserve` with 12 fields
-- Extracts: Market info, mints, decimals, oracles, risk params, liquidity
-
-**`decodeObligation(accountData, obligationPubkey)`**
-- Input: Raw account data + pubkey
-- Output: `DecodedObligation` with deposits and borrows arrays
-- Note: Mints require separate Reserve lookup (use `setReserveMintCache()`)
-
-### 5. Type System
-
-**DecodedReserve** (12 fields)
+**Code Change**:
 ```typescript
-{
-  reservePubkey: string;
-  marketPubkey: string;
-  liquidityMint: string;
-  collateralMint: string;
-  liquidityDecimals: number;
-  collateralDecimals: number;
-  oraclePubkeys: string[];
-  loanToValueRatio: number;
-  liquidationThreshold: number;
-  liquidationBonus: number;
-  totalBorrowed: string;
-  availableLiquidity: string;
-}
+// Before
+bytes: obligationDiscriminator.toString("base64")
+
+// After  
+import bs58 from "bs58";
+bytes: bs58.encode(obligationDiscriminator)
 ```
 
-**DecodedObligation** (6 fields)
+### 2. CollateralDecimals Fix (src/kamino/decode/reserveDecoder.ts)
+**Problem**: collateralDecimals was incorrectly set to liquidity decimals
+**Solution**: Use correct field from decoded structure
+
+**Code Change**:
 ```typescript
-{
-  obligationPubkey: string;
-  ownerPubkey: string;
-  marketPubkey: string;
-  lastUpdateSlot: string;
-  deposits: Array<{
-    reserve: string;
-    mint: string;
-    depositedAmount: string;
-  }>;
-  borrows: Array<{
-    reserve: string;
-    mint: string;
-    borrowedAmount: string;
-  }>;
-}
+// Before
+collateralDecimals: Number(decoded.liquidity.mintDecimals), // Wrong!
+
+// After
+collateralDecimals: Number(decoded.collateral.mintDecimals), // Correct
 ```
 
-### 6. CLI Commands
+### 3. Obligation Indexer (src/engine/obligationIndexer.ts)
+**New Feature**: In-memory cache of decoded obligations with RPC polling
 
-**Decode Reserve**
+**Key Features**:
+- Reads obligation pubkeys from `data/obligations.jsonl`
+- Fetches account data in batches using `getMultipleAccountsInfo`
+- Configurable batch size (default: 100) and poll interval (default: 30s)
+- Decodes and caches obligations
+- Provides API for accessing cached data
+- All logging to stderr via logger (no stdout noise)
+
+**API**:
+```typescript
+const indexer = new ObligationIndexer({
+  connection: Connection,
+  obligationsFilePath?: string,
+  batchSize?: number,
+  pollIntervalMs?: number
+});
+
+await indexer.start();           // Start polling
+indexer.stop();                  // Stop polling
+indexer.getObligation(pubkey);   // Get specific obligation
+indexer.getAllObligations();     // Get all cached obligations
+indexer.getStats();              // Get cache statistics
+indexer.reload();                // Reload pubkeys from file
+```
+
+### 4. Test Enhancements (src/__tests__/)
+
+#### Kamino Decoder Tests
+- Updated fixture tests with strict assertions
+- Added comprehensive validation for:
+  - Field existence and types
+  - Value ranges (e.g., decimals > 0)
+  - Array structures
+  - BigInt conversions
+- Tests are skipped until real mainnet fixtures are available
+- Documentation added for fetching real fixtures
+
+#### Obligation Indexer Tests
+- New test suite with 10 tests covering:
+  - Constructor and configuration
+  - Loading pubkeys from file
+  - Handling missing/invalid files
+  - Cache operations
+  - Stats reporting
+  - Lifecycle management
+
+### 5. Documentation
+- Created `PR4_IMPLEMENTATION.md` with:
+  - Setup instructions
+  - Usage examples
+  - Known limitations
+  - Verification checklist
+
+## Files Changed
+
+### Modified Files
+- `package.json` - Added bs58 dependency
+- `package-lock.json` - Updated lock file
+- `src/commands/snapshotObligations.ts` - Fixed base58 encoding
+- `src/kamino/decode/reserveDecoder.ts` - Fixed collateralDecimals
+- `src/__tests__/kamino-decoder.test.ts` - Enhanced with strict assertions
+- `scripts/create_test_fixtures.ts` - Updated to use async encoding
+
+### New Files
+- `src/engine/obligationIndexer.ts` - Obligation indexer implementation
+- `src/__tests__/obligation-indexer.test.ts` - Comprehensive tests
+- `PR4_IMPLEMENTATION.md` - Implementation documentation
+
+## Testing Results
+
+```
+Test Files  4 passed (4)
+Tests       34 passed | 2 skipped (36)
+```
+
+All tests pass successfully:
+- ✓ bootstrap.test.ts (3 tests)
+- ✓ blockhash-manager.test.ts (4 tests)  
+- ✓ kamino-decoder.test.ts (19 tests | 2 skipped)
+- ✓ obligation-indexer.test.ts (10 tests)
+
+The 2 skipped tests are fixture tests awaiting real mainnet data.
+
+## Quality Checks
+
+- ✅ `npm test` - All tests pass
+- ✅ `npm run typecheck` - No type errors
+- ✅ `npm run lint` - No linting errors
+- ✅ All code follows existing patterns
+- ✅ Comprehensive test coverage
+- ✅ Documentation complete
+
+## Known Limitations
+
+1. **Mainnet Fixtures**: During implementation, network access to Solana mainnet was blocked. Real fixtures need to be fetched using:
+   ```bash
+   npm run fetch:fixture -- d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q reserve_usdc \
+     --expected-market 7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF \
+     --expected-mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+   ```
+
+2. **Snapshot Validation**: `npm run snapshot:obligations` requires mainnet RPC access to validate. The implementation is complete and ready to use.
+
+3. **Websocket Support**: The obligation indexer uses polling. Websocket support can be added in a future PR.
+
+## Next Steps
+
+1. Fetch real mainnet fixtures when network access is available
+2. Enable the 2 skipped tests by removing `.skip`
+3. Run `npm run snapshot:obligations` to validate snapshot functionality
+4. Consider adding websocket support to the obligation indexer for real-time updates
+
+## Verification Commands
+
 ```bash
-npm run decode:reserve <reserve_pubkey>
+# Run tests
+npm test
+
+# Type checking
+npm run typecheck
+
+# Linting
+npm run lint
+
+# Snapshot obligations (requires mainnet access)
+npm run snapshot:obligations
+
+# Decode reserve
+npm run decode:reserve d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q
+
+# Decode obligation
+npm run decode:obligation H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo
 ```
 
-**Decode Obligation**
-```bash
-npm run decode:obligation <obligation_pubkey>
-```
+## Acceptance Criteria Status
 
-Both commands:
-- Fetch account data from RPC (uses `RPC_PRIMARY` from `.env`)
-- Decode using appropriate decoder
-- Output JSON to console
-- Proper error handling for invalid pubkeys and missing accounts
-
-### 7. Test Coverage
-
-**24 tests across 3 test files:**
-
-1. **`bootstrap.test.ts`** (3 tests) - Environment validation
-2. **`blockhash-manager.test.ts`** (4 tests) - BlockhashManager fix verification
-3. **`kamino-decoder.test.ts`** (17 tests) - Decoder validation
-   - IDL structure validation
-   - Account type verification
-   - Decoder function tests
-   - Output type documentation
-
-## Quality Assurance
-
-### Static Analysis
-- ✅ TypeScript type checking: 0 errors
-- ✅ ESLint: 0 errors
-- ✅ All tests: 24/24 passing
-
-### Security
-- ✅ CodeQL scan: 0 vulnerabilities
-- ✅ No hardcoded credentials
-- ✅ Proper error handling
-- ✅ Safe type conversions
-
-### Code Review
-- ✅ Review completed
-- ✅ All feedback addressed
-- ✅ Documentation improved
-
-## Technical Decisions
-
-### Why Anchor BorshAccountsCoder?
-- Official Anchor deserialization
-- Uses IDL for schema validation
-- No need to manually track field offsets
-- Handles complex nested types automatically
-
-### Why String Amounts?
-- JavaScript's `number` type loses precision beyond 2^53
-- Solana amounts often exceed this (e.g., lamports)
-- Strings preserve exact values
-- Client code can use BigInt or Decimal libraries
-
-### Why Separate Reserve Mint Cache?
-- Obligation accounts store reserve pubkeys, not mints
-- Fetching Reserve for each deposit/borrow is expensive
-- Cache allows efficient batch processing
-- Placeholder value indicates missing data clearly
-
-### Why Offline Fixture Tests?
-- Fast execution (no RPC calls)
-- Deterministic (no network flakiness)
-- Tests decoder logic, not RPC connectivity
-- Validates IDL structure and field mappings
-
-## Future Enhancements
-
-### Potential Improvements
-1. **Live Integration Tests** - Fetch real accounts from devnet/mainnet
-2. **Reserve Mint Auto-fetch** - Automatically fetch Reserve when decoding Obligation
-3. **Batch Decoding** - Decode multiple accounts in parallel
-4. **Account Validation** - Verify discriminators before decoding
-5. **Rich CLI Output** - Formatted tables, color coding
-6. **Export Functions** - Save decoded data to files
-
-### Non-goals (by design)
-- ❌ Bumping other dependencies unnecessarily
-- ❌ Adding new build tools or frameworks
-- ❌ Changing existing working code
-- ❌ Adding style comments where not needed
-
-## Usage Patterns
-
-### Pattern 1: Decode Single Reserve
-```typescript
-import { Connection, PublicKey } from '@solana/web3.js';
-import { decodeReserve } from './kamino/decoder.js';
-
-const connection = new Connection('...');
-const reservePubkey = new PublicKey('...');
-
-const accountInfo = await connection.getAccountInfo(reservePubkey);
-const decoded = decodeReserve(accountInfo.data, reservePubkey);
-
-console.log('LTV:', decoded.loanToValueRatio);
-console.log('Oracles:', decoded.oraclePubkeys);
-```
-
-### Pattern 2: Decode Obligation with Reserves
-```typescript
-import { decodeReserve, decodeObligation, setReserveMintCache } from './kamino/decoder.js';
-
-// First, decode and cache reserves
-const reserves = ['reserve1', 'reserve2', 'reserve3'];
-for (const reserveKey of reserves) {
-  const accountInfo = await connection.getAccountInfo(new PublicKey(reserveKey));
-  const reserve = decodeReserve(accountInfo.data, new PublicKey(reserveKey));
-  setReserveMintCache(reserve.reservePubkey, reserve.liquidityMint);
-}
-
-// Then decode obligation (mints will be populated from cache)
-const obligationInfo = await connection.getAccountInfo(obligationPubkey);
-const obligation = decodeObligation(obligationInfo.data, obligationPubkey);
-
-console.log('Deposits:', obligation.deposits);
-console.log('Borrows:', obligation.borrows);
-```
-
-### Pattern 3: CLI Usage
-```bash
-# Decode a reserve
-npm run decode:reserve 7TdRLrZ7bVF5zGPmHDLPSLH5tBvBNm1gTaJQvV5TK5j2
-
-# Decode an obligation
-npm run decode:obligation 3xKXtg2CW87d9wcKcypLpZ8RqvsKJrxjC8boSyAYavgh
-
-# Error handling (invalid pubkey)
-npm run decode:reserve invalid-key
-# Output: "Invalid public key: invalid-key"
-
-# Error handling (account not found)
-npm run decode:reserve 11111111111111111111111111111111
-# Output: "Account not found"
-```
-
-## Conclusion
-
-This implementation successfully meets all requirements from the problem statement:
-- ✅ Deterministic dependency pinning
-- ✅ Repo-pinned IDL with documentation
-- ✅ Anchor BorshAccountsCoder decoder
-- ✅ Structured DecodedReserve and DecodedObligation types
-- ✅ CLI decode commands
-- ✅ Offline fixture tests
-- ✅ BlockhashManager bug fix
-
-The code is production-ready with comprehensive tests, documentation, and security validation.
+✅ bs58 dependency added
+✅ Snapshot uses base58 discriminator encoding
+✅ collateralDecimals fixed to use correct field
+✅ Obligation indexer created with all required features
+✅ Tests updated with strict assertions
+✅ Decode CLI outputs pure JSON (already correct)
+✅ All logs go to stderr via logger
+⏳ npm run snapshot:obligations validation (awaiting mainnet access)
+⏳ Real fixtures (awaiting mainnet access)

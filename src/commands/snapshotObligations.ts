@@ -2,6 +2,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { writeFileSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
+import bs58 from "bs58";
 import { loadEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
@@ -65,7 +66,8 @@ async function main() {
         {
           memcmp: {
             offset: 0,
-            bytes: obligationDiscriminator.toString("base64"),
+            // Use base58 encoding as required by Solana RPC memcmp filter (not base64)
+            bytes: bs58.encode(obligationDiscriminator),
           },
         },
       ],
