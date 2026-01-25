@@ -21,16 +21,8 @@ export const EnvSchema = z.object({
 export type Env = z.infer<typeof EnvSchema>;
 
 // Read-only schema for commands that don't require a keypair (snapshot, decode, healthcheck)
-export const ReadonlyEnvSchema = z.object({
-  RPC_PRIMARY: z.string().url(),
-  RPC_SECONDARY: z.string().url().optional(),
-  WS_PRIMARY: z.string().url().optional(),
-  WS_SECONDARY: z.string().url().optional(),
-  KAMINO_KLEND_PROGRAM_ID: z.string().min(1),
-  KAMINO_MARKET_PUBKEY: z.string().min(1),
-  LOG_LEVEL: z.enum(["fatal","error","warn","info","debug","trace"]).default("info"),
-  NODE_ENV: z.enum(["development","production","test"]).default("development"),
-});
+// Uses schema composition to avoid duplication
+export const ReadonlyEnvSchema = EnvSchema.omit({ BOT_KEYPAIR_PATH: true });
 
 export type ReadonlyEnv = z.infer<typeof ReadonlyEnvSchema>;
 
