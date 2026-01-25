@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Connection, PublicKey } from "@solana/web3.js";
-import { loadEnv } from "../config/env.js";
+import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { decodeReserve } from "../kamino/decoder.js";
 
@@ -31,7 +31,7 @@ async function main() {
   }
 
   // Load environment and setup connection
-  const env = loadEnv();
+  const env = loadReadonlyEnv();
   const connection = new Connection(env.RPC_PRIMARY, "confirmed");
 
   logger.info(
@@ -65,13 +65,13 @@ async function main() {
     process.stdout.write(JSON.stringify(decoded, null, 2) + "\n");
     
     logger.info("Decode successful");
-  } catch (error) {
-    logger.error({ error, pubkey: pubkey.toString() }, "Failed to decode account");
+  } catch (err) {
+    logger.fatal({ err, pubkey: pubkey.toString() }, "Failed to decode account");
     process.exit(1);
   }
 }
 
-main().catch((error) => {
-  logger.error({ error }, "Fatal error");
+main().catch((err) => {
+  logger.fatal({ err }, "Fatal error");
   process.exit(1);
 });

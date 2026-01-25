@@ -3,7 +3,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { writeFileSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
 import bs58 from "bs58";
-import { loadEnv } from "../config/env.js";
+import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 import { decodeObligation } from "../kamino/decoder.js";
@@ -21,7 +21,7 @@ import { decodeObligation } from "../kamino/decoder.js";
 
 async function main() {
   // Load environment
-  const env = loadEnv();
+  const env = loadReadonlyEnv();
   
   // Get market and program from env
   let marketPubkey: PublicKey;
@@ -88,9 +88,9 @@ async function main() {
         if (decodedMarket.equals(marketPubkey)) {
           obligationPubkeys.push(pubkey.toString());
         }
-      } catch (error) {
+      } catch (err) {
         logger.warn(
-          { pubkey: pubkey.toString(), error },
+          { pubkey: pubkey.toString(), err },
           "Failed to decode obligation"
         );
       }
@@ -143,13 +143,13 @@ async function main() {
     }
 
     logger.info("All pubkeys validated as valid base58");
-  } catch (error) {
-    logger.error({ error }, "Failed to snapshot obligations");
+  } catch (err) {
+    logger.fatal({ err }, "Failed to snapshot obligations");
     process.exit(1);
   }
 }
 
-main().catch((error) => {
-  logger.error({ error }, "Fatal error");
+main().catch((err) => {
+  logger.fatal({ err }, "Fatal error");
   process.exit(1);
 });
