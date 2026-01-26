@@ -200,9 +200,8 @@ export async function snapshotAccounts(
       }
       
       inactivityTimeoutId = setTimeout(() => {
-        const elapsed = Date.now() - lastActivityTime;
         logger.warn(
-          { elapsedMs: elapsed, inactivityTimeoutMs },
+          { inactivityTimeoutSeconds },
           "Inactivity timeout reached during snapshot"
         );
         clearAllTimeouts();
