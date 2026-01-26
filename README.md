@@ -112,6 +112,44 @@ When the bot starts, it performs the following checks:
 
 If any step fails, the bot logs a `boot_failed` event at fatal level and exits with code 1.
 
+## Known Issues
+
+### Windows: Native Binding Errors
+
+On Windows, you may encounter errors when running `npm run snapshot:obligations` related to missing native bindings:
+
+```
+Cannot find native binding for yellowstone-grpc-napi-win32-x64-msvc
+```
+
+This occurs because the `@triton-one/yellowstone-grpc` package requires native Node.js bindings that may not be properly installed on Windows.
+
+#### Solutions:
+
+1. **Clean Reinstall** (try this first):
+   ```bash
+   # Delete node_modules and package-lock.json
+   rm -rf node_modules package-lock.json
+   
+   # Reinstall dependencies
+   npm install
+   ```
+
+2. **Use WSL2** (if clean reinstall fails):
+   ```bash
+   npm run snapshot:obligations:wsl
+   ```
+   
+   This script automatically runs the snapshot command inside WSL2, which provides a Linux environment.
+   
+   **Prerequisites**: WSL2 must be installed. If not installed, run:
+   ```bash
+   wsl --install
+   ```
+
+#### Note
+Production deployments should target Linux environments where native bindings are fully supported.
+
 ## CI/CD
 
 The GitHub Actions workflow runs on every push and pull request:

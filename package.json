@@ -12,6 +12,7 @@
     "decode:reserve": "tsx src/commands/decodeReserve.ts",
     "decode:obligation": "tsx src/commands/decodeObligation.ts",
     "snapshot:obligations": "tsx src/commands/snapshotObligations.ts",
+    "snapshot:obligations:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_snapshot_wsl.ps1",
     "fetch:fixture": "tsx scripts/fetch_fixture.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

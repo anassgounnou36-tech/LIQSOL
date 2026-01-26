@@ -9,6 +9,7 @@ import { decodeObligation } from "../kamino/decoder.js";
 import { createYellowstoneClient } from "../yellowstone/client.js";
 import { snapshotAccounts } from "../yellowstone/subscribeAccounts.js";
 import { CommitmentLevel } from "@triton-one/yellowstone-grpc";
+import { checkYellowstoneNativeBinding } from "../yellowstone/preflight.js";
 
 /**
  * CLI tool for snapshotting obligations from a Kamino Lending market via Yellowstone gRPC
@@ -24,6 +25,13 @@ import { CommitmentLevel } from "@triton-one/yellowstone-grpc";
  */
 
 async function main() {
+  // Preflight: Check Yellowstone native binding availability
+  const yf = checkYellowstoneNativeBinding();
+  if (!yf.ok) {
+    logger.fatal({ reason: yf.reason }, "Yellowstone runtime not available");
+    process.exit(1);
+  }
+
   // Load environment
   const env = loadReadonlyEnv();
   
