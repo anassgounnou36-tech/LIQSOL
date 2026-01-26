@@ -19,6 +19,15 @@ import { decodeObligation } from "../kamino/decoder.js";
  * Outputs obligation pubkeys (one per line) to data/obligations.jsonl
  */
 
+/**
+ * Helper function to chunk an array into smaller batches
+ */
+function* chunk<T>(arr: T[], size: number): Generator<T[]> {
+  for (let i = 0; i < arr.length; i += size) {
+    yield arr.slice(i, i + size);
+  }
+}
+
 async function main() {
   // Load environment
   const env = loadReadonlyEnv();
@@ -58,10 +67,13 @@ async function main() {
   );
 
   try {
-    // Fetch all program accounts with Obligation discriminator
-    logger.info("Fetching obligation accounts...");
+    // Fetch all program accounts with Obligation discriminator (pubkeys only)
+    logger.info("Fetching obligation account pubkeys...");
     
     const accounts = await connection.getProgramAccounts(programId, {
+      commitment: "confirmed",
+      encoding: "base64",
+      dataSlice: { offset: 0, length: 0 }, // prevents huge response bodies
       filters: [
         {
           memcmp: {
@@ -73,26 +85,65 @@ async function main() {
       ],
     });
 
-    logger.info({ total: accounts.length }, "Fetched obligation accounts");
+    logger.info({ total: accounts.length }, "Fetched obligation account pubkeys");
 
-    // Decode using IDL and filter by market
-    const obligationPubkeys: string[] = [];
+    // Extract pubkeys from the response
+    const allPubkeys = accounts.map(({ pubkey }) => pubkey);
     
-    for (const { pubkey, account } of accounts) {
-      try {
-        // Decode obligation using IDL-based decoder
-        const decoded = decodeObligation(account.data, pubkey);
+    // Fetch account data in batches and decode
+    const obligationPubkeys: string[] = [];
+    const BATCH_SIZE = 100;
+    const chunks = Array.from(chunk(allPubkeys, BATCH_SIZE));
+    
+    logger.info({ totalChunks: chunks.length, batchSize: BATCH_SIZE }, "Starting batched account fetching");
+    
+    for (let i = 0; i < chunks.length; i++) {
+      const pubkeysChunk = chunks[i];
+      
+      // Log progress every chunk
+      logger.info(
+        { chunk: i + 1, total: chunks.length, accounts: pubkeysChunk.length },
+        "Fetching account data batch"
+      );
+      
+      const infos = await connection.getMultipleAccountsInfo(pubkeysChunk, "confirmed");
+      
+      for (let j = 0; j < infos.length; j++) {
+        const info = infos[j];
+        const pubkey = pubkeysChunk[j];
         
-        // Filter by market pubkey using PublicKey comparison for safety
-        const decodedMarket = new PublicKey(decoded.marketPubkey);
-        if (decodedMarket.equals(marketPubkey)) {
-          obligationPubkeys.push(pubkey.toString());
+        if (info === null) {
+          logger.warn({ pubkey: pubkey.toString() }, "Account data is null");
+          continue;
         }
-      } catch (err) {
-        logger.warn(
-          { pubkey: pubkey.toString(), err },
-          "Failed to decode obligation"
-        );
+        
+        try {
+          // Verify the obligation discriminator on the data
+          if (info.data.length < 8) {
+            logger.warn({ pubkey: pubkey.toString() }, "Account data too short");
+            continue;
+          }
+          
+          const dataDiscriminator = info.data.slice(0, 8);
+          if (!dataDiscriminator.equals(obligationDiscriminator)) {
+            logger.warn({ pubkey: pubkey.toString() }, "Discriminator mismatch");
+            continue;
+          }
+          
+          // Decode obligation using IDL-based decoder
+          const decoded = decodeObligation(info.data, pubkey);
+          
+          // Filter by market pubkey using PublicKey comparison for safety
+          const decodedMarket = new PublicKey(decoded.marketPubkey);
+          if (decodedMarket.equals(marketPubkey)) {
+            obligationPubkeys.push(pubkey.toString());
+          }
+        } catch (err) {
+          logger.warn(
+            { pubkey: pubkey.toString(), err },
+            "Failed to decode obligation"
+          );
+        }
       }
     }
 
