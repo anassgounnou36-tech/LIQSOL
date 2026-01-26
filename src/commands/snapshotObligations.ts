@@ -2,6 +2,7 @@
 import { PublicKey } from "@solana/web3.js";
 import { writeFileSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
+import { execSync } from "child_process";
 import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
@@ -28,6 +29,28 @@ async function main() {
   // Preflight: Check Yellowstone native binding availability
   const yf = checkYellowstoneNativeBinding();
   if (!yf.ok) {
+    // On Windows, automatically fall back to WSL runner
+    if (process.platform === "win32") {
+      logger.info("Yellowstone native binding missing on Windows. Running snapshot via WSL...");
+      
+      try {
+        // Execute the PowerShell script and forward stdout/stderr
+        const scriptPath = join(process.cwd(), "scripts", "run_snapshot_wsl.ps1");
+        execSync(`powershell -ExecutionPolicy Bypass -File "${scriptPath}"`, {
+          stdio: "inherit",
+          cwd: process.cwd()
+        });
+        // If successful, exit with success code
+        process.exit(0);
+      } catch (err) {
+        // execSync throws on non-zero exit code
+        // Exit with the same code as the WSL run
+        const exitCode = err instanceof Error && 'status' in err ? (err as any).status : 1;
+        process.exit(exitCode);
+      }
+    }
+    
+    // Non-Windows or WSL fallback failed
     logger.fatal({ reason: yf.reason }, "Yellowstone runtime not available");
     process.exit(1);
   }
