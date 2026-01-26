@@ -14,6 +14,9 @@ export const EnvSchema = z.object({
   KAMINO_MARKET_PUBKEY: z.string().min(1),
   KAMINO_KLEND_PROGRAM_ID: z.string().min(1),
 
+  YELLOWSTONE_GRPC_URL: z.string().url(),
+  YELLOWSTONE_X_TOKEN: z.string().min(1),
+
   LOG_LEVEL: z.enum(["fatal","error","warn","info","debug","trace"]).default("info"),
   NODE_ENV: z.enum(["development","production","test"]).default("development"),
 });

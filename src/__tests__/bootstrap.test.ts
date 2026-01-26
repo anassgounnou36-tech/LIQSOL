@@ -12,6 +12,8 @@ describe('Environment Tests', () => {
       BOT_KEYPAIR_PATH: '/tmp/keypair.json',
       KAMINO_MARKET_PUBKEY: '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF',
       KAMINO_KLEND_PROGRAM_ID: 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD',
+      YELLOWSTONE_GRPC_URL: 'https://solana-mainnet.g.alchemy.com/',
+      YELLOWSTONE_X_TOKEN: 'test-token',
       LOG_LEVEL: 'info',
       NODE_ENV: 'test'
     };
