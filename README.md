@@ -130,7 +130,7 @@ This occurs because the `@triton-one/yellowstone-grpc` package requires native N
    
    **PowerShell:**
    ```powershell
-   Remove-Item -Recurse -Force node_modules, package-lock.json
+   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue node_modules, package-lock.json
    npm install
    ```
    
