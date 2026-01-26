@@ -7,9 +7,6 @@ import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 import { decodeObligation } from "../kamino/decoder.js";
-import { createYellowstoneClient } from "../yellowstone/client.js";
-import { snapshotAccounts } from "../yellowstone/subscribeAccounts.js";
-import { CommitmentLevel } from "@triton-one/yellowstone-grpc";
 import { checkYellowstoneNativeBinding } from "../yellowstone/preflight.js";
 
 /**
@@ -60,6 +57,14 @@ async function main() {
 
   // Load environment
   const env = loadReadonlyEnv();
+  
+  // Dynamically import Yellowstone modules after preflight check
+  const [{ createYellowstoneClient }, { snapshotAccounts }, { CommitmentLevel }] =
+    await Promise.all([
+      import("../yellowstone/client.js"),
+      import("../yellowstone/subscribeAccounts.js"),
+      import("@triton-one/yellowstone-grpc"),
+    ]);
   
   // Get market and program from env
   let marketPubkey: PublicKey;

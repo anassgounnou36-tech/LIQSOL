@@ -15,7 +15,7 @@ if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
 Write-Host "WSL detected." -ForegroundColor Green
 
 # Get current directory path
-$currentPath = Get-Location
+$currentPath = (Get-Location).Path
 
 Write-Host "Converting Windows path to WSL path..." -ForegroundColor Cyan
 Write-Host "Current Windows path: $currentPath" -ForegroundColor Gray
