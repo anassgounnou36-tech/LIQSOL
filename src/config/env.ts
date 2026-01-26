@@ -20,6 +20,28 @@ export const EnvSchema = z.object({
 
 export type Env = z.infer<typeof EnvSchema>;
 
+// Read-only schema for commands that don't require a keypair (snapshot, decode, healthcheck)
+// Uses schema composition to avoid duplication
+export const ReadonlyEnvSchema = EnvSchema.omit({ BOT_KEYPAIR_PATH: true });
+
+export type ReadonlyEnv = z.infer<typeof ReadonlyEnvSchema>;
+
+export function loadReadonlyEnv(injectedEnv?: Record<string, string | undefined>): ReadonlyEnv {
+  // Load dotenv only when env is actually needed
+  if (!injectedEnv) {
+    dotenvConfig();
+  }
+
+  const envToValidate = injectedEnv ?? process.env;
+  const parsed = ReadonlyEnvSchema.safeParse(envToValidate);
+  if (!parsed.success) {
+    const msg = parsed.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("\n");
+    throw new Error(`Invalid .env:\n${msg}`);
+  }
+
+  return parsed.data;
+}
+
 export function loadEnv(injectedEnv?: Record<string, string | undefined>): Env {
   // Load dotenv only when env is actually needed
   if (!injectedEnv) {

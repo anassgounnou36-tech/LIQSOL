@@ -1,4 +1,4 @@
-import { loadEnv } from "../config/env.js";
+import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { ConnectionManager } from "../infra/connectionManager.js";
 import { BlockhashManager } from "../infra/blockhashManager.js";
@@ -8,7 +8,7 @@ const WS_POLL_INTERVAL_MS = 100;
 const WS_TIMEOUT_MS = 10000;
 
 async function main() {
-  const env = loadEnv();
+  const env = loadReadonlyEnv();
 
   logger.info({ event: "healthcheck_start" }, "starting healthcheck");
 
