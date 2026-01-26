@@ -45,7 +45,10 @@ async function main() {
       } catch (err) {
         // execSync throws on non-zero exit code
         // Exit with the same code as the WSL run
-        const exitCode = err instanceof Error && 'status' in err ? (err as any).status : 1;
+        const exitCode = 
+          err instanceof Error && 'status' in err && typeof (err as { status?: number }).status === 'number'
+            ? (err as { status: number }).status
+            : 1;
         process.exit(exitCode);
       }
     }

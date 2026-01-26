@@ -21,7 +21,7 @@ Write-Host "Converting Windows path to WSL path..." -ForegroundColor Cyan
 Write-Host "Current Windows path: $currentPath" -ForegroundColor Gray
 
 # Convert Windows path to WSL path using wslpath inside WSL (handles spaces correctly)
-$wslPath = wsl.exe -e bash -lc "wslpath -a '$($currentPath -replace '\\', '/')'"
+$wslPath = wsl.exe -e bash -lc "wslpath -u '$($currentPath -replace '\\', '/')'"
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
     Write-Host "ERROR: Failed to convert path to WSL format." -ForegroundColor Red
