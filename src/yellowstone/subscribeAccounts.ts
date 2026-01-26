@@ -177,6 +177,7 @@ export async function snapshotAccounts(
     
     let maxTimeoutId: NodeJS.Timeout | null = null;
     let inactivityTimeoutId: NodeJS.Timeout | null = null;
+    let isResolved = false;
 
     // Helper to clear all timeouts
     const clearAllTimeouts = () => {
@@ -197,6 +198,8 @@ export async function snapshotAccounts(
       }
       
       inactivityTimeoutId = setTimeout(() => {
+        if (isResolved) return;
+        isResolved = true;
         logger.warn(
           { inactivityTimeoutSeconds },
           "Inactivity timeout reached during snapshot"
@@ -209,6 +212,8 @@ export async function snapshotAccounts(
 
     // Set maximum timeout
     maxTimeoutId = setTimeout(() => {
+      if (isResolved) return;
+      isResolved = true;
       logger.warn(
         { maxTimeoutSeconds, accountsCollected: accounts.length },
         "Maximum timeout reached during snapshot"
@@ -261,18 +266,24 @@ export async function snapshotAccounts(
     });
 
     stream.on("error", (err: Error) => {
+      if (isResolved) return;
+      isResolved = true;
       logger.error({ err }, "Yellowstone gRPC stream error");
       clearAllTimeouts();
       reject(err);
     });
 
     stream.on("end", () => {
+      if (isResolved) return;
+      isResolved = true;
       logger.info({ accountCount: accounts.length }, "Yellowstone gRPC stream ended");
       clearAllTimeouts();
       resolve(accounts);
     });
 
     stream.on("close", () => {
+      if (isResolved) return;
+      isResolved = true;
       logger.info({ accountCount: accounts.length }, "Yellowstone gRPC stream closed");
       clearAllTimeouts();
       resolve(accounts);
