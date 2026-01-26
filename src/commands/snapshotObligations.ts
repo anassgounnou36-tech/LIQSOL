@@ -99,7 +99,7 @@ async function main() {
           continue;
         }
         
-        const dataDiscriminator = accountData.subarray(0, 8);
+        const dataDiscriminator = accountData.slice(0, 8);
         if (!dataDiscriminator.equals(obligationDiscriminator)) {
           logger.warn({ pubkey: pubkey.toString() }, "Discriminator mismatch");
           continue;
