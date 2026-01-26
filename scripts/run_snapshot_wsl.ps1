@@ -4,8 +4,7 @@
 Write-Host "Checking for WSL installation..." -ForegroundColor Cyan
 
 # Check if WSL is installed
-$wslCheck = wsl --status 2>&1
-if ($LASTEXITCODE -ne 0) {
+if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
     Write-Host ""
     Write-Host "ERROR: WSL is not installed or not available." -ForegroundColor Red
     Write-Host "Please install WSL2 by running: wsl --install" -ForegroundColor Yellow

@@ -142,14 +142,14 @@ This occurs because the `@triton-one/yellowstone-grpc` package requires native N
    ```
 
 2. **Use WSL2** (if clean reinstall fails):
-   ```bash
+   ```powershell
    npm run snapshot:obligations:wsl
    ```
    
    This script automatically runs the snapshot command inside WSL2, which provides a Linux environment.
    
    **Prerequisites**: WSL2 must be installed. If not installed, run:
-   ```bash
+   ```powershell
    wsl --install
    ```
 
