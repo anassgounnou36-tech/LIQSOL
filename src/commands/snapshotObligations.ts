@@ -1,32 +1,27 @@
 #!/usr/bin/env node
-import { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 import { writeFileSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
-import bs58 from "bs58";
 import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 import { decodeObligation } from "../kamino/decoder.js";
+import { createYellowstoneClient } from "../yellowstone/client.js";
+import { snapshotAccounts } from "../yellowstone/subscribeAccounts.js";
+import { CommitmentLevel } from "@triton-one/yellowstone-grpc";
 
 /**
- * CLI tool for snapshotting obligations from a Kamino Lending market
+ * CLI tool for snapshotting obligations from a Kamino Lending market via Yellowstone gRPC
  * Usage: npm run snapshot:obligations
  * 
  * Requires environment variables:
  *   - KAMINO_MARKET_PUBKEY: The market pubkey to filter obligations
  *   - KAMINO_KLEND_PROGRAM_ID: The Kamino Lending program ID
+ *   - YELLOWSTONE_GRPC_URL: Yellowstone gRPC endpoint URL
+ *   - YELLOWSTONE_X_TOKEN: Authentication token for Yellowstone
  * 
  * Outputs obligation pubkeys (one per line) to data/obligations.jsonl
  */
-
-/**
- * Helper function to chunk an array into smaller batches
- */
-function* chunk<T>(arr: T[], size: number): Generator<T[]> {
-  for (let i = 0; i < arr.length; i += size) {
-    yield arr.slice(i, i + size);
-  }
-}
 
 async function main() {
   // Load environment
@@ -52,11 +47,8 @@ async function main() {
 
   logger.info(
     { market: marketPubkey.toString(), program: programId.toString() },
-    "Starting obligation snapshot..."
+    "Starting obligation snapshot via Yellowstone gRPC..."
   );
-
-  // Setup connection
-  const connection = new Connection(env.RPC_PRIMARY, "confirmed");
 
   // Calculate discriminator for Obligation account
   const obligationDiscriminator = anchorDiscriminator("Obligation");
@@ -67,83 +59,65 @@ async function main() {
   );
 
   try {
-    // Fetch all program accounts with Obligation discriminator (pubkeys only)
-    logger.info("Fetching obligation account pubkeys...");
-    
-    const accounts = await connection.getProgramAccounts(programId, {
-      commitment: "confirmed",
-      encoding: "base64",
-      dataSlice: { offset: 0, length: 0 }, // prevents huge response bodies
-      filters: [
-        {
-          memcmp: {
-            offset: 0,
-            // Use base58 encoding as required by Solana RPC memcmp filter (not base64)
-            bytes: bs58.encode(obligationDiscriminator),
-          },
+    // Initialize Yellowstone gRPC client
+    const client = await createYellowstoneClient(
+      env.YELLOWSTONE_GRPC_URL,
+      env.YELLOWSTONE_X_TOKEN
+    );
+
+    // Define filters for Yellowstone subscription
+    // Filter 1: Match Obligation discriminator at offset 0
+    const filters = [
+      {
+        memcmp: {
+          offset: "0",
+          bytes: obligationDiscriminator,
         },
-      ],
-    });
+      },
+    ];
 
-    logger.info({ total: accounts.length }, "Fetched obligation account pubkeys");
-
-    // Extract pubkeys from the response
-    const allPubkeys = accounts.map(({ pubkey }) => pubkey);
+    // Subscribe and collect all matching accounts
+    logger.info("Fetching obligation accounts via Yellowstone gRPC...");
     
-    // Fetch account data in batches and decode
+    const accounts = await snapshotAccounts(
+      client,
+      programId,
+      filters,
+      CommitmentLevel.CONFIRMED
+    );
+
+    logger.info({ total: accounts.length }, "Fetched obligation accounts");
+
+    // Filter and decode obligations by market
     const obligationPubkeys: string[] = [];
-    const BATCH_SIZE = 100;
-    const chunks = Array.from(chunk(allPubkeys, BATCH_SIZE));
     
-    logger.info({ totalChunks: chunks.length, batchSize: BATCH_SIZE }, "Starting batched account fetching");
-    
-    for (let i = 0; i < chunks.length; i++) {
-      const pubkeysChunk = chunks[i];
-      
-      // Log progress every chunk
-      logger.info(
-        { chunk: i + 1, total: chunks.length, accounts: pubkeysChunk.length },
-        "Fetching account data batch"
-      );
-      
-      const infos = await connection.getMultipleAccountsInfo(pubkeysChunk, "confirmed");
-      
-      for (let j = 0; j < infos.length; j++) {
-        const info = infos[j];
-        const pubkey = pubkeysChunk[j];
-        
-        if (info === null) {
-          logger.warn({ pubkey: pubkey.toString() }, "Account data is null");
+    for (const [pubkey, accountData] of accounts) {
+      try {
+        // Verify the obligation discriminator on the data
+        if (accountData.length < 8) {
+          logger.warn({ pubkey: pubkey.toString() }, "Account data too short");
           continue;
         }
         
-        try {
-          // Verify the obligation discriminator on the data
-          if (info.data.length < 8) {
-            logger.warn({ pubkey: pubkey.toString() }, "Account data too short");
-            continue;
-          }
-          
-          const dataDiscriminator = info.data.slice(0, 8);
-          if (!dataDiscriminator.equals(obligationDiscriminator)) {
-            logger.warn({ pubkey: pubkey.toString() }, "Discriminator mismatch");
-            continue;
-          }
-          
-          // Decode obligation using IDL-based decoder
-          const decoded = decodeObligation(info.data, pubkey);
-          
-          // Filter by market pubkey using PublicKey comparison for safety
-          const decodedMarket = new PublicKey(decoded.marketPubkey);
-          if (decodedMarket.equals(marketPubkey)) {
-            obligationPubkeys.push(pubkey.toString());
-          }
-        } catch (err) {
-          logger.warn(
-            { pubkey: pubkey.toString(), err },
-            "Failed to decode obligation"
-          );
+        const dataDiscriminator = accountData.subarray(0, 8);
+        if (!dataDiscriminator.equals(obligationDiscriminator)) {
+          logger.warn({ pubkey: pubkey.toString() }, "Discriminator mismatch");
+          continue;
         }
+        
+        // Decode obligation using IDL-based decoder
+        const decoded = decodeObligation(accountData, pubkey);
+        
+        // Filter by market pubkey using PublicKey comparison for safety
+        const decodedMarket = new PublicKey(decoded.marketPubkey);
+        if (decodedMarket.equals(marketPubkey)) {
+          obligationPubkeys.push(pubkey.toString());
+        }
+      } catch (err) {
+        logger.warn(
+          { pubkey: pubkey.toString(), err },
+          "Failed to decode obligation"
+        );
       }
     }
 
