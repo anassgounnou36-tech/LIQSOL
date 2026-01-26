@@ -49,10 +49,20 @@ $nodeModulesCheck = wsl.exe -e bash -lc "cd '$wslPath' && test -d node_modules &
 if ($nodeModulesCheck.Trim() -eq 'exists') {
     # Check for Windows-specific native bindings that won't work in WSL
     Write-Host "Checking for Windows-specific native bindings..." -ForegroundColor Cyan
-    $win32BindingsCheck = wsl.exe -e bash -lc "cd '$wslPath' && (test -d node_modules/@esbuild/win32-x64 || test -d node_modules/@triton-one/yellowstone-grpc/node_modules/*/win32-x64) && echo 'found' || echo 'not_found'"
     
-    if ($win32BindingsCheck.Trim() -eq 'found') {
+    # Check for @esbuild/win32-x64 or yellowstone win32 bindings
+    $esbuildCheck = wsl.exe -e bash -lc "cd '$wslPath' && test -d node_modules/@esbuild/win32-x64 && echo 'found' || echo 'not_found'"
+    $yellowstoneCheck = wsl.exe -e bash -lc "cd '$wslPath' && test -d node_modules/@triton-one/yellowstone-grpc/node_modules && find node_modules/@triton-one/yellowstone-grpc/node_modules -name '*win32-x64*' -type d | grep -q . && echo 'found' || echo 'not_found'"
+    
+    if ($esbuildCheck.Trim() -eq 'found' -or $yellowstoneCheck.Trim() -eq 'found') {
         Write-Host "Windows-specific bindings detected. Removing node_modules to reinstall for Linux..." -ForegroundColor Yellow
+        
+        # Validate wslPath is not empty to prevent accidental deletion
+        if ([string]::IsNullOrWhiteSpace($wslPath)) {
+            Write-Host "ERROR: WSL path is empty. Aborting to prevent accidental deletion." -ForegroundColor Red
+            exit 1
+        }
+        
         wsl.exe -e bash -lc "cd '$wslPath' && rm -rf node_modules package-lock.json"
         Write-Host "Installing Linux-native dependencies (npm install)..." -ForegroundColor Cyan
         wsl.exe -e bash -lc "cd '$wslPath' && npm install"
