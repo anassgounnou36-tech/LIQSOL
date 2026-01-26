@@ -42,20 +42,36 @@ if ($envCheckResult.Trim() -eq 'missing') {
     Write-Host "The snapshot command may fail without required environment variables." -ForegroundColor Yellow
 }
 
-# Check if node_modules exists to skip npm ci if possible
+# Check if node_modules exists and detect platform mismatch
 Write-Host "Checking dependencies..." -ForegroundColor Cyan
 $nodeModulesCheck = wsl.exe -e bash -lc "cd '$wslPath' && test -d node_modules && echo 'exists' || echo 'missing'"
 
-if ($nodeModulesCheck.Trim() -eq 'missing') {
-    Write-Host "Installing dependencies (npm ci)..." -ForegroundColor Cyan
-    wsl.exe -e bash -lc "cd '$wslPath' && npm ci"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host ""
-        Write-Host "ERROR: npm ci failed in WSL." -ForegroundColor Red
-        exit 1
+if ($nodeModulesCheck.Trim() -eq 'exists') {
+    # Check for Windows-specific native bindings that won't work in WSL
+    Write-Host "Checking for Windows-specific native bindings..." -ForegroundColor Cyan
+    $win32BindingsCheck = wsl.exe -e bash -lc "cd '$wslPath' && (test -d node_modules/@esbuild/win32-x64 || test -d node_modules/@triton-one/yellowstone-grpc/node_modules/*/win32-x64) && echo 'found' || echo 'not_found'"
+    
+    if ($win32BindingsCheck.Trim() -eq 'found') {
+        Write-Host "Windows-specific bindings detected. Removing node_modules to reinstall for Linux..." -ForegroundColor Yellow
+        wsl.exe -e bash -lc "cd '$wslPath' && rm -rf node_modules package-lock.json"
+        Write-Host "Installing Linux-native dependencies (npm install)..." -ForegroundColor Cyan
+        wsl.exe -e bash -lc "cd '$wslPath' && npm install"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "ERROR: npm install failed in WSL." -ForegroundColor Red
+            exit 1
+        }
+    } else {
+        Write-Host "Dependencies already installed with correct platform bindings, skipping reinstall..." -ForegroundColor Gray
     }
 } else {
-    Write-Host "Dependencies already installed, skipping npm ci..." -ForegroundColor Gray
+    Write-Host "Installing dependencies (npm install)..." -ForegroundColor Cyan
+    wsl.exe -e bash -lc "cd '$wslPath' && npm install"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Host "ERROR: npm install failed in WSL." -ForegroundColor Red
+        exit 1
+    }
 }
 
 Write-Host ""

@@ -156,6 +156,15 @@ This occurs because the `@triton-one/yellowstone-grpc` package requires native N
 #### Note
 Production deployments should target Linux environments where native bindings are fully supported.
 
+#### Important: node_modules and WSL
+**Never share node_modules between Windows and WSL.** Native dependencies (like `@esbuild/win32-x64`, `@triton-one/yellowstone-grpc`) are platform-specific and will cause errors if you install on Windows then try to run in WSL, or vice versa.
+
+**Always run `npm install` inside the environment where you execute the code:**
+- If running on Windows: run `npm install` in PowerShell/CMD
+- If running in WSL: run `npm install` inside WSL
+
+The `npm run snapshot:obligations:wsl` script automatically detects and fixes platform mismatches by reinstalling dependencies when needed.
+
 ## CI/CD
 
 The GitHub Actions workflow runs on every push and pull request:
