@@ -175,7 +175,6 @@ export async function snapshotAccounts(
     const maxTimeoutMs = maxTimeoutSeconds * 1000;
     const inactivityTimeoutMs = inactivityTimeoutSeconds * 1000;
     
-    let lastActivityTime = Date.now();
     let maxTimeoutId: NodeJS.Timeout | null = null;
     let inactivityTimeoutId: NodeJS.Timeout | null = null;
 
@@ -193,8 +192,6 @@ export async function snapshotAccounts(
 
     // Helper to reset inactivity timeout
     const resetInactivityTimeout = () => {
-      lastActivityTime = Date.now();
-      
       if (inactivityTimeoutId) {
         clearTimeout(inactivityTimeoutId);
       }
