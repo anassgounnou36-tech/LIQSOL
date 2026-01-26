@@ -128,13 +128,17 @@ export async function subscribeToAccounts(
  * @param programId - Program ID whose accounts to subscribe to
  * @param filters - Array of account filters (memcmp, datasize, etc.)
  * @param commitment - Commitment level (defaults to confirmed)
+ * @param maxTimeoutSeconds - Maximum time to wait for snapshot (defaults to 45 seconds)
+ * @param inactivityTimeoutSeconds - Maximum time without receiving data before timeout (defaults to 10 seconds)
  * @returns Promise that resolves with array of [pubkey, accountData, slot] tuples
  */
 export async function snapshotAccounts(
   client: YellowstoneClientInstance,
   programId: PublicKey,
   filters: SubscribeRequestFilterAccounts["filters"],
-  commitment: CommitmentLevel = CommitmentLevel.CONFIRMED
+  commitment: CommitmentLevel = CommitmentLevel.CONFIRMED,
+  maxTimeoutSeconds = 45,
+  inactivityTimeoutSeconds = 10
 ): Promise<Array<[PublicKey, Buffer, bigint]>> {
   logger.info(
     { programId: programId.toString(), filtersCount: filters.length },
@@ -167,7 +171,65 @@ export async function snapshotAccounts(
   const stream: Duplex = await client.subscribe();
 
   return new Promise((resolve, reject) => {
+    // Timeout handling
+    const maxTimeoutMs = maxTimeoutSeconds * 1000;
+    const inactivityTimeoutMs = inactivityTimeoutSeconds * 1000;
+    
+    let maxTimeoutId: NodeJS.Timeout | null = null;
+    let inactivityTimeoutId: NodeJS.Timeout | null = null;
+    let isResolved = false;
+
+    // Helper to clear all timeouts
+    const clearAllTimeouts = () => {
+      if (maxTimeoutId) {
+        clearTimeout(maxTimeoutId);
+        maxTimeoutId = null;
+      }
+      if (inactivityTimeoutId) {
+        clearTimeout(inactivityTimeoutId);
+        inactivityTimeoutId = null;
+      }
+    };
+
+    // Helper to reset inactivity timeout
+    const resetInactivityTimeout = () => {
+      if (inactivityTimeoutId) {
+        clearTimeout(inactivityTimeoutId);
+      }
+      
+      inactivityTimeoutId = setTimeout(() => {
+        if (isResolved) return;
+        isResolved = true;
+        logger.warn(
+          { inactivityTimeoutSeconds },
+          "Inactivity timeout reached during snapshot"
+        );
+        clearAllTimeouts();
+        stream.destroy();
+        reject(new Error(`Snapshot inactivity timeout after ${inactivityTimeoutSeconds}s`));
+      }, inactivityTimeoutMs);
+    };
+
+    // Set maximum timeout
+    maxTimeoutId = setTimeout(() => {
+      if (isResolved) return;
+      isResolved = true;
+      logger.warn(
+        { maxTimeoutSeconds, accountsCollected: accounts.length },
+        "Maximum timeout reached during snapshot"
+      );
+      clearAllTimeouts();
+      stream.destroy();
+      reject(new Error(`Snapshot maximum timeout after ${maxTimeoutSeconds}s`));
+    }, maxTimeoutMs);
+
+    // Start inactivity timeout
+    resetInactivityTimeout();
+
     stream.on("data", async (data: SubscribeUpdate) => {
+      // Reset inactivity timeout on any data received
+      resetInactivityTimeout();
+
       // Handle account updates
       if (data.account) {
         const accountInfo = data.account.account;
@@ -193,6 +255,7 @@ export async function snapshotAccounts(
                 { count: accounts.length },
                 "Initial account snapshot complete, closing stream"
               );
+              clearAllTimeouts();
               stream.destroy();
             }
           }
@@ -203,17 +266,26 @@ export async function snapshotAccounts(
     });
 
     stream.on("error", (err: Error) => {
+      if (isResolved) return;
+      isResolved = true;
       logger.error({ err }, "Yellowstone gRPC stream error");
+      clearAllTimeouts();
       reject(err);
     });
 
     stream.on("end", () => {
+      if (isResolved) return;
+      isResolved = true;
       logger.info({ accountCount: accounts.length }, "Yellowstone gRPC stream ended");
+      clearAllTimeouts();
       resolve(accounts);
     });
 
     stream.on("close", () => {
+      if (isResolved) return;
+      isResolved = true;
       logger.info({ accountCount: accounts.length }, "Yellowstone gRPC stream closed");
+      clearAllTimeouts();
       resolve(accounts);
     });
 

@@ -83,7 +83,9 @@ async function main() {
       client,
       programId,
       filters,
-      CommitmentLevel.CONFIRMED
+      CommitmentLevel.CONFIRMED,
+      env.SNAPSHOT_MAX_SECONDS,
+      env.SNAPSHOT_INACTIVITY_SECONDS
     );
 
     logger.info({ total: accounts.length }, "Fetched obligation accounts");
