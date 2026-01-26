@@ -17,6 +17,10 @@ export const EnvSchema = z.object({
   YELLOWSTONE_GRPC_URL: z.string().url(),
   YELLOWSTONE_X_TOKEN: z.string().min(1),
 
+  SNAPSHOT_MAX_SECONDS: z.coerce.number().positive().default(45),
+  SNAPSHOT_INACTIVITY_SECONDS: z.coerce.number().positive().default(10),
+  INDEXER_INTERVAL_MS: z.coerce.number().positive().default(5000),
+
   LOG_LEVEL: z.enum(["fatal","error","warn","info","debug","trace"]).default("info"),
   NODE_ENV: z.enum(["development","production","test"]).default("development"),
 });
