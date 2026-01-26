@@ -25,7 +25,7 @@ export function checkYellowstoneNativeBinding(): YellowstonePreflightResult {
     require("@triton-one/yellowstone-grpc");
     
     return { ok: true };
-  } catch (err) {
+  } catch (err: unknown) {
     // Check if this is a native binding error
     const errorMessage = err instanceof Error ? err.message : String(err);
     

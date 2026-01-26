@@ -127,11 +127,17 @@ This occurs because the `@triton-one/yellowstone-grpc` package requires native N
 #### Solutions:
 
 1. **Clean Reinstall** (try this first):
-   ```bash
-   # Delete node_modules and package-lock.json
-   rm -rf node_modules package-lock.json
    
-   # Reinstall dependencies
+   **PowerShell:**
+   ```powershell
+   Remove-Item -Recurse -Force node_modules, package-lock.json
+   npm install
+   ```
+   
+   **Command Prompt:**
+   ```cmd
+   rmdir /s /q node_modules
+   del package-lock.json
    npm install
    ```
 

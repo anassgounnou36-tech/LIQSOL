@@ -36,6 +36,7 @@ Write-Host "This may take a few minutes..." -ForegroundColor Gray
 Write-Host ""
 
 # Run npm ci and npm run snapshot:obligations in WSL
+# Commands are chained so npm run will only execute if npm ci succeeds
 wsl bash -c "cd '$wslPath' && npm ci && npm run snapshot:obligations"
 
 if ($LASTEXITCODE -eq 0) {
