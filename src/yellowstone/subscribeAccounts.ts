@@ -10,6 +10,28 @@ import { logger } from "../observability/logger.js";
 import type { YellowstoneClientInstance } from "./client.js";
 
 /**
+ * Convert value to bigint for u64 gRPC fields
+ */
+function toU64(x: unknown): bigint {
+  if (typeof x === "bigint") return x;
+  if (typeof x === "number") return BigInt(x);
+  if (typeof x === "string") return BigInt(x);
+  return 0n;
+}
+
+/**
+ * Normalize filters to ensure memcmp.offset is bigint for gRPC u64 compatibility
+ */
+function normalizeFilters(filters: any[]): any[] {
+  return filters.map((f) => {
+    if (f?.memcmp?.offset !== undefined) {
+      return { ...f, memcmp: { ...f.memcmp, offset: toU64(f.memcmp.offset) } };
+    }
+    return f;
+  });
+}
+
+/**
  * Callback for processing account updates
  */
 export type AccountUpdateCallback = (
@@ -40,13 +62,16 @@ export async function subscribeToAccounts(
     "Starting account subscription via Yellowstone gRPC"
   );
 
+  // Normalize filters to ensure memcmp.offset is bigint for u64 compatibility
+  const normalizedFilters = normalizeFilters(filters as any[]);
+
   // Create subscription request
   const request = {
     accounts: {
       "obligation_accounts": {
         owner: [programId.toString()],
         account: [],
-        filters,
+        filters: normalizedFilters,
         nonemptyTxnSignature: false,
       },
     },
@@ -148,13 +173,16 @@ export async function snapshotAccounts(
   const accounts: Array<[PublicKey, Buffer, bigint]> = [];
   let startupAccountsCompleted = false;
 
+  // Normalize filters to ensure memcmp.offset is bigint for u64 compatibility
+  const normalizedFilters = normalizeFilters(filters as any[]);
+
   // Create subscription request
   const request = {
     accounts: {
       "obligation_accounts": {
         owner: [programId.toString()],
         account: [],
-        filters,
+        filters: normalizedFilters,
         nonemptyTxnSignature: false,
       },
     },
