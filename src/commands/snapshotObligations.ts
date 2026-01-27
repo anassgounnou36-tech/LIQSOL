@@ -110,11 +110,11 @@ async function main() {
     const filters = [
       {
         memcmp: {
-          offset: 0 as any, // Force number type despite TypeScript definition expecting string
+          offset: 0,
           bytes: obligationDiscriminator,
         },
       },
-    ];
+    ] as any; // Type assertion needed: gRPC runtime expects number but TS types define string
 
     // Subscribe and collect all matching accounts
     logger.info("Fetching obligation accounts via Yellowstone gRPC...");
