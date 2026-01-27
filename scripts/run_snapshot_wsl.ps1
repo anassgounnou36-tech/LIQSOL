@@ -64,11 +64,23 @@ Write-Host ""
 
 # Define target path on Linux filesystem (avoids Windows file locks and improves performance)
 Write-Host "Setting up workspace on Linux filesystem..." -ForegroundColor Cyan
-$linuxWorkspacePath = "~/liqsol-workspace"
+# Use explicit home directory expansion for cross-platform compatibility
+$getHomePath = wsl.exe -d $Distro -- bash -lc "echo \$HOME"
+$linuxHome = $getHomePath.Trim()
+$linuxWorkspacePath = "$linuxHome/liqsol-workspace"
+
+Write-Host "Linux workspace path: $linuxWorkspacePath" -ForegroundColor Gray
+
+# Validate workspace path to prevent accidental operations on wrong directories
+if ([string]::IsNullOrWhiteSpace($linuxHome) -or $linuxHome -notmatch "^/home/") {
+    Write-Host ""
+    Write-Host "ERROR: Failed to determine valid Linux home directory." -ForegroundColor Red
+    exit 1
+}
 
 # Create workspace directory and sync repo files
-Write-Host "Copying repository to Linux filesystem: $linuxWorkspacePath" -ForegroundColor Cyan
-wsl.exe -d $Distro -- bash -lc "mkdir -p $linuxWorkspacePath && rsync -a --delete --exclude='node_modules' --exclude='.git' --exclude='dist' '$wslSourcePath/' '$linuxWorkspacePath/'"
+Write-Host "Copying repository to Linux filesystem..." -ForegroundColor Cyan
+wsl.exe -d $Distro -- bash -lc "mkdir -p '$linuxWorkspacePath' && rsync -a --delete --exclude='node_modules' --exclude='.git' --exclude='dist' '$wslSourcePath/' '$linuxWorkspacePath/'"
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
     Write-Host "ERROR: Failed to copy repository to Linux filesystem." -ForegroundColor Red
@@ -91,11 +103,11 @@ Write-Host ""
 
 # Check if node_modules exists in Linux workspace
 Write-Host "Checking dependencies in Linux workspace..." -ForegroundColor Cyan
-$nodeModulesCheck = wsl.exe -d $Distro -- bash -lc "cd $linuxWorkspacePath && test -d node_modules && echo 'exists' || echo 'missing'"
+$nodeModulesCheck = wsl.exe -d $Distro -- bash -lc "cd '$linuxWorkspacePath' && test -d node_modules && echo 'exists' || echo 'missing'"
 
 if ($nodeModulesCheck.Trim() -eq 'missing') {
     Write-Host "Installing dependencies (npm install)..." -ForegroundColor Cyan
-    wsl.exe -d $Distro -- bash -lc "cd $linuxWorkspacePath && npm install"
+    wsl.exe -d $Distro -- bash -lc "cd '$linuxWorkspacePath' && npm install"
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "ERROR: npm install failed in WSL." -ForegroundColor Red
@@ -111,7 +123,7 @@ Write-Host "Running: npm run snapshot:obligations" -ForegroundColor Cyan
 Write-Host ""
 
 # Run snapshot command in WSL from Linux filesystem
-wsl.exe -d $Distro -- bash -lc "cd $linuxWorkspacePath && node -v && npm -v && npm run snapshot:obligations"
+wsl.exe -d $Distro -- bash -lc "cd '$linuxWorkspacePath' && node -v && npm -v && npm run snapshot:obligations"
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
@@ -119,11 +131,19 @@ if ($LASTEXITCODE -eq 0) {
     
     # Copy output file back to Windows
     Write-Host "Copying output file back to Windows repo..." -ForegroundColor Cyan
-    wsl.exe -d $Distro -- bash -lc "mkdir -p '$wslSourcePath/data' && cp '$linuxWorkspacePath/data/obligations.jsonl' '$wslSourcePath/data/obligations.jsonl'"
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "Output file: data/obligations.jsonl" -ForegroundColor Cyan
+    # Check if output file exists before copying
+    $outputExists = wsl.exe -d $Distro -- bash -lc "test -f '$linuxWorkspacePath/data/obligations.jsonl' && echo 'exists' || echo 'missing'"
+    
+    if ($outputExists.Trim() -eq 'exists') {
+        wsl.exe -d $Distro -- bash -lc "mkdir -p '$wslSourcePath/data' && cp '$linuxWorkspacePath/data/obligations.jsonl' '$wslSourcePath/data/obligations.jsonl'"
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Output file: data/obligations.jsonl" -ForegroundColor Cyan
+        } else {
+            Write-Host "WARNING: Failed to copy output file back to Windows repo." -ForegroundColor Yellow
+        }
     } else {
-        Write-Host "WARNING: Failed to copy output file back to Windows repo." -ForegroundColor Yellow
+        Write-Host "WARNING: Output file data/obligations.jsonl not found in Linux workspace." -ForegroundColor Yellow
+        Write-Host "The snapshot may have completed but did not produce the expected output file." -ForegroundColor Yellow
     }
     exit 0
 } else {
