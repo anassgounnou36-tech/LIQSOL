@@ -1,5 +1,6 @@
 # PowerShell script to run snapshot:obligations in WSL2
 # This script is designed for Windows users who face native binding issues
+# To avoid Windows file locks and slow npm installs on /mnt/c, we copy the repo to Linux filesystem
 
 # Force Ubuntu distro for all WSL calls
 $Distro = "Ubuntu"
@@ -36,80 +37,94 @@ Write-Host "Converting Windows path to WSL path..." -ForegroundColor Cyan
 Write-Host "Current Windows path: $currentPath" -ForegroundColor Gray
 
 # Convert Windows path to WSL path using wslpath directly (handles spaces correctly)
-$wslPath = & wsl.exe -d $Distro -- wslpath -a "$currentPath"
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($wslPath)) {
+$wslSourcePath = & wsl.exe -d $Distro -- wslpath -a "$currentPath"
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($wslSourcePath)) {
     Write-Host ""
     Write-Host "ERROR: Failed to convert path to WSL format (wslpath returned empty)." -ForegroundColor Red
     exit 1
 }
 
-# Trim whitespace from wslPath
-$wslPath = $wslPath.Trim()
+# Trim whitespace from wslSourcePath
+$wslSourcePath = $wslSourcePath.Trim()
 
-Write-Host "WSL path: $wslPath" -ForegroundColor Gray
-Write-Host ""
+Write-Host "WSL source path: $wslSourcePath" -ForegroundColor Gray
 
-# Check if .env exists
-Write-Host "Checking for .env file..." -ForegroundColor Cyan
-$envCheckResult = wsl.exe -d $Distro -- bash -lc "cd '$wslPath' && test -f .env && echo 'exists' || echo 'missing'"
+# Check if .env exists in source
+Write-Host "Checking for .env file in Windows repo..." -ForegroundColor Cyan
+$envCheckResult = wsl.exe -d $Distro -- bash -lc "cd '$wslSourcePath' && test -f .env && echo 'exists' || echo 'missing'"
 if ($envCheckResult.Trim() -eq 'missing') {
-    Write-Host "WARNING: .env file not found in repository root." -ForegroundColor Yellow
-    Write-Host "The snapshot command may fail without required environment variables." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "ERROR: .env file not found in repository root." -ForegroundColor Red
+    Write-Host "The snapshot command requires environment variables in .env file." -ForegroundColor Yellow
+    exit 1
 }
 
-# Check if node_modules exists and detect platform mismatch
-Write-Host "Checking dependencies..." -ForegroundColor Cyan
-$nodeModulesCheck = wsl.exe -d $Distro -- bash -lc "cd '$wslPath' && test -d node_modules && echo 'exists' || echo 'missing'"
+Write-Host ".env file found." -ForegroundColor Green
+Write-Host ""
 
-if ($nodeModulesCheck.Trim() -eq 'exists') {
-    # Check for Windows-specific native bindings that won't work in WSL
-    Write-Host "Checking for Windows-specific native bindings..." -ForegroundColor Cyan
-    
-    # Check for @esbuild/win32-x64 or yellowstone win32 bindings
-    $esbuildCheck = wsl.exe -d $Distro -- bash -lc "cd '$wslPath' && test -d node_modules/@esbuild/win32-x64 && echo 'found' || echo 'not_found'"
-    $yellowstoneCheck = wsl.exe -d $Distro -- bash -lc "cd '$wslPath' && test -d node_modules/@triton-one/yellowstone-grpc/node_modules && find node_modules/@triton-one/yellowstone-grpc/node_modules -name '*win32-x64*' -type d | grep -q . && echo 'found' || echo 'not_found'"
-    
-    if ($esbuildCheck.Trim() -eq 'found' -or $yellowstoneCheck.Trim() -eq 'found') {
-        Write-Host "Windows-specific bindings detected. Removing node_modules to reinstall for Linux..." -ForegroundColor Yellow
-        
-        # Validate wslPath is not empty to prevent accidental deletion
-        if ([string]::IsNullOrWhiteSpace($wslPath)) {
-            Write-Host "ERROR: WSL path is empty. Aborting to prevent accidental deletion." -ForegroundColor Red
-            exit 1
-        }
-        
-        wsl.exe -d $Distro -- bash -lc "cd '$wslPath' && rm -rf node_modules package-lock.json"
-        Write-Host "Installing Linux-native dependencies (npm install)..." -ForegroundColor Cyan
-        wsl.exe -d $Distro -- bash -lc "cd '$wslPath' && npm install"
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host ""
-            Write-Host "ERROR: npm install failed in WSL." -ForegroundColor Red
-            exit 1
-        }
-    } else {
-        Write-Host "Dependencies already installed with correct platform bindings, skipping reinstall..." -ForegroundColor Gray
-    }
-} else {
+# Define target path on Linux filesystem (avoids Windows file locks and improves performance)
+Write-Host "Setting up workspace on Linux filesystem..." -ForegroundColor Cyan
+$linuxWorkspacePath = "~/liqsol-workspace"
+
+# Create workspace directory and sync repo files
+Write-Host "Copying repository to Linux filesystem: $linuxWorkspacePath" -ForegroundColor Cyan
+wsl.exe -d $Distro -- bash -lc "mkdir -p $linuxWorkspacePath && rsync -a --delete --exclude='node_modules' --exclude='.git' --exclude='dist' '$wslSourcePath/' '$linuxWorkspacePath/'"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "ERROR: Failed to copy repository to Linux filesystem." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Repository copied successfully." -ForegroundColor Green
+
+# Copy .env file (sync it each run)
+Write-Host "Syncing .env file..." -ForegroundColor Cyan
+wsl.exe -d $Distro -- bash -lc "cp '$wslSourcePath/.env' '$linuxWorkspacePath/.env'"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "ERROR: Failed to copy .env file." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host ".env synced." -ForegroundColor Green
+Write-Host ""
+
+# Check if node_modules exists in Linux workspace
+Write-Host "Checking dependencies in Linux workspace..." -ForegroundColor Cyan
+$nodeModulesCheck = wsl.exe -d $Distro -- bash -lc "cd $linuxWorkspacePath && test -d node_modules && echo 'exists' || echo 'missing'"
+
+if ($nodeModulesCheck.Trim() -eq 'missing') {
     Write-Host "Installing dependencies (npm install)..." -ForegroundColor Cyan
-    wsl.exe -d $Distro -- bash -lc "cd '$wslPath' && npm install"
+    wsl.exe -d $Distro -- bash -lc "cd $linuxWorkspacePath && npm install"
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "ERROR: npm install failed in WSL." -ForegroundColor Red
         exit 1
     }
+    Write-Host "Dependencies installed successfully." -ForegroundColor Green
+} else {
+    Write-Host "Dependencies already installed, skipping npm install..." -ForegroundColor Gray
 }
 
 Write-Host ""
 Write-Host "Running: npm run snapshot:obligations" -ForegroundColor Cyan
 Write-Host ""
 
-# Run snapshot command in WSL
-wsl.exe -d $Distro -- bash -lc "cd '$wslPath' && node -v && npm -v && npm run snapshot:obligations"
+# Run snapshot command in WSL from Linux filesystem
+wsl.exe -d $Distro -- bash -lc "cd $linuxWorkspacePath && node -v && npm -v && npm run snapshot:obligations"
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "SUCCESS: Snapshot completed successfully in WSL." -ForegroundColor Green
-    Write-Host "Output file: data/obligations.jsonl" -ForegroundColor Cyan
+    
+    # Copy output file back to Windows
+    Write-Host "Copying output file back to Windows repo..." -ForegroundColor Cyan
+    wsl.exe -d $Distro -- bash -lc "mkdir -p '$wslSourcePath/data' && cp '$linuxWorkspacePath/data/obligations.jsonl' '$wslSourcePath/data/obligations.jsonl'"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Output file: data/obligations.jsonl" -ForegroundColor Cyan
+    } else {
+        Write-Host "WARNING: Failed to copy output file back to Windows repo." -ForegroundColor Yellow
+    }
     exit 0
 } else {
     Write-Host ""
