@@ -16,6 +16,7 @@ describe("LiveObligationIndexer - Integration Example", () => {
       yellowstoneUrl: "https://solana-mainnet.g.alchemy.com/",
       yellowstoneToken: "test-token",
       programId: new PublicKey("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"),
+      rpcUrl: "https://api.mainnet-beta.solana.com",
       obligationsFilePath: "/tmp/test-obligations.jsonl",
       commitment: CommitmentLevel.CONFIRMED,
       maxReconnectAttempts: 5,

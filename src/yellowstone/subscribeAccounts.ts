@@ -45,6 +45,21 @@ export type AccountUpdateCallback = (
 ) => void | Promise<void>;
 
 /**
+ * Yellowstone subscription handle for production-safe stream management
+ */
+export interface YellowstoneSubscriptionHandle {
+  /**
+   * Close the subscription stream (idempotent)
+   */
+  close(): void;
+  
+  /**
+   * Promise that resolves when stream ends cleanly, rejects on error
+   */
+  done: Promise<void>;
+}
+
+/**
  * Subscribe to accounts owned by a program with optional filters
  * 
  * @param client - Connected Yellowstone gRPC client
@@ -52,15 +67,17 @@ export type AccountUpdateCallback = (
  * @param filters - Array of account filters (memcmp, datasize, etc.)
  * @param onAccountUpdate - Callback for each account update
  * @param commitment - Commitment level (defaults to confirmed)
- * @returns Promise that resolves when subscription completes or rejects on error
+ * @param inactivityTimeoutSeconds - Timeout in seconds for inactivity watchdog (defaults to 15)
+ * @returns YellowstoneSubscriptionHandle with close() and done promise
  */
 export async function subscribeToAccounts(
   client: YellowstoneClientInstance,
   programId: PublicKey,
   filters: SubscribeRequestFilterAccounts["filters"],
   onAccountUpdate: AccountUpdateCallback,
-  commitment: CommitmentLevel = CommitmentLevel.CONFIRMED
-): Promise<void> {
+  commitment: CommitmentLevel = CommitmentLevel.CONFIRMED,
+  inactivityTimeoutSeconds = 15
+): Promise<YellowstoneSubscriptionHandle> {
   logger.info(
     { programId: programId.toString(), filtersCount: filters.length },
     "Starting account subscription via Yellowstone gRPC"
@@ -106,9 +123,38 @@ export async function subscribeToAccounts(
 
   let accountCount = 0;
   let errorOccurred = false;
+  let isClosed = false;
+  let inactivityTimeoutId: NodeJS.Timeout | null = null;
 
-  return new Promise((resolve, reject) => {
+  // Helper to reset inactivity timeout
+  const resetInactivityTimeout = () => {
+    if (inactivityTimeoutId) {
+      clearTimeout(inactivityTimeoutId);
+    }
+    
+    inactivityTimeoutId = setTimeout(() => {
+      if (isClosed) return;
+      logger.warn(
+        { inactivityTimeoutSeconds },
+        "Inactivity timeout reached - no data received, destroying stream"
+      );
+      stream.destroy(new Error("Inactivity timeout"));
+    }, inactivityTimeoutSeconds * 1000);
+  };
+
+  // Helper to cleanup inactivity timeout
+  const clearInactivityTimeout = () => {
+    if (inactivityTimeoutId) {
+      clearTimeout(inactivityTimeoutId);
+      inactivityTimeoutId = null;
+    }
+  };
+
+  const donePromise = new Promise<void>((resolve, reject) => {
     stream.on("data", async (data: SubscribeUpdate) => {
+      // Reset inactivity timeout on any data (including pings)
+      resetInactivityTimeout();
+
       // Handle account updates
       if (data.account) {
         const accountInfo = data.account.account;
@@ -140,12 +186,24 @@ export async function subscribeToAccounts(
 
     stream.on("error", (err: Error) => {
       logger.error({ err }, "Yellowstone gRPC stream error");
+      clearInactivityTimeout();
       errorOccurred = true;
+      isClosed = true;
       reject(err);
     });
 
     stream.on("end", () => {
       logger.info({ accountCount }, "Yellowstone gRPC stream ended");
+      clearInactivityTimeout();
+      isClosed = true;
+      if (!errorOccurred) {
+        resolve();
+      }
+    });
+
+    stream.on("close", () => {
+      clearInactivityTimeout();
+      isClosed = true;
       if (!errorOccurred) {
         resolve();
       }
@@ -155,7 +213,23 @@ export async function subscribeToAccounts(
     stream.write(request);
 
     logger.info("Subscription request sent, waiting for account updates");
+    
+    // Start inactivity timeout
+    resetInactivityTimeout();
   });
+
+  // Return subscription handle
+  return {
+    close: () => {
+      if (!isClosed) {
+        isClosed = true;
+        clearInactivityTimeout();
+        stream.destroy();
+        logger.debug("Subscription stream closed via handle.close()");
+      }
+    },
+    done: donePromise,
+  };
 }
 
 /**

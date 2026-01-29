@@ -19,6 +19,7 @@ describe("LiveObligationIndexer", () => {
   const testDataDir = join(process.cwd(), "test-data-live-indexer");
   const testFilePath = join(testDataDir, "obligations.jsonl");
   const testProgramId = new PublicKey("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD");
+  const testRpcUrl = "https://api.mainnet-beta.solana.com";
 
   beforeEach(() => {
     // Create test data directory
@@ -43,6 +44,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
       });
 
       expect(indexer).toBeDefined();
@@ -54,6 +56,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
         obligationsFilePath: testFilePath,
         filters: [],
         commitment: CommitmentLevel.CONFIRMED,
@@ -75,6 +78,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
         obligationsFilePath: join(testDataDir, "nonexistent.jsonl"),
       });
 
@@ -94,6 +98,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
         obligationsFilePath: testFilePath,
       });
 
@@ -114,6 +119,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
         obligationsFilePath: testFilePath,
       });
 
@@ -127,6 +133,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
       });
 
       expect(indexer.getAllObligations()).toEqual([]);
@@ -138,6 +145,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
       });
 
       const result = indexer.getObligation("H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo");
@@ -151,6 +159,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
       });
 
       const stats = indexer.getStats();
@@ -169,6 +178,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
       });
 
       expect(indexer.isIndexerRunning()).toBe(false);
@@ -179,6 +189,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
       });
 
       await expect(indexer.stop()).resolves.not.toThrow();
@@ -189,6 +200,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
       });
 
       await indexer.stop();
@@ -202,6 +214,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
       });
 
       expect(indexer).toBeDefined();
@@ -214,6 +227,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
         maxReconnectAttempts: 3,
         reconnectDelayMs: 100,
         reconnectBackoffFactor: 1.5,
@@ -232,6 +246,7 @@ describe("LiveObligationIndexer", () => {
         yellowstoneUrl: "https://test.example.com",
         yellowstoneToken: "test-token",
         programId: testProgramId,
+        rpcUrl: testRpcUrl,
         obligationsFilePath: testFilePath,
       });
 
