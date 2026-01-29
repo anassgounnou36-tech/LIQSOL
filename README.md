@@ -9,6 +9,32 @@ A TypeScript-based Solana bot with structured logging, environment validation, a
 - ✅ Structured logging with Pino (pretty output in development)
 - ✅ Boot checks: RPC latency, current slot, bot public key
 - ✅ GitHub Actions CI pipeline
+- ✅ Kamino Lending protocol decoders (Reserve, Obligation)
+- ✅ Obligation snapshot via Yellowstone gRPC
+- ✅ **Live Obligation Indexer with Yellowstone streaming (PR5)**
+
+## Quick Start
+
+### Live Obligation Indexer
+
+Monitor Kamino Lending obligations in real-time:
+
+```bash
+# 1. Create snapshot of obligation accounts
+npm run snapshot:obligations
+
+# 2. Run the live indexer (streams real-time updates)
+npm run live:indexer
+```
+
+The live indexer:
+- Loads initial state from `data/obligations.jsonl`
+- Streams real-time updates via Yellowstone gRPC
+- Maintains in-memory Map of decoded obligations
+- Auto-reconnects with exponential backoff
+- Handles clean shutdown (Ctrl+C)
+
+See [PR5_IMPLEMENTATION.md](./PR5_IMPLEMENTATION.md) for full documentation.
 
 ## Prerequisites
 
