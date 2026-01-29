@@ -458,11 +458,11 @@ export class LiveObligationIndexer {
       this.config.filters = [
         {
           memcmp: {
-            offset: 0, // MUST be number for u64
+            offset: "0", // MUST be string for gRPC type compatibility
             base64: obligationDiscriminator.toString("base64"),
           },
         },
-      ] as any; // Type assertion needed: gRPC runtime expects number but TS types may differ
+      ] as any; // Type assertion needed for filter type compatibility
       
       logger.info(
         { discriminator: obligationDiscriminator.toString("hex") },

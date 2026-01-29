@@ -119,8 +119,9 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     expect(filters).toBeDefined();
     expect(filters.length).toBe(1);
     expect(filters[0]).toHaveProperty("memcmp");
-    expect(filters[0].memcmp).toHaveProperty("offset", 0);
-    expect(filters[0].memcmp).toHaveProperty("base64");
+    expect(filters[0]?.memcmp).toBeDefined();
+    expect(filters[0]!.memcmp!.offset).toBe("0"); // offset should be string
+    expect(filters[0]!.memcmp).toHaveProperty("base64");
     
     await indexer.stop();
   });
@@ -156,8 +157,9 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     expect(filters).toBeDefined();
     expect(filters.length).toBe(1);
     expect(filters[0]).toHaveProperty("memcmp");
-    expect(filters[0].memcmp).toHaveProperty("offset", 0);
-    expect(filters[0].memcmp).toHaveProperty("base64");
+    expect(filters[0]?.memcmp).toBeDefined();
+    expect(filters[0]!.memcmp!.offset).toBe("0"); // offset should be string
+    expect(filters[0]!.memcmp).toHaveProperty("base64");
     
     await indexer.stop();
   });
@@ -167,7 +169,7 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
 
     const customFilter = {
       memcmp: {
-        offset: 10,
+        offset: "10", // String offset for gRPC type compatibility
         base64: "dGVzdA==", // "test" in base64
       },
     };
@@ -196,8 +198,9 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     // Verify custom filter is still used (not replaced)
     expect(filters).toBeDefined();
     expect(filters.length).toBe(1);
-    expect(filters[0].memcmp.offset).toBe(10);
-    expect(filters[0].memcmp.base64).toBe("dGVzdA==");
+    expect(filters[0]?.memcmp).toBeDefined();
+    expect(filters[0]!.memcmp!.offset).toBe("10");
+    expect(filters[0]!.memcmp!.base64).toBe("dGVzdA==");
     
     await indexer.stop();
   });
@@ -231,7 +234,8 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     const filters = callArgs[2]; // Third argument is filters
     
     // Verify discriminator matches expected value
-    expect(filters[0].memcmp.base64).toBe(expectedBase64);
+    expect(filters[0]?.memcmp).toBeDefined();
+    expect(filters[0]!.memcmp!.base64).toBe(expectedBase64);
     
     await indexer.stop();
   });

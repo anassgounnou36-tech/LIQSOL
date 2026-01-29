@@ -11,7 +11,7 @@ import type { YellowstoneClientInstance } from "./client.js";
 
 /**
  * Normalize filters to ensure proper types for gRPC serialization:
- * - memcmp.offset must be a JS number (not string, not bigint) for u64 field
+ * - memcmp.offset must be a string for gRPC type compatibility
  * - memcmp.bytes (Buffer) should be converted to base64 string
  */
 function normalizeFilters(filters: any[]): any[] {
@@ -19,9 +19,17 @@ function normalizeFilters(filters: any[]): any[] {
     if (!f?.memcmp) return f;
 
     let offset = f.memcmp.offset;
-    if (typeof offset === "string") offset = Number(offset);
-    if (typeof offset === "bigint") offset = Number(offset);
-    if (typeof offset !== "number" || !Number.isFinite(offset)) offset = 0;
+    // Accept number or string, normalize to string
+    if (typeof offset === "number") {
+      offset = String(offset);
+    } else if (typeof offset === "bigint") {
+      offset = String(offset);
+    } else if (typeof offset === "string") {
+      // Already a string, keep it
+    } else {
+      // Default to "0" if invalid
+      offset = "0";
+    }
 
     const memcmp: any = { ...f.memcmp, offset };
 
