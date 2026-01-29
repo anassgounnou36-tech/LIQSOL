@@ -10,24 +10,28 @@ import { logger } from "../observability/logger.js";
 import type { YellowstoneClientInstance } from "./client.js";
 
 /**
- * Convert value to bigint for u64 gRPC fields
- */
-function toU64(x: unknown): bigint {
-  if (typeof x === "bigint") return x;
-  if (typeof x === "number") return BigInt(x);
-  if (typeof x === "string") return BigInt(x);
-  return 0n;
-}
-
-/**
- * Normalize filters to ensure memcmp.offset is bigint for gRPC u64 compatibility
+ * Normalize filters to ensure proper types for gRPC serialization:
+ * - memcmp.offset must be a JS number (not string, not bigint) for u64 field
+ * - memcmp.bytes (Buffer) should be converted to base64 string
  */
 function normalizeFilters(filters: any[]): any[] {
   return filters.map((f) => {
-    if (f?.memcmp?.offset !== undefined) {
-      return { ...f, memcmp: { ...f.memcmp, offset: toU64(f.memcmp.offset) } };
+    if (!f?.memcmp) return f;
+
+    let offset = f.memcmp.offset;
+    if (typeof offset === "string") offset = Number(offset);
+    if (typeof offset === "bigint") offset = Number(offset);
+    if (typeof offset !== "number" || !Number.isFinite(offset)) offset = 0;
+
+    const memcmp: any = { ...f.memcmp, offset };
+
+    // Prefer base64 string over raw bytes
+    if (Buffer.isBuffer(memcmp.bytes)) {
+      memcmp.base64 = memcmp.bytes.toString("base64");
+      delete memcmp.bytes;
     }
-    return f;
+
+    return { ...f, memcmp };
   });
 }
 

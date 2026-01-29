@@ -106,15 +106,15 @@ async function main() {
 
     // Define filters for Yellowstone subscription
     // Filter 1: Match Obligation discriminator at offset 0
-    // Note: TypeScript types say offset is string, but gRPC runtime expects u64 as bigint
+    // Note: offset must be a JS number (not string, not bigint) for u64 gRPC field
     const filters = [
       {
         memcmp: {
-          offset: 0n, // bigint required for u64 gRPC field
-          bytes: obligationDiscriminator,
+          offset: 0, // MUST be number for u64
+          base64: obligationDiscriminator.toString("base64"), // avoid Buffer/bytes runtime mismatch
         },
       },
-    ] as any; // Type assertion needed: gRPC runtime expects bigint but TS types define string
+    ] as any; // Type assertion needed: gRPC runtime expects number but TS types may differ
 
     // Subscribe and collect all matching accounts
     logger.info("Fetching obligation accounts via Yellowstone gRPC...");
