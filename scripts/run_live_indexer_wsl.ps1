@@ -99,21 +99,49 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ".env copied." -ForegroundColor Green
 
-# Ensure data directory exists and copy obligations.jsonl if present
-Write-Host "Checking for data/obligations.jsonl..." -ForegroundColor Cyan
+# Ensure data directory exists and check for obligations.jsonl
+Write-Host "Checking for data/obligations.jsonl in WSL workspace..." -ForegroundColor Cyan
 & wsl.exe -d $Distro -- bash -lc "mkdir -p '$workspace/data'"
-$dataCheck = & wsl.exe -d $Distro -- bash -lc "test -f '$wslSource/data/obligations.jsonl' && echo 'exists' || echo 'missing'"
-if ($dataCheck.Trim() -eq 'exists') {
-    Write-Host "Copying data/obligations.jsonl..." -ForegroundColor Cyan
+
+# Check if snapshot file exists in Windows repo first
+$dataCheckWindows = & wsl.exe -d $Distro -- bash -lc "test -f '$wslSource/data/obligations.jsonl' && echo 'exists' || echo 'missing'"
+if ($dataCheckWindows.Trim() -eq 'exists') {
+    Write-Host "Found data/obligations.jsonl in Windows repo, copying..." -ForegroundColor Cyan
     & wsl.exe -d $Distro -- bash -lc "cp -f '$wslSource/data/obligations.jsonl' '$workspace/data/obligations.jsonl'"
     if ($LASTEXITCODE -eq 0) {
         Write-Host "data/obligations.jsonl copied successfully." -ForegroundColor Green
     } else {
         Write-Host "WARNING: Failed to copy data/obligations.jsonl" -ForegroundColor Yellow
     }
+}
+
+# Check if obligations.jsonl exists in WSL workspace (after potential copy)
+$dataCheckWSL = & wsl.exe -d $Distro -- bash -lc "test -f '$workspace/data/obligations.jsonl' && echo 'exists' || echo 'missing'"
+
+if ($dataCheckWSL.Trim() -eq 'missing') {
+    Write-Host "data/obligations.jsonl not found in WSL workspace." -ForegroundColor Yellow
+    Write-Host "Running snapshot first to ensure non-empty bootstrap..." -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Run snapshot inside WSL workspace to generate obligations.jsonl
+    & wsl.exe -d $Distro -- bash -lc "cd '$workspace' && npm install && npm run snapshot:obligations"
+    $snapshotExitCode = $LASTEXITCODE
+    
+    if ($snapshotExitCode -ne 0) {
+        Write-Host ""
+        Write-Host "ERROR: Snapshot failed in WSL." -ForegroundColor Red
+        exit $snapshotExitCode
+    }
+    
+    # Verify the snapshot file was created
+    $dataCheckAfterSnapshot = & wsl.exe -d $Distro -- bash -lc "test -f '$workspace/data/obligations.jsonl' && echo 'exists' || echo 'missing'"
+    if ($dataCheckAfterSnapshot.Trim() -eq 'exists') {
+        Write-Host "Snapshot completed successfully, obligations.jsonl created." -ForegroundColor Green
+    } else {
+        Write-Host "WARNING: Snapshot ran but obligations.jsonl not found. Proceeding anyway..." -ForegroundColor Yellow
+    }
 } else {
-    Write-Host "WARNING: data/obligations.jsonl not found in Windows repo." -ForegroundColor Yellow
-    Write-Host "The live indexer will start with an empty snapshot (snapshotSize: 0)." -ForegroundColor Yellow
+    Write-Host "data/obligations.jsonl found in WSL workspace." -ForegroundColor Green
 }
 Write-Host ""
 

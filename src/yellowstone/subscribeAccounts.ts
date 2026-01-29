@@ -179,12 +179,15 @@ export async function subscribeToAccounts(
     }
   };
 
-  // Start outbound ping loop to keep connection alive
+  // Ping ID for Yellowstone gRPC keep-alive
+  const PING_ID = 1;
+
+  // Start outbound ping loop to keep connection alive (fallback)
   // Send ping every 5 seconds to prevent silent disconnects
   pingIntervalId = setInterval(() => {
     if (closeRequested) return;
     try {
-      stream.write({ ping: {} });
+      stream.write({ ping: { id: PING_ID } });
       logger.debug("Sent outbound ping to Yellowstone gRPC");
     } catch (err) {
       logger.warn({ err }, "Failed to send outbound ping");
@@ -239,7 +242,13 @@ export async function subscribeToAccounts(
 
       // Handle ping updates (keep-alive)
       if (data.ping) {
-        logger.debug("Received ping from Yellowstone gRPC");
+        logger.debug("Received ping from Yellowstone gRPC, sending reply");
+        // Reply to server ping immediately to maintain connection
+        try {
+          stream.write({ ping: { id: PING_ID } });
+        } catch (err) {
+          logger.warn({ err }, "Failed to reply to server ping");
+        }
       }
     });
 

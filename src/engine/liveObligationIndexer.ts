@@ -398,12 +398,14 @@ export class LiveObligationIndexer {
         const errorMessage = error instanceof Error ? error.message : String(error);
         const isInvalidArg = errorMessage.includes("InvalidArg") || 
                             errorMessage.includes("invalid type") ||
-                            (error && typeof error === "object" && "code" in error && error.code === 3);
+                            errorMessage.includes("missing field") ||
+                            (error && typeof error === "object" && "code" in error && 
+                             (error.code === 3 || error.code === "InvalidArg"));
         
         if (isInvalidArg) {
           logger.fatal(
             { error, errorMessage },
-            "FATAL: Invalid request configuration (InvalidArg). This is a bug in filter setup. Stopping indexer."
+            "FATAL: Invalid request configuration (InvalidArg). This is a bug in request format. Stopping indexer."
           );
           this.shouldReconnect = false;
           this.isRunning = false;
