@@ -125,6 +125,7 @@ export async function subscribeToAccounts(
   let errorOccurred = false;
   let isClosed = false;
   let inactivityTimeoutId: NodeJS.Timeout | null = null;
+  let pingIntervalId: NodeJS.Timeout | null = null;
 
   // Helper to reset inactivity timeout
   const resetInactivityTimeout = () => {
@@ -149,6 +150,26 @@ export async function subscribeToAccounts(
       inactivityTimeoutId = null;
     }
   };
+
+  // Helper to cleanup ping interval
+  const clearPingInterval = () => {
+    if (pingIntervalId) {
+      clearInterval(pingIntervalId);
+      pingIntervalId = null;
+    }
+  };
+
+  // Start outbound ping loop to keep connection alive
+  // Send ping every 5 seconds to prevent silent disconnects
+  pingIntervalId = setInterval(() => {
+    if (isClosed) return;
+    try {
+      stream.write({ ping: {} });
+      logger.debug("Sent outbound ping to Yellowstone gRPC");
+    } catch (err) {
+      logger.warn({ err }, "Failed to send outbound ping");
+    }
+  }, 5000);
 
   const donePromise = new Promise<void>((resolve, reject) => {
     stream.on("data", async (data: SubscribeUpdate) => {
@@ -187,6 +208,7 @@ export async function subscribeToAccounts(
     stream.on("error", (err: Error) => {
       logger.error({ err }, "Yellowstone gRPC stream error");
       clearInactivityTimeout();
+      clearPingInterval();
       errorOccurred = true;
       isClosed = true;
       reject(err);
@@ -196,6 +218,7 @@ export async function subscribeToAccounts(
       if (isClosed) return; // Already handled
       logger.info({ accountCount }, "Yellowstone gRPC stream ended");
       clearInactivityTimeout();
+      clearPingInterval();
       isClosed = true;
       if (!errorOccurred) {
         resolve();
@@ -205,6 +228,7 @@ export async function subscribeToAccounts(
     stream.on("close", () => {
       if (isClosed) return; // Already handled
       clearInactivityTimeout();
+      clearPingInterval();
       isClosed = true;
       if (!errorOccurred) {
         resolve();
@@ -226,6 +250,7 @@ export async function subscribeToAccounts(
       if (!isClosed) {
         isClosed = true;
         clearInactivityTimeout();
+        clearPingInterval();
         stream.destroy();
         logger.debug("Subscription stream closed via handle.close()");
       }

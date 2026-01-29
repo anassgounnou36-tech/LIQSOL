@@ -9,6 +9,7 @@ import { createYellowstoneClient, YellowstoneClientInstance } from "../yellowsto
 import { subscribeToAccounts, YellowstoneSubscriptionHandle } from "../yellowstone/subscribeAccounts.js";
 import { CommitmentLevel, SubscribeRequestFilterAccounts } from "@triton-one/yellowstone-grpc";
 import { withRetry } from "../utils/retry.js";
+import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 
 /**
  * Live Obligation Indexer - Production-grade indexer with Yellowstone gRPC streaming
@@ -449,6 +450,25 @@ export class LiveObligationIndexer {
     logger.info("Starting live obligation indexer");
     this.isRunning = true;
     this.shouldReconnect = true;
+
+    // Auto-inject obligation discriminator filter if filters are empty or undefined
+    // This ensures the indexer is safe by default and doesn't subscribe to all program accounts
+    if (!this.config.filters || this.config.filters.length === 0) {
+      const obligationDiscriminator = anchorDiscriminator("Obligation");
+      this.config.filters = [
+        {
+          memcmp: {
+            offset: 0, // MUST be number for u64
+            base64: obligationDiscriminator.toString("base64"),
+          },
+        },
+      ] as any; // Type assertion needed: gRPC runtime expects number but TS types may differ
+      
+      logger.info(
+        { discriminator: obligationDiscriminator.toString("hex") },
+        "Auto-injected Obligation discriminator filter for safe subscription"
+      );
+    }
 
     // Load initial snapshot
     this.loadObligationPubkeys();
