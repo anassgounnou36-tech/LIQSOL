@@ -1,4 +1,3 @@
-import YellowstoneGrpc from "@triton-one/yellowstone-grpc";
 import { logger } from "../observability/logger.js";
 import { Duplex } from "stream";
 
@@ -30,13 +29,54 @@ export async function createYellowstoneClient(
 ): Promise<YellowstoneClientInstance> {
   logger.info({ url }, "Initializing Yellowstone gRPC client");
 
-  // Create client with X-Token header for authentication
-  // Type assertion is safe here as we're conforming to the interface
-  const client = new (YellowstoneGrpc as unknown as new (
-    endpoint: string,
-    xToken: string | undefined,
-    channelOptions: unknown
-  ) => YellowstoneClientInstance)(url, xToken, undefined);
+  // Dynamically import the Yellowstone module to handle different export patterns
+  const mod = await import("@triton-one/yellowstone-grpc");
+
+  // Try different export patterns to find the correct constructor or factory
+  const Ctor =
+    (mod as any).YellowstoneGrpc ??
+    (mod as any).Client ??
+    (mod as any).default;
+
+  let client: YellowstoneClientInstance;
+
+  // Try constructor-based instantiation
+  if (typeof Ctor === "function") {
+    try {
+      // Try different constructor signatures
+      client = new Ctor(url, xToken, undefined) as YellowstoneClientInstance;
+    } catch (err) {
+      // Some versions might use different constructor args
+      try {
+        client = new Ctor(url, { "X-Token": xToken }) as YellowstoneClientInstance;
+      } catch {
+        throw new Error(
+          `Failed to instantiate Yellowstone client: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+  } else {
+    // Try factory function patterns
+    const factory = (mod as any).createClient ?? (mod as any).connect;
+    if (typeof factory === "function") {
+      try {
+        client = await factory(url, xToken);
+      } catch (err) {
+        // Try with options object
+        try {
+          client = await factory(url, { "X-Token": xToken });
+        } catch {
+          throw new Error(
+            `Failed to create Yellowstone client via factory: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
+    } else {
+      throw new Error(
+        "Unsupported @triton-one/yellowstone-grpc export shape. Expected YellowstoneGrpc/Client/default constructor or createClient/connect factory."
+      );
+    }
+  }
 
   // Connect to the gRPC server
   try {

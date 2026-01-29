@@ -112,6 +112,59 @@ When the bot starts, it performs the following checks:
 
 If any step fails, the bot logs a `boot_failed` event at fatal level and exits with code 1.
 
+## Known Issues
+
+### Windows: Native Binding Errors
+
+On Windows, you may encounter errors when running `npm run snapshot:obligations` related to missing native bindings:
+
+```
+Cannot find native binding for yellowstone-grpc-napi-win32-x64-msvc
+```
+
+This occurs because the `@triton-one/yellowstone-grpc` package requires native Node.js bindings that may not be properly installed on Windows.
+
+#### Solutions:
+
+1. **Clean Reinstall** (try this first):
+   
+   **PowerShell:**
+   ```powershell
+   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue node_modules, package-lock.json
+   npm install
+   ```
+   
+   **Command Prompt:**
+   ```cmd
+   rmdir /s /q node_modules
+   del package-lock.json
+   npm install
+   ```
+
+2. **Use WSL2** (if clean reinstall fails):
+   ```powershell
+   npm run snapshot:obligations:wsl
+   ```
+   
+   This script automatically runs the snapshot command inside WSL2, which provides a Linux environment.
+   
+   **Prerequisites**: WSL2 must be installed. If not installed, run:
+   ```powershell
+   wsl --install
+   ```
+
+#### Note
+Production deployments should target Linux environments where native bindings are fully supported.
+
+#### Important: node_modules and WSL
+**Never share node_modules between Windows and WSL.** Native dependencies (like `@esbuild/win32-x64`, `@triton-one/yellowstone-grpc`) are platform-specific and will cause errors if you install on Windows then try to run in WSL, or vice versa.
+
+**Always run `npm install` inside the environment where you execute the code:**
+- If running on Windows: run `npm install` in PowerShell/CMD
+- If running in WSL: run `npm install` inside WSL
+
+The `npm run snapshot:obligations:wsl` script automatically detects and fixes platform mismatches by reinstalling dependencies when needed.
+
 ## CI/CD
 
 The GitHub Actions workflow runs on every push and pull request:

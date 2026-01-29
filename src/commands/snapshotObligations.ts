@@ -2,13 +2,12 @@
 import { PublicKey } from "@solana/web3.js";
 import { writeFileSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
+import { execSync } from "child_process";
 import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 import { decodeObligation } from "../kamino/decoder.js";
-import { createYellowstoneClient } from "../yellowstone/client.js";
-import { snapshotAccounts } from "../yellowstone/subscribeAccounts.js";
-import { CommitmentLevel } from "@triton-one/yellowstone-grpc";
+import { checkYellowstoneNativeBinding } from "../yellowstone/preflight.js";
 
 /**
  * CLI tool for snapshotting obligations from a Kamino Lending market via Yellowstone gRPC
@@ -24,8 +23,48 @@ import { CommitmentLevel } from "@triton-one/yellowstone-grpc";
  */
 
 async function main() {
+  // Preflight: Check Yellowstone native binding availability
+  const yf = checkYellowstoneNativeBinding();
+  if (!yf.ok) {
+    // On Windows, automatically fall back to WSL runner
+    if (process.platform === "win32") {
+      logger.info("Yellowstone native binding missing on Windows. Running snapshot via WSL...");
+      
+      try {
+        // Execute the PowerShell script and forward stdout/stderr
+        const scriptPath = join(process.cwd(), "scripts", "run_snapshot_wsl.ps1");
+        execSync(`powershell -ExecutionPolicy Bypass -File "${scriptPath}"`, {
+          stdio: "inherit",
+          cwd: process.cwd()
+        });
+        // If successful, exit with success code
+        process.exit(0);
+      } catch (err) {
+        // execSync throws on non-zero exit code
+        // Exit with the same code as the WSL run
+        const exitCode = 
+          err instanceof Error && 'status' in err && typeof (err as { status?: number }).status === 'number'
+            ? (err as { status: number }).status
+            : 1;
+        process.exit(exitCode);
+      }
+    }
+    
+    // Non-Windows or WSL fallback failed
+    logger.fatal({ reason: yf.reason }, "Yellowstone runtime not available");
+    process.exit(1);
+  }
+
   // Load environment
   const env = loadReadonlyEnv();
+  
+  // Dynamically import Yellowstone modules after preflight check
+  const [{ createYellowstoneClient }, { snapshotAccounts }, { CommitmentLevel }] =
+    await Promise.all([
+      import("../yellowstone/client.js"),
+      import("../yellowstone/subscribeAccounts.js"),
+      import("@triton-one/yellowstone-grpc"),
+    ]);
   
   // Get market and program from env
   let marketPubkey: PublicKey;
@@ -67,14 +106,15 @@ async function main() {
 
     // Define filters for Yellowstone subscription
     // Filter 1: Match Obligation discriminator at offset 0
+    // Note: offset must be a JS number (not string, not bigint) for u64 gRPC field
     const filters = [
       {
         memcmp: {
-          offset: "0",
-          bytes: obligationDiscriminator,
+          offset: 0, // MUST be number for u64
+          base64: obligationDiscriminator.toString("base64"), // avoid Buffer/bytes runtime mismatch
         },
       },
-    ];
+    ] as any; // Type assertion needed: gRPC runtime expects number but TS types may differ
 
     // Subscribe and collect all matching accounts
     logger.info("Fetching obligation accounts via Yellowstone gRPC...");
