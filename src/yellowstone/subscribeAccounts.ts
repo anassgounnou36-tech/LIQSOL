@@ -122,8 +122,8 @@ export async function subscribeToAccounts(
   const stream: Duplex = await client.subscribe();
 
   let accountCount = 0;
-  let errorOccurred = false;
-  let isClosed = false;
+  let closeRequested = false;
+  let settled = false;
   let inactivityTimeoutId: NodeJS.Timeout | null = null;
   let pingIntervalId: NodeJS.Timeout | null = null;
 
@@ -134,7 +134,7 @@ export async function subscribeToAccounts(
     }
     
     inactivityTimeoutId = setTimeout(() => {
-      if (isClosed) return;
+      if (closeRequested) return;
       logger.warn(
         { inactivityTimeoutSeconds },
         "Inactivity timeout reached - no data received, destroying stream"
@@ -162,7 +162,7 @@ export async function subscribeToAccounts(
   // Start outbound ping loop to keep connection alive
   // Send ping every 5 seconds to prevent silent disconnects
   pingIntervalId = setInterval(() => {
-    if (isClosed) return;
+    if (closeRequested) return;
     try {
       stream.write({ ping: {} });
       logger.debug("Sent outbound ping to Yellowstone gRPC");
@@ -172,6 +172,24 @@ export async function subscribeToAccounts(
   }, 5000);
 
   const donePromise = new Promise<void>((resolve, reject) => {
+    // Helper to settle promise with resolve (guard against multiple settlements)
+    const settleResolve = () => {
+      if (settled) return;
+      settled = true;
+      clearInactivityTimeout();
+      clearPingInterval();
+      resolve();
+    };
+
+    // Helper to settle promise with reject (guard against multiple settlements)
+    const settleReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      clearInactivityTimeout();
+      clearPingInterval();
+      reject(err);
+    };
+
     stream.on("data", async (data: SubscribeUpdate) => {
       // Reset inactivity timeout on any data (including pings)
       resetInactivityTimeout();
@@ -207,32 +225,16 @@ export async function subscribeToAccounts(
 
     stream.on("error", (err: Error) => {
       logger.error({ err }, "Yellowstone gRPC stream error");
-      clearInactivityTimeout();
-      clearPingInterval();
-      errorOccurred = true;
-      isClosed = true;
-      reject(err);
+      settleReject(err);
     });
 
     stream.on("end", () => {
-      if (isClosed) return; // Already handled
       logger.info({ accountCount }, "Yellowstone gRPC stream ended");
-      clearInactivityTimeout();
-      clearPingInterval();
-      isClosed = true;
-      if (!errorOccurred) {
-        resolve();
-      }
+      settleResolve();
     });
 
     stream.on("close", () => {
-      if (isClosed) return; // Already handled
-      clearInactivityTimeout();
-      clearPingInterval();
-      isClosed = true;
-      if (!errorOccurred) {
-        resolve();
-      }
+      settleResolve();
     });
 
     // Write the subscription request to the stream
@@ -247,13 +249,12 @@ export async function subscribeToAccounts(
   // Return subscription handle
   return {
     close: () => {
-      if (!isClosed) {
-        isClosed = true;
-        clearInactivityTimeout();
-        clearPingInterval();
-        stream.destroy();
-        logger.debug("Subscription stream closed via handle.close()");
-      }
+      if (closeRequested) return;
+      closeRequested = true;
+      clearInactivityTimeout();
+      clearPingInterval();
+      stream.destroy();
+      logger.debug("Subscription stream closed via handle.close()");
     },
     done: donePromise,
   };
