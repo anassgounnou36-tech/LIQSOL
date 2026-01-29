@@ -394,6 +394,22 @@ export class LiveObligationIndexer {
           await this.delay(this.config.reconnectDelayMs);
         }
       } catch (error) {
+        // Check if this is an InvalidArg error (configuration/request validation error)
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const isInvalidArg = errorMessage.includes("InvalidArg") || 
+                            errorMessage.includes("invalid type") ||
+                            (error && typeof error === "object" && "code" in error && error.code === 3);
+        
+        if (isInvalidArg) {
+          logger.fatal(
+            { error, errorMessage },
+            "FATAL: Invalid request configuration (InvalidArg). This is a bug in filter setup. Stopping indexer."
+          );
+          this.shouldReconnect = false;
+          this.isRunning = false;
+          throw error; // Propagate error to exit with non-zero code
+        }
+        
         logger.error({ error }, "Yellowstone subscription error");
 
         // Check if we should attempt to reconnect
@@ -458,7 +474,7 @@ export class LiveObligationIndexer {
       this.config.filters = [
         {
           memcmp: {
-            offset: "0", // MUST be string for gRPC type compatibility
+            offset: 0n, // Use bigint for u64 compatibility with Yellowstone gRPC
             base64: obligationDiscriminator.toString("base64"),
           },
         },

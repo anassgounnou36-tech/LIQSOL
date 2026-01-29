@@ -120,7 +120,7 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     expect(filters.length).toBe(1);
     expect(filters[0]).toHaveProperty("memcmp");
     expect(filters[0]?.memcmp).toBeDefined();
-    expect(filters[0]!.memcmp!.offset).toBe("0"); // offset should be string
+    expect(filters[0]!.memcmp!.offset).toBe(0n); // offset should be bigint for u64
     expect(filters[0]!.memcmp).toHaveProperty("base64");
     
     await indexer.stop();
@@ -158,7 +158,7 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     expect(filters.length).toBe(1);
     expect(filters[0]).toHaveProperty("memcmp");
     expect(filters[0]?.memcmp).toBeDefined();
-    expect(filters[0]!.memcmp!.offset).toBe("0"); // offset should be string
+    expect(filters[0]!.memcmp!.offset).toBe(0n); // offset should be bigint for u64
     expect(filters[0]!.memcmp).toHaveProperty("base64");
     
     await indexer.stop();
@@ -169,10 +169,10 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
 
     const customFilter = {
       memcmp: {
-        offset: "10", // String offset for gRPC type compatibility
+        offset: 10, // Number offset - will be normalized to bigint for u64
         base64: "dGVzdA==", // "test" in base64
       },
-    };
+    } as any; // Type assertion to allow flexible offset types
 
     const indexer = new LiveObligationIndexer({
       yellowstoneUrl: "https://test.example.com",
@@ -199,7 +199,7 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     expect(filters).toBeDefined();
     expect(filters.length).toBe(1);
     expect(filters[0]?.memcmp).toBeDefined();
-    expect(filters[0]!.memcmp!.offset).toBe("10");
+    expect(filters[0]!.memcmp!.offset).toBe(10);
     expect(filters[0]!.memcmp!.base64).toBe("dGVzdA==");
     
     await indexer.stop();

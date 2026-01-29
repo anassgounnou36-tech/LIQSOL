@@ -98,6 +98,23 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ".env copied." -ForegroundColor Green
+
+# Ensure data directory exists and copy obligations.jsonl if present
+Write-Host "Checking for data/obligations.jsonl..." -ForegroundColor Cyan
+& wsl.exe -d $Distro -- bash -lc "mkdir -p '$workspace/data'"
+$dataCheck = & wsl.exe -d $Distro -- bash -lc "test -f '$wslSource/data/obligations.jsonl' && echo 'exists' || echo 'missing'"
+if ($dataCheck.Trim() -eq 'exists') {
+    Write-Host "Copying data/obligations.jsonl..." -ForegroundColor Cyan
+    & wsl.exe -d $Distro -- bash -lc "cp -f '$wslSource/data/obligations.jsonl' '$workspace/data/obligations.jsonl'"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "data/obligations.jsonl copied successfully." -ForegroundColor Green
+    } else {
+        Write-Host "WARNING: Failed to copy data/obligations.jsonl" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "WARNING: data/obligations.jsonl not found in Windows repo." -ForegroundColor Yellow
+    Write-Host "The live indexer will start with an empty snapshot (snapshotSize: 0)." -ForegroundColor Yellow
+}
 Write-Host ""
 
 # Install dependencies and run live indexer inside workspace

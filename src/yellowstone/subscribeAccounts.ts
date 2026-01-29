@@ -10,26 +10,38 @@ import { logger } from "../observability/logger.js";
 import type { YellowstoneClientInstance } from "./client.js";
 
 /**
+ * Convert offset to u64 (bigint) for Yellowstone gRPC
+ * Yellowstone expects offset as u64, not string
+ */
+function toU64Offset(offset: unknown): bigint {
+  if (typeof offset === "bigint") return offset;
+  if (typeof offset === "number") {
+    if (!Number.isFinite(offset) || offset < 0) {
+      throw new Error(`Invalid memcmp.offset number: ${offset}`);
+    }
+    return BigInt(offset);
+  }
+  if (typeof offset === "string") {
+    // allow "0", "10", etc — but convert to bigint
+    if (!/^\d+$/.test(offset)) {
+      throw new Error(`Invalid memcmp.offset string: ${offset}`);
+    }
+    return BigInt(offset);
+  }
+  throw new Error(`Invalid memcmp.offset type: ${typeof offset}`);
+}
+
+/**
  * Normalize filters to ensure proper types for gRPC serialization:
- * - memcmp.offset must be a string for gRPC type compatibility
+ * - memcmp.offset must be converted to u64 (bigint) for Yellowstone
  * - memcmp.bytes (Buffer) should be converted to base64 string
  */
 function normalizeFilters(filters: any[]): any[] {
   return filters.map((f) => {
     if (!f?.memcmp) return f;
 
-    let offset = f.memcmp.offset;
-    // Accept number or string, normalize to string
-    if (typeof offset === "number") {
-      offset = String(offset);
-    } else if (typeof offset === "bigint") {
-      offset = String(offset);
-    } else if (typeof offset === "string") {
-      // Already a string, keep it
-    } else {
-      // Default to "0" if invalid
-      offset = "0";
-    }
+    // Convert offset to u64 (bigint) for Yellowstone
+    const offset = toU64Offset(f.memcmp.offset);
 
     const memcmp: any = { ...f.memcmp, offset };
 
