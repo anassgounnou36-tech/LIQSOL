@@ -21,6 +21,20 @@ import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
 import { CommitmentLevel } from "@triton-one/yellowstone-grpc";
 
 async function main() {
+  // Windows platform guard: Yellowstone gRPC native bindings not available on Windows
+  if (process.platform === "win32") {
+    console.error("");
+    console.error("ERROR: Yellowstone gRPC native bindings are not supported on Windows.");
+    console.error("");
+    console.error("To run the live indexer on Windows, please use WSL2:");
+    console.error("  npm run live:indexer:wsl");
+    console.error("");
+    console.error("For more information about WSL installation:");
+    console.error("  https://docs.microsoft.com/en-us/windows/wsl/install");
+    console.error("");
+    process.exit(1);
+  }
+
   const env = loadReadonlyEnv();
 
   logger.info(
