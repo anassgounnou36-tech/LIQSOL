@@ -50,6 +50,7 @@ export class LiveObligationIndexer {
   private currentReconnectAttempt = 0;
   private subscriptionPromise: Promise<void> | null = null;
   private shutdownSignalReceived = false;
+  private shutdownHandlersRegistered = false;
 
   constructor(config: LiveObligationIndexerConfig) {
     this.config = {
@@ -67,6 +68,11 @@ export class LiveObligationIndexer {
    * Setup handlers for graceful shutdown
    */
   private setupShutdownHandlers(): void {
+    // Only register handlers once
+    if (this.shutdownHandlersRegistered) {
+      return;
+    }
+
     const shutdownHandler = async (signal: string) => {
       if (this.shutdownSignalReceived) {
         return; // Already shutting down
@@ -79,6 +85,8 @@ export class LiveObligationIndexer {
 
     process.on("SIGINT", () => shutdownHandler("SIGINT"));
     process.on("SIGTERM", () => shutdownHandler("SIGTERM"));
+    
+    this.shutdownHandlersRegistered = true;
   }
 
   /**
@@ -199,11 +207,30 @@ export class LiveObligationIndexer {
   };
 
   /**
+   * Cleanup the current client if it exists
+   */
+  private cleanupClient(): void {
+    if (this.client) {
+      try {
+        // The Yellowstone client doesn't have an explicit close method in the interface,
+        // but we can clear the reference to allow garbage collection
+        this.client = null;
+        logger.debug("Cleaned up old Yellowstone client");
+      } catch (error) {
+        logger.warn({ error }, "Error during client cleanup");
+      }
+    }
+  }
+
+  /**
    * Start the subscription with automatic reconnection
    */
   private async startSubscription(): Promise<void> {
     while (this.shouldReconnect && !this.shutdownSignalReceived) {
       try {
+        // Cleanup old client if it exists
+        this.cleanupClient();
+
         // Initialize client
         this.client = await this.initializeClient();
         this.currentReconnectAttempt = 0; // Reset on successful connection
@@ -267,6 +294,9 @@ export class LiveObligationIndexer {
         }
       }
     }
+
+    // Cleanup client when done
+    this.cleanupClient();
   }
 
   /**
@@ -335,6 +365,9 @@ export class LiveObligationIndexer {
         logger.warn({ error }, "Error while waiting for subscription to stop");
       }
     }
+
+    // Cleanup client
+    this.cleanupClient();
 
     logger.info(
       { 
