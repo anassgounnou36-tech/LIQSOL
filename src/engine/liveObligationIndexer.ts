@@ -157,7 +157,8 @@ export class LiveObligationIndexer {
     for (let i = 0; i < batches.length; i += this.config.bootstrapConcurrency) {
       const concurrentBatches = batches.slice(i, i + this.config.bootstrapConcurrency);
       
-      const results = await Promise.allSettled(
+      // Process batches with limited concurrency - results are not used but kept for completion
+      await Promise.allSettled(
         concurrentBatches.map(async (batch) => {
           try {
             const accounts = await connection.getMultipleAccountsInfo(batch, "confirmed");
