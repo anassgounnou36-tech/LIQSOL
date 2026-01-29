@@ -69,24 +69,37 @@ export async function subscribeToAccounts(
   // Normalize filters to ensure memcmp.offset is bigint for u64 compatibility
   const normalizedFilters = normalizeFilters(filters as any[]);
 
-  // Create subscription request
+  // Create subscription request in canonical "accounts map entry" form
   const request = {
+    commitment,
     accounts: {
-      "obligation_accounts": {
+      obligations: {
         owner: [programId.toString()],
-        account: [],
         filters: normalizedFilters,
-        nonemptyTxnSignature: false,
       },
     },
     slots: {},
+    accountsDataSlice: [],
     transactions: {},
     transactionsStatus: {},
     blocks: {},
     blocksMeta: {},
     entry: {},
-    commitment,
   };
+
+  // Debug logging: sanitized request structure (no token)
+  logger.debug(
+    {
+      requestKeys: Object.keys(request),
+      accountsKeys: Object.keys(request.accounts),
+      accountsEntry: {
+        owner: request.accounts.obligations.owner,
+        filtersCount: request.accounts.obligations.filters.length,
+        filters: request.accounts.obligations.filters,
+      },
+    },
+    "Yellowstone subscription request structure"
+  );
 
   // Create the duplex stream for subscription
   const stream: Duplex = await client.subscribe();
@@ -174,30 +187,44 @@ export async function snapshotAccounts(
     "Starting account snapshot via Yellowstone gRPC"
   );
 
-  const accounts: Array<[PublicKey, Buffer, bigint]> = [];
+  // Map to deduplicate accounts by pubkey
+  const accountsMap = new Map<string, [PublicKey, Buffer, bigint]>();
   let startupAccountsCompleted = false;
 
   // Normalize filters to ensure memcmp.offset is bigint for u64 compatibility
   const normalizedFilters = normalizeFilters(filters as any[]);
 
-  // Create subscription request
+  // Create subscription request in canonical "accounts map entry" form
   const request = {
+    commitment,
     accounts: {
-      "obligation_accounts": {
+      obligations: {
         owner: [programId.toString()],
-        account: [],
         filters: normalizedFilters,
-        nonemptyTxnSignature: false,
       },
     },
     slots: {},
+    accountsDataSlice: [],
     transactions: {},
     transactionsStatus: {},
     blocks: {},
     blocksMeta: {},
     entry: {},
-    commitment,
   };
+
+  // Debug logging: sanitized request structure (no token)
+  logger.debug(
+    {
+      requestKeys: Object.keys(request),
+      accountsKeys: Object.keys(request.accounts),
+      accountsEntry: {
+        owner: request.accounts.obligations.owner,
+        filtersCount: request.accounts.obligations.filters.length,
+        filters: request.accounts.obligations.filters,
+      },
+    },
+    "Yellowstone snapshot request structure"
+  );
 
   // Create the duplex stream for subscription
   const stream: Duplex = await client.subscribe();
@@ -229,16 +256,38 @@ export async function snapshotAccounts(
         clearTimeout(inactivityTimeoutId);
       }
       
-      inactivityTimeoutId = setTimeout(() => {
+      inactivityTimeoutId = setTimeout(async () => {
         if (isResolved) return;
         isResolved = true;
         logger.warn(
-          { inactivityTimeoutSeconds },
+          { inactivityTimeoutSeconds, accountsCollected: accountsMap.size },
           "Inactivity timeout reached during snapshot"
         );
         clearAllTimeouts();
         stream.destroy();
-        reject(new Error(`Snapshot inactivity timeout after ${inactivityTimeoutSeconds}s`));
+
+        // If we collected 0 accounts, run diagnostic to determine if stream is alive
+        if (accountsMap.size === 0) {
+          try {
+            logger.info("No accounts collected. Running stream diagnostics...");
+            const slotsReceived = await diagnosticSlotStream(client, 3);
+            
+            if (slotsReceived > 0) {
+              logger.error(
+                { slotsReceived },
+                "DIAGNOSTIC: Yellowstone stream is ALIVE (slots > 0) but accounts subscription returned 0 results. Issue is likely with accounts filter shape, owner, or discriminator."
+              );
+            } else {
+              logger.error(
+                "DIAGNOSTIC: Yellowstone stream returned 0 slots. Issue is likely with endpoint URL, authentication token, or server not streaming."
+              );
+            }
+          } catch (diagErr) {
+            logger.error({ err: diagErr }, "Failed to run diagnostic slots stream");
+          }
+        }
+
+        resolve(Array.from(accountsMap.values()));
       }, inactivityTimeoutMs);
     };
 
@@ -247,12 +296,12 @@ export async function snapshotAccounts(
       if (isResolved) return;
       isResolved = true;
       logger.warn(
-        { maxTimeoutSeconds, accountsCollected: accounts.length },
+        { maxTimeoutSeconds, accountsCollected: accountsMap.size },
         "Maximum timeout reached during snapshot"
       );
       clearAllTimeouts();
       stream.destroy();
-      reject(new Error(`Snapshot maximum timeout after ${maxTimeoutSeconds}s`));
+      resolve(Array.from(accountsMap.values()));
     }, maxTimeoutMs);
 
     // Start inactivity timeout
@@ -276,20 +325,21 @@ export async function snapshotAccounts(
           const accountData = Buffer.from(accountInfo.data);
           const slot = BigInt(data.account.slot);
 
-          // Only collect startup accounts (initial snapshot)
-          if (data.account.isStartup) {
-            accounts.push([pubkey, accountData, slot]);
-          } else {
-            // Once we get a non-startup account, the initial snapshot is complete
-            if (!startupAccountsCompleted) {
-              startupAccountsCompleted = true;
-              logger.info(
-                { count: accounts.length },
-                "Initial account snapshot complete, closing stream"
-              );
-              clearAllTimeouts();
-              stream.destroy();
-            }
+          // Collect accounts from BOTH startup and non-startup messages
+          // Deduplicate by pubkey (keep latest by slot)
+          const pubkeyStr = pubkey.toString();
+          const existing = accountsMap.get(pubkeyStr);
+          if (!existing || slot > existing[2]) {
+            accountsMap.set(pubkeyStr, [pubkey, accountData, slot]);
+          }
+
+          // Track when startup accounts are complete for logging purposes
+          if (!data.account.isStartup && !startupAccountsCompleted) {
+            startupAccountsCompleted = true;
+            logger.info(
+              { startupCount: accountsMap.size },
+              "Initial startup accounts received, continuing to collect non-startup updates"
+            );
           }
         } catch (err) {
           logger.error({ err }, "Error processing account update");
@@ -308,22 +358,84 @@ export async function snapshotAccounts(
     stream.on("end", () => {
       if (isResolved) return;
       isResolved = true;
-      logger.info({ accountCount: accounts.length }, "Yellowstone gRPC stream ended");
+      logger.info({ accountCount: accountsMap.size }, "Yellowstone gRPC stream ended");
       clearAllTimeouts();
-      resolve(accounts);
+      resolve(Array.from(accountsMap.values()));
     });
 
     stream.on("close", () => {
       if (isResolved) return;
       isResolved = true;
-      logger.info({ accountCount: accounts.length }, "Yellowstone gRPC stream closed");
+      logger.info({ accountCount: accountsMap.size }, "Yellowstone gRPC stream closed");
       clearAllTimeouts();
-      resolve(accounts);
+      resolve(Array.from(accountsMap.values()));
     });
 
     // Write the subscription request to the stream
     stream.write(request);
 
     logger.info("Subscription request sent, collecting initial accounts");
+  });
+}
+
+/**
+ * Diagnostic helper: Test if Yellowstone stream is alive by subscribing to slots
+ * 
+ * @param client - Connected Yellowstone gRPC client
+ * @param testDurationSeconds - How long to wait for slot updates (default 3 seconds)
+ * @returns Promise that resolves to the number of slots received
+ */
+async function diagnosticSlotStream(
+  client: YellowstoneClientInstance,
+  testDurationSeconds = 3
+): Promise<number> {
+  logger.info("Running diagnostic: checking if Yellowstone stream is alive via slots subscription");
+
+  const request = {
+    commitment: CommitmentLevel.CONFIRMED,
+    accounts: {},
+    slots: {
+      slots: {},
+    },
+    accountsDataSlice: [],
+    transactions: {},
+    transactionsStatus: {},
+    blocks: {},
+    blocksMeta: {},
+    entry: {},
+  };
+
+  const stream: Duplex = await client.subscribe();
+  let slotCount = 0;
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      stream.destroy();
+      resolve(slotCount);
+    }, testDurationSeconds * 1000);
+
+    stream.on("data", (data: SubscribeUpdate) => {
+      if (data.slot) {
+        slotCount++;
+      }
+    });
+
+    stream.on("error", (err: Error) => {
+      clearTimeout(timeoutId);
+      logger.error({ err }, "Diagnostic slots stream error");
+      reject(err);
+    });
+
+    stream.on("end", () => {
+      clearTimeout(timeoutId);
+      resolve(slotCount);
+    });
+
+    stream.on("close", () => {
+      clearTimeout(timeoutId);
+      resolve(slotCount);
+    });
+
+    stream.write(request);
   });
 }
