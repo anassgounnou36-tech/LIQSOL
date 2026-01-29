@@ -193,6 +193,7 @@ export async function subscribeToAccounts(
     });
 
     stream.on("end", () => {
+      if (isClosed) return; // Already handled
       logger.info({ accountCount }, "Yellowstone gRPC stream ended");
       clearInactivityTimeout();
       isClosed = true;
@@ -202,6 +203,7 @@ export async function subscribeToAccounts(
     });
 
     stream.on("close", () => {
+      if (isClosed) return; // Already handled
       clearInactivityTimeout();
       isClosed = true;
       if (!errorOccurred) {

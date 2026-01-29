@@ -191,6 +191,8 @@ export class LiveObligationIndexer {
                   { pubkey: pubkey.toString(), error: decodeErr },
                   "Failed to decode account during bootstrap"
                 );
+                // Note: Bootstrap decode failures are not tracked by circuit breaker
+                // because they represent stale/missing data at startup, not ongoing corruption
               }
             }
           } catch (error) {
@@ -248,18 +250,19 @@ export class LiveObligationIndexer {
       // Decode the obligation account
       const decoded = decodeObligation(accountData, pubkey);
       
-      // Update cache only if this is newer data (higher slot)
+      // Update cache only if this is newer data (higher slot) or same slot but newer timestamp
       const existing = this.cache.get(pubkeyStr);
       
-      // Ignore updates with lower slot (includes bootstrap slot=0n)
-      if (existing && slot <= existing.slot) {
+      // Ignore updates with strictly lower slot (includes bootstrap slot=0n)
+      // For equal slots, accept the update (handles multiple updates in same slot)
+      if (existing && slot < existing.slot) {
         logger.debug(
           { 
             pubkey: pubkeyStr, 
             newSlot: slot.toString(), 
             existingSlot: existing.slot.toString() 
           }, 
-          "Skipped stale update (lower or equal slot)"
+          "Skipped stale update (lower slot)"
         );
         return;
       }
