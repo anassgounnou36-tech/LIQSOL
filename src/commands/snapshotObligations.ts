@@ -95,14 +95,19 @@ async function main() {
     logger.info({ rpcUrl: env.RPC_PRIMARY }, "Connected to Solana RPC");
 
     // Define filters for getProgramAccounts
-    // Filter: Match Obligation discriminator at offset 0
+    // Filter 1: Match Obligation discriminator at offset 0
+    // Filter 2: Match exact dataSize of 410 bytes (Kamino Obligation account size)
     // Note: Use base58 encoding for memcmp filter (base64 fails for RPC)
+    // Note: dataSize filter dramatically reduces RPC workload by excluding reserves, configs, etc.
     const filters = [
       {
         memcmp: {
           offset: 0,
           bytes: bs58.encode(obligationDiscriminator),
         },
+      },
+      {
+        dataSize: 410, // exact size of decoded Kamino obligation account
       },
     ];
 
