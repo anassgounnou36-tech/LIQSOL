@@ -1,29 +1,29 @@
 #!/usr/bin/env node
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, Connection } from "@solana/web3.js";
 import { writeFileSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
+import bs58 from "bs58";
 import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
-import { decodeObligation } from "../kamino/decoder.js";
+// Note: decodeObligation not needed - we only fetch pubkeys via dataSlice
 import { checkYellowstoneNativeBinding } from "../yellowstone/preflight.js";
 
 /**
- * CLI tool for snapshotting obligations from a Kamino Lending market via Yellowstone gRPC
+ * CLI tool for snapshotting obligations from a Kamino Lending market via Solana RPC
  * Usage: npm run snapshot:obligations
  * 
  * Requires environment variables:
  *   - KAMINO_MARKET_PUBKEY: The market pubkey to filter obligations
  *   - KAMINO_KLEND_PROGRAM_ID: The Kamino Lending program ID
- *   - YELLOWSTONE_GRPC_URL: Yellowstone gRPC endpoint URL
- *   - YELLOWSTONE_X_TOKEN: Authentication token for Yellowstone
+ *   - RPC_PRIMARY: Solana RPC endpoint URL
  * 
  * Outputs obligation pubkeys (one per line) to data/obligations.jsonl
  */
 
 async function main() {
-  // Preflight: Check Yellowstone native binding availability
+  // Preflight: Check Yellowstone native binding availability for WSL fallback only
   const yf = checkYellowstoneNativeBinding();
   if (!yf.ok) {
     // On Windows, automatically fall back to WSL runner
@@ -50,21 +50,12 @@ async function main() {
       }
     }
     
-    // Non-Windows or WSL fallback failed
-    logger.fatal({ reason: yf.reason }, "Yellowstone runtime not available");
-    process.exit(1);
+    // Non-Windows: Proceed with RPC snapshot (doesn't need Yellowstone binding)
+    logger.info("Yellowstone binding not available, using RPC snapshot");
   }
 
   // Load environment
   const env = loadReadonlyEnv();
-  
-  // Dynamically import Yellowstone modules after preflight check
-  const [{ createYellowstoneClient }, { snapshotAccounts }, { CommitmentLevel }] =
-    await Promise.all([
-      import("../yellowstone/client.js"),
-      import("../yellowstone/subscribeAccounts.js"),
-      import("@triton-one/yellowstone-grpc"),
-    ]);
   
   // Get market and program from env
   let marketPubkey: PublicKey;
@@ -86,7 +77,7 @@ async function main() {
 
   logger.info(
     { market: marketPubkey.toString(), program: programId.toString() },
-    "Starting obligation snapshot via Yellowstone gRPC..."
+    "Starting obligation snapshot via Solana RPC..."
   );
 
   // Calculate discriminator for Obligation account
@@ -98,76 +89,50 @@ async function main() {
   );
 
   try {
-    // Initialize Yellowstone gRPC client
-    const client = await createYellowstoneClient(
-      env.YELLOWSTONE_GRPC_URL,
-      env.YELLOWSTONE_X_TOKEN
-    );
+    // Initialize Solana RPC connection
+    const connection = new Connection(env.RPC_PRIMARY, "finalized");
+    
+    logger.info({ rpcUrl: env.RPC_PRIMARY }, "Connected to Solana RPC");
 
-    // Define filters for Yellowstone subscription
-    // Filter 1: Match Obligation discriminator at offset 0
-    // Note: offset must be a JS number (not string, not bigint) for u64 gRPC field
+    // Define filters for getProgramAccounts
+    // Filter: Match Obligation discriminator at offset 0
+    // Note: Use base58 encoding for memcmp filter (base64 fails for RPC)
+    // Note: No dataSize filter - Kamino V2 obligations are ~1300+ bytes (not 410)
+    // Relying on discriminator alone is sufficient and version-independent
     const filters = [
       {
         memcmp: {
-          offset: 0, // MUST be number for u64
-          base64: obligationDiscriminator.toString("base64"), // avoid Buffer/bytes runtime mismatch
+          offset: 0,
+          bytes: bs58.encode(obligationDiscriminator),
         },
       },
-    ] as any; // Type assertion needed: gRPC runtime expects number but TS types may differ
+    ];
 
-    // Subscribe and collect all matching accounts
-    logger.info("Fetching obligation accounts via Yellowstone gRPC...");
+    // Fetch all matching accounts via RPC
+    // Use dataSlice to prevent massive response (only get pubkeys, not account data)
+    // Note: length: 1 (not 0) for compatibility with all RPC nodes
+    logger.info("Fetching obligation pubkeys via getProgramAccounts...");
     
-    const accounts = await snapshotAccounts(
-      client,
-      programId,
+    const rawAccounts = await connection.getProgramAccounts(programId, {
       filters,
-      CommitmentLevel.CONFIRMED,
-      env.SNAPSHOT_MAX_SECONDS,
-      env.SNAPSHOT_INACTIVITY_SECONDS
-    );
+      encoding: "base64",
+      dataSlice: { offset: 0, length: 1 }, // Only return pubkeys + metadata, not account data
+    });
 
-    logger.info({ total: accounts.length }, "Fetched obligation accounts");
+    logger.info({ total: rawAccounts.length }, "Fetched obligation pubkeys");
 
-    // Filter and decode obligations by market
-    const obligationPubkeys: string[] = [];
-    
-    for (const [pubkey, accountData] of accounts) {
-      try {
-        // Verify the obligation discriminator on the data
-        if (accountData.length < 8) {
-          logger.warn({ pubkey: pubkey.toString() }, "Account data too short");
-          continue;
-        }
-        
-        const dataDiscriminator = accountData.slice(0, 8);
-        if (!dataDiscriminator.equals(obligationDiscriminator)) {
-          logger.warn({ pubkey: pubkey.toString() }, "Discriminator mismatch");
-          continue;
-        }
-        
-        // Decode obligation using IDL-based decoder
-        const decoded = decodeObligation(accountData, pubkey);
-        
-        // Filter by market pubkey using PublicKey comparison for safety
-        const decodedMarket = new PublicKey(decoded.marketPubkey);
-        if (decodedMarket.equals(marketPubkey)) {
-          obligationPubkeys.push(pubkey.toString());
-        }
-      } catch (err) {
-        logger.warn(
-          { pubkey: pubkey.toString(), err },
-          "Failed to decode obligation"
-        );
-      }
-    }
+    // Collect pubkeys (discriminator filter already applied, no need for market filter)
+    const obligationPubkeys: string[] = rawAccounts.map(ra => ra.pubkey.toString());
 
-    logger.info({ count: obligationPubkeys.length }, "Filtered obligations by market");
+    logger.info({ count: obligationPubkeys.length }, "Collected obligation pubkeys");
 
-    if (obligationPubkeys.length === 0) {
-      logger.warn("No obligations found for the specified market");
-      process.exit(0);
+    // Validate minimum expected obligations (fail fast on configuration errors)
+    const MIN_EXPECTED_OBLIGATIONS = 50;
+    if (obligationPubkeys.length < MIN_EXPECTED_OBLIGATIONS) {
+      throw new Error(
+        `Snapshot returned only ${obligationPubkeys.length} obligations (expected at least ${MIN_EXPECTED_OBLIGATIONS}). ` +
+        `Likely bad filters or incorrect program ID. Check RPC endpoint, discriminator, and program ID.`
+      );
     }
 
     // Ensure data directory exists

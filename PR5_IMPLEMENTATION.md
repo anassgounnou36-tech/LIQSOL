@@ -3,11 +3,12 @@
 ## Overview
 
 PR5 implements a production-grade live obligation indexer that:
-- Loads initial state from a snapshot file (`data/obligations.jsonl`)
-- Streams real-time updates via Yellowstone gRPC
-- Maintains an in-memory Map of decoded obligations
+- **RPC Bootstrap**: Populates cache immediately on startup from RPC snapshot
+- Streams real-time updates via Yellowstone gRPC with inactivity watchdog
+- Maintains an in-memory Map of decoded obligations with slot-based ordering
 - Implements automatic reconnection with exponential backoff
-- Handles clean shutdown (SIGINT, SIGTERM)
+- **Production-safe**: Subscription handle with deterministic stop, no process lifecycle control in library
+- **Circuit breaker**: Stops gracefully on repeated decode failures to prevent corrupted state
 - Provides structured logging throughout
 
 ## Architecture
@@ -18,24 +19,28 @@ The `LiveObligationIndexer` class (`src/engine/liveObligationIndexer.ts`) is a p
 
 1. **Startup Phase:**
    - Loads obligation pubkeys from `data/obligations.jsonl`
+   - **Bootstraps cache from RPC**: Fetches all accounts via `getMultipleAccountsInfo` in batches
    - Initializes connection to Yellowstone gRPC
    - Subscribes to account updates for the Kamino Lending program
 
 2. **Runtime Phase:**
    - Receives real-time account updates via Yellowstone gRPC stream
+   - **Inactivity watchdog**: Monitors stream health, destroys stream if no data received for configured timeout
    - Decodes obligation accounts using existing decoder
    - Updates in-memory Map with decoded obligations
-   - Maintains slot-based versioning (only accepts newer updates)
+   - **Slot-based ordering**: Only accepts updates with higher slots, bootstrap data (slot=0n) never overwrites live updates
 
 3. **Resilience:**
+   - **YellowstoneSubscriptionHandle**: Production-safe handle with `close()` and `done` promise
    - Automatic reconnection on stream failure
    - Exponential backoff (configurable)
    - Maximum retry attempts (configurable)
-   - Clean shutdown on SIGINT/SIGTERM
+   - **Circuit breaker**: Stops gracefully if too many decode failures (>50 in 30s)
+   - **Deterministic stop**: Process lifecycle managed by command, not library
 
 4. **Observability:**
    - Structured logging via Pino
-   - Stats API for monitoring
+   - Stats API for monitoring (includes reconnect count)
    - Debug logs for account updates
 
 ## Usage
@@ -107,6 +112,7 @@ interface LiveObligationIndexerConfig {
   yellowstoneUrl: string;           // Yellowstone gRPC endpoint URL
   yellowstoneToken: string;          // Authentication token
   programId: PublicKey;              // Kamino Lending program ID
+  rpcUrl: string;                    // RPC URL for bootstrap (required)
   
   // Optional configuration
   obligationsFilePath?: string;      // Path to snapshot file (default: data/obligations.jsonl)
@@ -115,6 +121,9 @@ interface LiveObligationIndexerConfig {
   maxReconnectAttempts?: number;     // Max reconnection attempts (default: 10)
   reconnectDelayMs?: number;         // Initial reconnect delay (default: 1000ms)
   reconnectBackoffFactor?: number;   // Backoff multiplier (default: 2)
+  bootstrapBatchSize?: number;       // RPC batch size for bootstrap (default: 100)
+  bootstrapConcurrency?: number;     // Bootstrap concurrency (default: 1)
+  inactivityTimeoutSeconds?: number; // Inactivity watchdog timeout (default: 15s)
 }
 ```
 
@@ -131,7 +140,7 @@ YELLOWSTONE_X_TOKEN=your-alchemy-token-here
 KAMINO_KLEND_PROGRAM_ID=KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD
 KAMINO_MARKET_PUBKEY=7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF
 
-# RPC endpoints (for snapshot command)
+# RPC endpoints (required for bootstrap and snapshot)
 RPC_PRIMARY=https://api.mainnet-beta.solana.com
 
 # Optional: indexer interval (not used by live indexer)

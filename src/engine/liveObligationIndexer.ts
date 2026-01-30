@@ -1,4 +1,4 @@
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, Connection } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -6,19 +6,22 @@ import { logger } from "../observability/logger.js";
 import { decodeObligation } from "../kamino/decoder.js";
 import { DecodedObligation } from "../kamino/types.js";
 import { createYellowstoneClient, YellowstoneClientInstance } from "../yellowstone/client.js";
-import { subscribeToAccounts } from "../yellowstone/subscribeAccounts.js";
+import { subscribeToAccounts, YellowstoneSubscriptionHandle } from "../yellowstone/subscribeAccounts.js";
 import { CommitmentLevel, SubscribeRequestFilterAccounts } from "@triton-one/yellowstone-grpc";
 import { withRetry } from "../utils/retry.js";
+import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 
 /**
  * Live Obligation Indexer - Production-grade indexer with Yellowstone gRPC streaming
  * 
  * Features:
- * - Loads initial snapshot from data/obligations.jsonl
+ * - RPC bootstrap: populates cache from snapshot on startup
  * - Streams real-time updates via Yellowstone gRPC
  * - Maintains in-memory Map of decoded obligations
  * - Automatic reconnection with exponential backoff
- * - Clean shutdown handling
+ * - Inactivity watchdog for stream health monitoring
+ * - Slot-based ordering (ignores stale updates)
+ * - Circuit breaker on repeated decode failures
  * - Structured logging throughout
  */
 
@@ -26,12 +29,16 @@ export interface LiveObligationIndexerConfig {
   yellowstoneUrl: string;
   yellowstoneToken: string;
   programId: PublicKey;
+  rpcUrl: string; // Required for bootstrap
   obligationsFilePath?: string;
   filters?: SubscribeRequestFilterAccounts["filters"];
   commitment?: CommitmentLevel;
   maxReconnectAttempts?: number;
   reconnectDelayMs?: number;
   reconnectBackoffFactor?: number;
+  bootstrapBatchSize?: number; // Default 100
+  bootstrapConcurrency?: number; // Default 1
+  inactivityTimeoutSeconds?: number; // Default 15
 }
 
 interface ObligationEntry {
@@ -45,12 +52,16 @@ export class LiveObligationIndexer {
   private cache: Map<string, ObligationEntry> = new Map();
   private obligationPubkeys: Set<string> = new Set();
   private client: YellowstoneClientInstance | null = null;
+  private activeSub: YellowstoneSubscriptionHandle | null = null;
   private isRunning = false;
   private shouldReconnect = true;
   private currentReconnectAttempt = 0;
-  private subscriptionPromise: Promise<void> | null = null;
-  private shutdownSignalReceived = false;
-  private shutdownHandlersRegistered = false;
+  private reconnectCount = 0;
+  
+  // Circuit breaker for decode failures
+  private decodeFailures: number[] = []; // timestamps of failures
+  private readonly CIRCUIT_BREAKER_THRESHOLD = 50;
+  private readonly CIRCUIT_BREAKER_WINDOW_MS = 30000; // 30 seconds
 
   constructor(config: LiveObligationIndexerConfig) {
     this.config = {
@@ -60,33 +71,11 @@ export class LiveObligationIndexer {
       maxReconnectAttempts: config.maxReconnectAttempts || 10,
       reconnectDelayMs: config.reconnectDelayMs || 1000,
       reconnectBackoffFactor: config.reconnectBackoffFactor || 2,
+      bootstrapBatchSize: config.bootstrapBatchSize || 100,
+      bootstrapConcurrency: config.bootstrapConcurrency || 1,
+      inactivityTimeoutSeconds: config.inactivityTimeoutSeconds || 15,
       ...config,
     };
-  }
-
-  /**
-   * Setup handlers for graceful shutdown
-   */
-  private setupShutdownHandlers(): void {
-    // Only register handlers once
-    if (this.shutdownHandlersRegistered) {
-      return;
-    }
-
-    const shutdownHandler = async (signal: string) => {
-      if (this.shutdownSignalReceived) {
-        return; // Already shutting down
-      }
-      this.shutdownSignalReceived = true;
-      logger.info({ signal }, "Shutdown signal received");
-      await this.stop();
-      process.exit(0);
-    };
-
-    process.on("SIGINT", () => shutdownHandler("SIGINT"));
-    process.on("SIGTERM", () => shutdownHandler("SIGTERM"));
-    
-    this.shutdownHandlersRegistered = true;
   }
 
   /**
@@ -130,6 +119,103 @@ export class LiveObligationIndexer {
   }
 
   /**
+   * Bootstrap cache from RPC using getMultipleAccountsInfo
+   */
+  private async bootstrapCacheFromRpc(): Promise<void> {
+    if (this.obligationPubkeys.size === 0) {
+      logger.info("No obligation pubkeys to bootstrap");
+      return;
+    }
+
+    logger.info(
+      { 
+        pubkeyCount: this.obligationPubkeys.size,
+        batchSize: this.config.bootstrapBatchSize,
+        rpcUrl: this.config.rpcUrl 
+      },
+      "Starting RPC bootstrap"
+    );
+
+    const connection = new Connection(this.config.rpcUrl, "confirmed");
+    const pubkeysArray = Array.from(this.obligationPubkeys);
+    const batches: PublicKey[][] = [];
+
+    // Split into batches
+    for (let i = 0; i < pubkeysArray.length; i += this.config.bootstrapBatchSize) {
+      const batch = pubkeysArray
+        .slice(i, i + this.config.bootstrapBatchSize)
+        .map(pkStr => new PublicKey(pkStr));
+      batches.push(batch);
+    }
+
+    logger.info({ batchCount: batches.length }, "Processing bootstrap batches");
+
+    let successCount = 0;
+    let missingCount = 0;
+    let failedCount = 0;
+
+    // Process batches with limited concurrency
+    for (let i = 0; i < batches.length; i += this.config.bootstrapConcurrency) {
+      const concurrentBatches = batches.slice(i, i + this.config.bootstrapConcurrency);
+      
+      // Process batches with limited concurrency - results are not used but kept for completion
+      await Promise.allSettled(
+        concurrentBatches.map(async (batch) => {
+          try {
+            const accounts = await connection.getMultipleAccountsInfo(batch, "confirmed");
+            
+            for (let j = 0; j < batch.length; j++) {
+              const pubkey = batch[j];
+              const account = accounts[j];
+              
+              if (!account) {
+                missingCount++;
+                logger.debug({ pubkey: pubkey.toString() }, "Account not found during bootstrap");
+                continue;
+              }
+
+              try {
+                const decoded = decodeObligation(Buffer.from(account.data), pubkey);
+                const pubkeyStr = pubkey.toString();
+                
+                // Use slot 0n for bootstrap data (lowest priority)
+                this.cache.set(pubkeyStr, {
+                  decoded,
+                  lastUpdated: Date.now(),
+                  slot: 0n,
+                });
+                
+                successCount++;
+              } catch (decodeErr) {
+                failedCount++;
+                logger.warn(
+                  { pubkey: pubkey.toString(), error: decodeErr },
+                  "Failed to decode account during bootstrap"
+                );
+                // Note: Bootstrap decode failures are not tracked by circuit breaker
+                // because they represent stale/missing data at startup, not ongoing corruption
+              }
+            }
+          } catch (error) {
+            logger.error({ error }, "Failed to fetch batch during bootstrap");
+            failedCount += batch.length;
+          }
+        })
+      );
+    }
+
+    logger.info(
+      { 
+        successCount, 
+        missingCount, 
+        failedCount,
+        totalProcessed: successCount + missingCount + failedCount 
+      },
+      "RPC bootstrap completed"
+    );
+  }
+
+  /**
    * Initialize Yellowstone client with retry logic
    */
   private async initializeClient(): Promise<YellowstoneClientInstance> {
@@ -165,30 +251,12 @@ export class LiveObligationIndexer {
       // Decode the obligation account
       const decoded = decodeObligation(accountData, pubkey);
       
-      // Update cache
+      // Update cache only if this is newer data (higher slot) or same slot but newer timestamp
       const existing = this.cache.get(pubkeyStr);
       
-      // Only update if this is newer data (higher slot)
-      if (!existing || slot >= existing.slot) {
-        this.cache.set(pubkeyStr, {
-          decoded,
-          lastUpdated: Date.now(),
-          slot,
-        });
-
-        // Add to known pubkeys set
-        this.obligationPubkeys.add(pubkeyStr);
-
-        logger.debug(
-          { 
-            pubkey: pubkeyStr, 
-            slot: slot.toString(),
-            depositsCount: decoded.deposits.length,
-            borrowsCount: decoded.borrows.length,
-          }, 
-          "Updated obligation in cache"
-        );
-      } else {
+      // Ignore updates with strictly lower slot (includes bootstrap slot=0n)
+      // For equal slots, accept the update (handles multiple updates in same slot)
+      if (existing && slot < existing.slot) {
         logger.debug(
           { 
             pubkey: pubkeyStr, 
@@ -197,14 +265,72 @@ export class LiveObligationIndexer {
           }, 
           "Skipped stale update (lower slot)"
         );
+        return;
       }
+
+      // Accept the update
+      this.cache.set(pubkeyStr, {
+        decoded,
+        lastUpdated: Date.now(),
+        slot,
+      });
+
+      // Add to known pubkeys set
+      this.obligationPubkeys.add(pubkeyStr);
+
+      logger.debug(
+        { 
+          pubkey: pubkeyStr, 
+          slot: slot.toString(),
+          depositsCount: decoded.deposits.length,
+          borrowsCount: decoded.borrows.length,
+        }, 
+        "Updated obligation in cache"
+      );
     } catch (error) {
       logger.error(
         { pubkey: pubkeyStr, slot: slot.toString(), error },
         "Failed to decode obligation account"
       );
+      
+      // Track decode failure for circuit breaker
+      this.trackDecodeFailure();
     }
   };
+
+  /**
+   * Track a decode failure and check circuit breaker
+   */
+  private trackDecodeFailure(): void {
+    const now = Date.now();
+    this.decodeFailures.push(now);
+    
+    // Remove old failures outside the window
+    this.decodeFailures = this.decodeFailures.filter(
+      timestamp => now - timestamp < this.CIRCUIT_BREAKER_WINDOW_MS
+    );
+    
+    // Check if we've exceeded the threshold
+    if (this.decodeFailures.length >= this.CIRCUIT_BREAKER_THRESHOLD) {
+      logger.fatal(
+        { 
+          failureCount: this.decodeFailures.length,
+          windowSeconds: this.CIRCUIT_BREAKER_WINDOW_MS / 1000,
+          threshold: this.CIRCUIT_BREAKER_THRESHOLD
+        },
+        "Circuit breaker triggered: too many decode failures, stopping indexer"
+      );
+      
+      // Stop the indexer gracefully
+      this.shouldReconnect = false;
+      this.isRunning = false;
+      
+      // Close active subscription if exists
+      if (this.activeSub) {
+        this.activeSub.close();
+      }
+    }
+  }
 
   /**
    * Cleanup the current client if it exists
@@ -226,7 +352,7 @@ export class LiveObligationIndexer {
    * Start the subscription with automatic reconnection
    */
   private async startSubscription(): Promise<void> {
-    while (this.shouldReconnect && !this.shutdownSignalReceived) {
+    while (this.shouldReconnect && this.isRunning) {
       try {
         // Cleanup old client if it exists
         this.cleanupClient();
@@ -240,32 +366,56 @@ export class LiveObligationIndexer {
             programId: this.config.programId.toString(),
             filtersCount: this.config.filters.length,
             commitment: CommitmentLevel[this.config.commitment],
+            inactivityTimeoutSeconds: this.config.inactivityTimeoutSeconds,
           },
           "Starting Yellowstone subscription"
         );
 
-        // Start subscription - this will run until stream ends or errors
-        await subscribeToAccounts(
+        // Start subscription - get handle
+        this.activeSub = await subscribeToAccounts(
           this.client,
           this.config.programId,
           this.config.filters,
           this.handleAccountUpdate,
-          this.config.commitment
+          this.config.commitment,
+          this.config.inactivityTimeoutSeconds
         );
+
+        // Wait for the subscription to complete
+        await this.activeSub.done;
 
         // If we get here, stream ended normally
         logger.info("Yellowstone subscription ended normally");
 
-        // If we should reconnect and haven't been told to stop, try again
-        if (this.shouldReconnect && !this.shutdownSignalReceived) {
-          logger.info("Stream ended, will attempt to reconnect");
+        // If we should reconnect and are still running, try again
+        if (this.shouldReconnect && this.isRunning) {
+          this.reconnectCount++;
+          logger.info({ reconnectCount: this.reconnectCount }, "Stream ended, will attempt to reconnect");
           await this.delay(this.config.reconnectDelayMs);
         }
       } catch (error) {
+        // Check if this is an InvalidArg error (configuration/request validation error)
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const isInvalidArg = errorMessage.includes("InvalidArg") || 
+                            errorMessage.includes("invalid type") ||
+                            errorMessage.includes("missing field") ||
+                            (error && typeof error === "object" && "code" in error && 
+                             (error.code === 3 || error.code === "InvalidArg"));
+        
+        if (isInvalidArg) {
+          logger.fatal(
+            { error, errorMessage },
+            "FATAL: Invalid request configuration (InvalidArg). This is a bug in request format. Stopping indexer."
+          );
+          this.shouldReconnect = false;
+          this.isRunning = false;
+          throw error; // Propagate error to exit with non-zero code
+        }
+        
         logger.error({ error }, "Yellowstone subscription error");
 
         // Check if we should attempt to reconnect
-        if (this.shouldReconnect && !this.shutdownSignalReceived) {
+        if (this.shouldReconnect && this.isRunning) {
           this.currentReconnectAttempt++;
 
           if (this.currentReconnectAttempt <= this.config.maxReconnectAttempts) {
@@ -318,24 +468,42 @@ export class LiveObligationIndexer {
     logger.info("Starting live obligation indexer");
     this.isRunning = true;
     this.shouldReconnect = true;
-    this.shutdownSignalReceived = false;
 
-    // Setup clean shutdown handlers (only when starting)
-    this.setupShutdownHandlers();
+    // Auto-inject obligation discriminator filter if filters are empty or undefined
+    // This ensures the indexer is safe by default and doesn't subscribe to all program accounts
+    if (!this.config.filters || this.config.filters.length === 0) {
+      const obligationDiscriminator = anchorDiscriminator("Obligation");
+      this.config.filters = [
+        {
+          memcmp: {
+            offset: 0, // Use JS number (matching old bot behavior for fast snapshots)
+            base64: obligationDiscriminator.toString("base64"),
+          },
+        },
+      ] as any; // Type assertion needed for filter type compatibility
+      
+      logger.info(
+        { discriminator: obligationDiscriminator.toString("hex") },
+        "Auto-injected Obligation discriminator filter for safe subscription"
+      );
+    }
 
     // Load initial snapshot
     this.loadObligationPubkeys();
+
+    // Bootstrap cache from RPC
+    await this.bootstrapCacheFromRpc();
 
     logger.info(
       { 
         snapshotSize: this.obligationPubkeys.size,
         cacheSize: this.cache.size 
       },
-      "Initial snapshot loaded, starting Yellowstone subscription"
+      "Bootstrap complete, starting Yellowstone subscription"
     );
 
-    // Start subscription in background (don't await here)
-    this.subscriptionPromise = this.startSubscription().catch(error => {
+    // Start subscription in background (don't await here, let it reconnect)
+    this.startSubscription().catch(error => {
       logger.error({ error }, "Fatal error in subscription loop");
       this.isRunning = false;
     });
@@ -354,16 +522,21 @@ export class LiveObligationIndexer {
     this.shouldReconnect = false;
     this.isRunning = false;
 
-    // Wait for subscription to finish if it's running
-    if (this.subscriptionPromise) {
+    // Close the active subscription if it exists
+    if (this.activeSub) {
+      this.activeSub.close();
+      
+      // Wait for subscription to finish with timeout guard
       try {
         await Promise.race([
-          this.subscriptionPromise,
+          this.activeSub.done.catch(() => {}), // Ignore errors during shutdown
           this.delay(5000), // 5 second timeout
         ]);
       } catch (error) {
         logger.warn({ error }, "Error while waiting for subscription to stop");
       }
+      
+      this.activeSub = null;
     }
 
     // Cleanup client
@@ -372,7 +545,8 @@ export class LiveObligationIndexer {
     logger.info(
       { 
         cacheSize: this.cache.size,
-        knownPubkeys: this.obligationPubkeys.size 
+        knownPubkeys: this.obligationPubkeys.size,
+        reconnectCount: this.reconnectCount
       },
       "Live obligation indexer stopped"
     );
@@ -403,6 +577,7 @@ export class LiveObligationIndexer {
     lastUpdate: number | null;
     oldestSlot: string | null;
     newestSlot: string | null;
+    reconnectCount: number;
   } {
     const entries = Array.from(this.cache.values());
     const lastUpdateTimes = entries.map(e => e.lastUpdated);
@@ -415,6 +590,7 @@ export class LiveObligationIndexer {
       lastUpdate: lastUpdateTimes.length > 0 ? Math.max(...lastUpdateTimes) : null,
       oldestSlot: slots.length > 0 ? slots.reduce((a, b) => (a < b ? a : b)).toString() : null,
       newestSlot: slots.length > 0 ? slots.reduce((a, b) => (a > b ? a : b)).toString() : null,
+      reconnectCount: this.reconnectCount,
     };
   }
 

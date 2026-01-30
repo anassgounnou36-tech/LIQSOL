@@ -11,17 +11,23 @@ import type { YellowstoneClientInstance } from "./client.js";
 
 /**
  * Normalize filters to ensure proper types for gRPC serialization:
- * - memcmp.offset must be a JS number (not string, not bigint) for u64 field
+ * - memcmp.offset must be a JS number (matching "old bot" working behavior)
  * - memcmp.bytes (Buffer) should be converted to base64 string
  */
 function normalizeFilters(filters: any[]): any[] {
   return filters.map((f) => {
     if (!f?.memcmp) return f;
 
+    // Convert offset to JS number (matching old bot behavior)
     let offset = f.memcmp.offset;
     if (typeof offset === "string") offset = Number(offset);
     if (typeof offset === "bigint") offset = Number(offset);
+
+    // Default to 0 if not a finite number
     if (typeof offset !== "number" || !Number.isFinite(offset)) offset = 0;
+    
+    // Force integer + non-negative
+    offset = Math.max(0, Math.floor(offset));
 
     const memcmp: any = { ...f.memcmp, offset };
 
@@ -45,6 +51,21 @@ export type AccountUpdateCallback = (
 ) => void | Promise<void>;
 
 /**
+ * Yellowstone subscription handle for production-safe stream management
+ */
+export interface YellowstoneSubscriptionHandle {
+  /**
+   * Close the subscription stream (idempotent)
+   */
+  close(): void;
+  
+  /**
+   * Promise that resolves when stream ends cleanly, rejects on error
+   */
+  done: Promise<void>;
+}
+
+/**
  * Subscribe to accounts owned by a program with optional filters
  * 
  * @param client - Connected Yellowstone gRPC client
@@ -52,21 +73,23 @@ export type AccountUpdateCallback = (
  * @param filters - Array of account filters (memcmp, datasize, etc.)
  * @param onAccountUpdate - Callback for each account update
  * @param commitment - Commitment level (defaults to confirmed)
- * @returns Promise that resolves when subscription completes or rejects on error
+ * @param inactivityTimeoutSeconds - Timeout in seconds for inactivity watchdog (defaults to 15)
+ * @returns YellowstoneSubscriptionHandle with close() and done promise
  */
 export async function subscribeToAccounts(
   client: YellowstoneClientInstance,
   programId: PublicKey,
   filters: SubscribeRequestFilterAccounts["filters"],
   onAccountUpdate: AccountUpdateCallback,
-  commitment: CommitmentLevel = CommitmentLevel.CONFIRMED
-): Promise<void> {
+  commitment: CommitmentLevel = CommitmentLevel.CONFIRMED,
+  inactivityTimeoutSeconds = 15
+): Promise<YellowstoneSubscriptionHandle> {
   logger.info(
     { programId: programId.toString(), filtersCount: filters.length },
     "Starting account subscription via Yellowstone gRPC"
   );
 
-  // Normalize filters to ensure memcmp.offset is bigint for u64 compatibility
+  // Normalize filters to ensure memcmp.offset is a JS number (old bot behavior)
   const normalizedFilters = normalizeFilters(filters as any[]);
 
   // Create subscription request in canonical "accounts map entry" form
@@ -105,10 +128,79 @@ export async function subscribeToAccounts(
   const stream: Duplex = await client.subscribe();
 
   let accountCount = 0;
-  let errorOccurred = false;
+  let closeRequested = false;
+  let settled = false;
+  let inactivityTimeoutId: NodeJS.Timeout | null = null;
+  let pingIntervalId: NodeJS.Timeout | null = null;
 
-  return new Promise((resolve, reject) => {
+  // Helper to reset inactivity timeout
+  const resetInactivityTimeout = () => {
+    if (inactivityTimeoutId) {
+      clearTimeout(inactivityTimeoutId);
+    }
+    
+    inactivityTimeoutId = setTimeout(() => {
+      if (closeRequested) return;
+      logger.warn(
+        { inactivityTimeoutSeconds },
+        "Inactivity timeout reached - no data received, destroying stream"
+      );
+      stream.destroy(new Error("Inactivity timeout"));
+    }, inactivityTimeoutSeconds * 1000);
+  };
+
+  // Helper to cleanup inactivity timeout
+  const clearInactivityTimeout = () => {
+    if (inactivityTimeoutId) {
+      clearTimeout(inactivityTimeoutId);
+      inactivityTimeoutId = null;
+    }
+  };
+
+  // Helper to cleanup ping interval
+  const clearPingInterval = () => {
+    if (pingIntervalId) {
+      clearInterval(pingIntervalId);
+      pingIntervalId = null;
+    }
+  };
+
+  // Start outbound ping loop to keep connection alive (fallback)
+  // Send ping every 5 seconds to prevent silent disconnects
+  // Note: Yellowstone ping is a boolean field, not an object
+  pingIntervalId = setInterval(() => {
+    if (closeRequested) return;
+    try {
+      stream.write({ ping: true });
+      logger.debug("Sent outbound ping to Yellowstone gRPC");
+    } catch (err) {
+      logger.warn({ err }, "Failed to send outbound ping");
+    }
+  }, 5000);
+
+  const donePromise = new Promise<void>((resolve, reject) => {
+    // Helper to settle promise with resolve (guard against multiple settlements)
+    const settleResolve = () => {
+      if (settled) return;
+      settled = true;
+      clearInactivityTimeout();
+      clearPingInterval();
+      resolve();
+    };
+
+    // Helper to settle promise with reject (guard against multiple settlements)
+    const settleReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      clearInactivityTimeout();
+      clearPingInterval();
+      reject(err);
+    };
+
     stream.on("data", async (data: SubscribeUpdate) => {
+      // Reset inactivity timeout on any data (including pings)
+      resetInactivityTimeout();
+
       // Handle account updates
       if (data.account) {
         const accountInfo = data.account.account;
@@ -134,37 +226,62 @@ export async function subscribeToAccounts(
 
       // Handle ping updates (keep-alive)
       if (data.ping) {
-        logger.debug("Received ping from Yellowstone gRPC");
+        logger.debug("Received ping from Yellowstone gRPC, sending reply");
+        // Reply to server ping immediately to maintain connection
+        // Note: Yellowstone ping is a boolean field, not an object
+        try {
+          stream.write({ ping: true });
+        } catch (err) {
+          logger.warn({ err }, "Failed to reply to server ping");
+        }
       }
     });
 
     stream.on("error", (err: Error) => {
       logger.error({ err }, "Yellowstone gRPC stream error");
-      errorOccurred = true;
-      reject(err);
+      settleReject(err);
     });
 
     stream.on("end", () => {
       logger.info({ accountCount }, "Yellowstone gRPC stream ended");
-      if (!errorOccurred) {
-        resolve();
-      }
+      settleResolve();
+    });
+
+    stream.on("close", () => {
+      settleResolve();
     });
 
     // Write the subscription request to the stream
     stream.write(request);
 
     logger.info("Subscription request sent, waiting for account updates");
+    
+    // Start inactivity timeout
+    resetInactivityTimeout();
   });
+
+  // Return subscription handle
+  return {
+    close: () => {
+      if (closeRequested) return;
+      closeRequested = true;
+      clearInactivityTimeout();
+      clearPingInterval();
+      stream.destroy();
+      logger.debug("Subscription stream closed via handle.close()");
+    },
+    done: donePromise,
+  };
 }
 
 /**
+ * @deprecated Use RPC getProgramAccounts for snapshots instead (more reliable)
+ * 
  * Subscribe and collect all accounts matching filters, then end subscription
  * 
- * This is useful for one-time snapshots where you want to:
- * 1. Subscribe to accounts
- * 2. Collect all existing accounts (startup=true)
- * 3. Stop once initial snapshot is complete
+ * This function is kept for backward compatibility but is no longer recommended.
+ * For snapshot operations, use Connection.getProgramAccounts() from @solana/web3.js
+ * instead, as it's more reliable and doesn't depend on Yellowstone streaming startup behavior.
  * 
  * @param client - Connected Yellowstone gRPC client
  * @param programId - Program ID whose accounts to subscribe to
@@ -190,8 +307,13 @@ export async function snapshotAccounts(
   // Map to deduplicate accounts by pubkey
   const accountsMap = new Map<string, [PublicKey, Buffer, bigint]>();
   let startupAccountsCompleted = false;
+  
+  // Track startup completion for natural snapshot ending
+  let sawStartup = false;
+  let lastStartupAtMs = 0;
+  const STARTUP_QUIET_MS = 8000; // Wait 8s after last startup message to prevent premature cutoffs
 
-  // Normalize filters to ensure memcmp.offset is bigint for u64 compatibility
+  // Normalize filters to ensure memcmp.offset is a JS number (old bot behavior)
   const normalizedFilters = normalizeFilters(filters as any[]);
 
   // Create subscription request in canonical "accounts map entry" form
@@ -236,6 +358,7 @@ export async function snapshotAccounts(
     
     let maxTimeoutId: NodeJS.Timeout | null = null;
     let inactivityTimeoutId: NodeJS.Timeout | null = null;
+    let startupCheckIntervalId: NodeJS.Timeout | null = null;
     let isResolved = false;
 
     // Helper to clear all timeouts
@@ -247,6 +370,10 @@ export async function snapshotAccounts(
       if (inactivityTimeoutId) {
         clearTimeout(inactivityTimeoutId);
         inactivityTimeoutId = null;
+      }
+      if (startupCheckIntervalId) {
+        clearInterval(startupCheckIntervalId);
+        startupCheckIntervalId = null;
       }
     };
 
@@ -292,7 +419,7 @@ export async function snapshotAccounts(
     };
 
     // Set maximum timeout
-    maxTimeoutId = setTimeout(() => {
+    maxTimeoutId = setTimeout(async () => {
       if (isResolved) return;
       isResolved = true;
       logger.warn(
@@ -301,11 +428,51 @@ export async function snapshotAccounts(
       );
       clearAllTimeouts();
       stream.destroy();
+      
+      // If we collected 0 accounts, run diagnostic to determine if stream is alive
+      if (accountsMap.size === 0) {
+        try {
+          logger.info("No accounts collected. Running stream diagnostics...");
+          const slotsReceived = await diagnosticSlotStream(client, 3);
+          
+          if (slotsReceived > 0) {
+            logger.error(
+              { slotsReceived },
+              "DIAGNOSTIC: Yellowstone stream is ALIVE (slots > 0) but accounts subscription returned 0 results. Issue is likely with accounts filter shape, owner, or discriminator."
+            );
+          } else {
+            logger.error(
+              "DIAGNOSTIC: Yellowstone stream returned 0 slots. Issue is likely with endpoint URL, authentication token, or server not streaming."
+            );
+          }
+        } catch (diagErr) {
+          logger.error({ err: diagErr }, "Failed to run diagnostic slots stream");
+        }
+      }
+      
       resolve(Array.from(accountsMap.values()));
     }, maxTimeoutMs);
 
     // Start inactivity timeout
     resetInactivityTimeout();
+    
+    // Start interval to check if startup is complete
+    // End snapshot naturally when startup dump has finished
+    startupCheckIntervalId = setInterval(() => {
+      if (isResolved) return;
+      
+      // If we saw startup messages, have accounts, and haven't received startup in a while
+      if (sawStartup && accountsMap.size > 0 && Date.now() - lastStartupAtMs > STARTUP_QUIET_MS) {
+        isResolved = true;
+        logger.info(
+          { accountsCollected: accountsMap.size, quietMs: Date.now() - lastStartupAtMs },
+          "Startup dump complete, ending snapshot naturally"
+        );
+        clearAllTimeouts();
+        stream.destroy();
+        resolve(Array.from(accountsMap.values()));
+      }
+    }, 500); // Check every 500ms
 
     stream.on("data", async (data: SubscribeUpdate) => {
       // Reset inactivity timeout on any data received
@@ -324,6 +491,12 @@ export async function snapshotAccounts(
           const pubkey = new PublicKey(pubkeyBytes);
           const accountData = Buffer.from(accountInfo.data);
           const slot = BigInt(data.account.slot);
+          
+          // Track startup messages for natural snapshot ending
+          if (data.account.isStartup) {
+            sawStartup = true;
+            lastStartupAtMs = Date.now();
+          }
 
           // Collect accounts from BOTH startup and non-startup messages
           // Deduplicate by pubkey (keep latest by slot)
