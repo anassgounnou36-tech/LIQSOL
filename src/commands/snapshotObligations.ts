@@ -3,6 +3,7 @@ import { PublicKey, Connection } from "@solana/web3.js";
 import { writeFileSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
+import bs58 from "bs58";
 import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
@@ -100,7 +101,7 @@ async function main() {
       {
         memcmp: {
           offset: 0,
-          bytes: obligationDiscriminator.toString("base58"),
+          bytes: bs58.encode(obligationDiscriminator),
         },
       },
     ];
@@ -121,7 +122,9 @@ async function main() {
     for (const rawAccount of rawAccounts) {
       try {
         const pubkey = rawAccount.pubkey;
-        const accountData = Buffer.from(rawAccount.account.data, "base64");
+        // RPC returns data as a tuple: [encodedData, encoding]
+        const [encodedData, encoding] = rawAccount.account.data as unknown as [string, string];
+        const accountData = Buffer.from(encodedData, encoding as BufferEncoding);
         
         // Verify the obligation discriminator on the data
         if (accountData.length < 8) {
