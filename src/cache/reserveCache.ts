@@ -163,6 +163,16 @@ export async function loadReserves(
 
       matchedCount++;
 
+      // Log the liquidity mint mapping for verification
+      logger.debug(
+        {
+          reserve: pubkey.toString(),
+          liquidityMint: decoded.liquidityMint,
+          marketPubkey: decoded.marketPubkey,
+        },
+        "Mapping reserve to liquidity mint"
+      );
+
       // Extract oracle pubkeys
       const oraclePubkeys = decoded.oraclePubkeys.map(
         (pk) => new PublicKey(pk)
@@ -211,13 +221,12 @@ export async function loadReserves(
   );
 
   // Validate minimum expected reserves
-  // Note: Different markets may have different numbers of reserves
-  // This is a soft warning, not a hard failure
-  const MIN_EXPECTED_RESERVES = 3;
-  if (cache.size < MIN_EXPECTED_RESERVES && cache.size > 0) {
+  // Ensure we have at least 5 reserves for a healthy market
+  const MIN_EXPECTED_RESERVES = 5;
+  if (cache.size < MIN_EXPECTED_RESERVES) {
     logger.warn(
       { cached: cache.size, expected: MIN_EXPECTED_RESERVES },
-      "Fewer reserves cached than typical - may indicate configuration issue or small market"
+      "WARNING: Fewer reserves cached than expected - may indicate configuration issue, small market, or RPC problem"
     );
   }
 

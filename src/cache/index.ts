@@ -48,6 +48,23 @@ export async function loadMarketCaches(
 
   const elapsed = Date.now() - startTime;
 
+  // Sanity check: Ensure we have a reasonable number of reserves
+  const MIN_EXPECTED_RESERVES = 5;
+  if (reserves.size < MIN_EXPECTED_RESERVES) {
+    logger.warn(
+      {
+        market: marketPubkey.toString(),
+        reserveCount: reserves.size,
+        minExpected: MIN_EXPECTED_RESERVES,
+      },
+      "WARNING: Fewer reserves than expected loaded. This may indicate a configuration issue or RPC problem."
+    );
+  }
+
+  // Log loaded mints for debugging
+  const reserveMints = Array.from(reserves.keys());
+  const oracleMints = Array.from(oracles.keys());
+  
   logger.info(
     {
       market: marketPubkey.toString(),
@@ -56,6 +73,16 @@ export async function loadMarketCaches(
       elapsedMs: elapsed,
     },
     "Market caches loaded successfully"
+  );
+  
+  logger.info(
+    { mints: reserveMints.slice(0, 10), total: reserveMints.length },
+    "Loaded reserve mints (showing first 10)"
+  );
+  
+  logger.info(
+    { mints: oracleMints.slice(0, 10), total: oracleMints.length },
+    "Loaded oracle mints (showing first 10)"
   );
 
   return {
