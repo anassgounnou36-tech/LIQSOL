@@ -120,7 +120,7 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     expect(filters.length).toBe(1);
     expect(filters[0]).toHaveProperty("memcmp");
     expect(filters[0]?.memcmp).toBeDefined();
-    expect(filters[0]!.memcmp!.offset).toBe(0n); // offset should be bigint for u64
+    expect(filters[0]!.memcmp!.offset).toBe(0); // offset should be number (old bot behavior)
     expect(filters[0]!.memcmp).toHaveProperty("base64");
     
     await indexer.stop();
@@ -158,7 +158,7 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     expect(filters.length).toBe(1);
     expect(filters[0]).toHaveProperty("memcmp");
     expect(filters[0]?.memcmp).toBeDefined();
-    expect(filters[0]!.memcmp!.offset).toBe(0n); // offset should be bigint for u64
+    expect(filters[0]!.memcmp!.offset).toBe(0); // offset should be number (old bot behavior)
     expect(filters[0]!.memcmp).toHaveProperty("base64");
     
     await indexer.stop();
@@ -167,12 +167,13 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
   it("should NOT auto-inject when filters are provided", async () => {
     writeFileSync(testFilePath, "H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo\n", "utf-8");
 
-    const customFilter = {
+    // Type as any to avoid TS conflicts with flexible offset types
+    const customFilter: any = {
       memcmp: {
-        offset: 10, // Number offset - will be normalized to bigint for u64
+        offset: 10, // Number offset - will be normalized by subscribeAccounts
         base64: "dGVzdA==", // "test" in base64
       },
-    } as any; // Type assertion to allow flexible offset types
+    };
 
     const indexer = new LiveObligationIndexer({
       yellowstoneUrl: "https://test.example.com",
@@ -199,7 +200,7 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     expect(filters).toBeDefined();
     expect(filters.length).toBe(1);
     expect(filters[0]?.memcmp).toBeDefined();
-    expect(filters[0]!.memcmp!.offset).toBe(10);
+    expect(filters[0]!.memcmp!.offset).toBe(10); // Should remain as number after normalization
     expect(filters[0]!.memcmp!.base64).toBe("dGVzdA==");
     
     await indexer.stop();

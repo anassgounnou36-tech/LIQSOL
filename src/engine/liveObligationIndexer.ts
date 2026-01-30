@@ -476,7 +476,7 @@ export class LiveObligationIndexer {
       this.config.filters = [
         {
           memcmp: {
-            offset: 0n, // Use bigint for u64 compatibility with Yellowstone gRPC
+            offset: 0, // Use JS number (matching old bot behavior for fast snapshots)
             base64: obligationDiscriminator.toString("base64"),
           },
         },

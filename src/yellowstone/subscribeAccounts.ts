@@ -10,38 +10,24 @@ import { logger } from "../observability/logger.js";
 import type { YellowstoneClientInstance } from "./client.js";
 
 /**
- * Convert offset to u64 (bigint) for Yellowstone gRPC
- * Yellowstone expects offset as u64, not string
- */
-function toU64Offset(offset: unknown): bigint {
-  if (typeof offset === "bigint") return offset;
-  if (typeof offset === "number") {
-    if (!Number.isFinite(offset) || offset < 0) {
-      throw new Error(`Invalid memcmp.offset number: ${offset}`);
-    }
-    return BigInt(offset);
-  }
-  if (typeof offset === "string") {
-    // allow "0", "10", etc — but convert to bigint
-    if (!/^\d+$/.test(offset)) {
-      throw new Error(`Invalid memcmp.offset string: ${offset}`);
-    }
-    return BigInt(offset);
-  }
-  throw new Error(`Invalid memcmp.offset type: ${typeof offset}`);
-}
-
-/**
  * Normalize filters to ensure proper types for gRPC serialization:
- * - memcmp.offset must be converted to u64 (bigint) for Yellowstone
+ * - memcmp.offset must be a JS number (matching "old bot" working behavior)
  * - memcmp.bytes (Buffer) should be converted to base64 string
  */
 function normalizeFilters(filters: any[]): any[] {
   return filters.map((f) => {
     if (!f?.memcmp) return f;
 
-    // Convert offset to u64 (bigint) for Yellowstone
-    const offset = toU64Offset(f.memcmp.offset);
+    // Convert offset to JS number (matching old bot behavior)
+    let offset = f.memcmp.offset;
+    if (typeof offset === "string") offset = Number(offset);
+    if (typeof offset === "bigint") offset = Number(offset);
+
+    // Default to 0 if not a finite number
+    if (typeof offset !== "number" || !Number.isFinite(offset)) offset = 0;
+    
+    // Force integer + non-negative
+    offset = Math.max(0, Math.floor(offset));
 
     const memcmp: any = { ...f.memcmp, offset };
 
@@ -103,7 +89,7 @@ export async function subscribeToAccounts(
     "Starting account subscription via Yellowstone gRPC"
   );
 
-  // Normalize filters to ensure memcmp.offset is bigint for u64 compatibility
+  // Normalize filters to ensure memcmp.offset is a JS number (old bot behavior)
   const normalizedFilters = normalizeFilters(filters as any[]);
 
   // Create subscription request in canonical "accounts map entry" form
@@ -324,9 +310,9 @@ export async function snapshotAccounts(
   // Track startup completion for natural snapshot ending
   let sawStartup = false;
   let lastStartupAtMs = 0;
-  const STARTUP_QUIET_MS = 2000; // Wait 2s after last startup message
+  const STARTUP_QUIET_MS = 8000; // Wait 8s after last startup message to prevent premature cutoffs
 
-  // Normalize filters to ensure memcmp.offset is bigint for u64 compatibility
+  // Normalize filters to ensure memcmp.offset is a JS number (old bot behavior)
   const normalizedFilters = normalizeFilters(filters as any[]);
 
   // Create subscription request in canonical "accounts map entry" form
