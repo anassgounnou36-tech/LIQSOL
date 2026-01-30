@@ -95,10 +95,10 @@ async function main() {
     logger.info({ rpcUrl: env.RPC_PRIMARY }, "Connected to Solana RPC");
 
     // Define filters for getProgramAccounts
-    // Filter 1: Match Obligation discriminator at offset 0
-    // Filter 2: Match exact dataSize of 410 bytes (Kamino Obligation account size)
+    // Filter: Match Obligation discriminator at offset 0
     // Note: Use base58 encoding for memcmp filter (base64 fails for RPC)
-    // Note: dataSize filter dramatically reduces RPC workload by excluding reserves, configs, etc.
+    // Note: No dataSize filter - Kamino V2 obligations are ~1300+ bytes (not 410)
+    // Relying on discriminator alone is sufficient and version-independent
     const filters = [
       {
         memcmp: {
@@ -106,19 +106,17 @@ async function main() {
           bytes: bs58.encode(obligationDiscriminator),
         },
       },
-      {
-        dataSize: 410, // exact size of decoded Kamino obligation account
-      },
     ];
 
     // Fetch all matching accounts via RPC
     // Use dataSlice to prevent massive response (only get pubkeys, not account data)
+    // Note: length: 1 (not 0) for compatibility with all RPC nodes
     logger.info("Fetching obligation pubkeys via getProgramAccounts...");
     
     const rawAccounts = await connection.getProgramAccounts(programId, {
       filters,
       encoding: "base64",
-      dataSlice: { offset: 0, length: 0 }, // Only return pubkeys + metadata, not account data
+      dataSlice: { offset: 0, length: 1 }, // Only return pubkeys + metadata, not account data
     });
 
     logger.info({ total: rawAccounts.length }, "Fetched obligation pubkeys");
@@ -133,7 +131,7 @@ async function main() {
     if (obligationPubkeys.length < MIN_EXPECTED_OBLIGATIONS) {
       throw new Error(
         `Snapshot returned only ${obligationPubkeys.length} obligations (expected at least ${MIN_EXPECTED_OBLIGATIONS}). ` +
-        `This is likely incomplete. Check RPC endpoint, program ID, and market pubkey.`
+        `Likely bad filters or incorrect program ID. Check RPC endpoint, discriminator, and program ID.`
       );
     }
 
