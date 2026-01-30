@@ -58,9 +58,11 @@ async function main() {
       logger.info(`Liquidity Mint: ${mint}`);
       logger.info(`  Reserve Pubkey: ${reserve.reservePubkey.toString()}`);
       logger.info(`  Available Amount: ${reserve.availableAmount.toString()}`);
-      logger.info(
-        `  Cumulative Borrow Rate: ${reserve.cumulativeBorrowRate.toString()}`
-      );
+      if (reserve.cumulativeBorrowRate !== undefined) {
+        logger.info(
+          `  Cumulative Borrow Rate: ${reserve.cumulativeBorrowRate.toString()}`
+        );
+      }
       logger.info(`  Loan to Value: ${reserve.loanToValue}%`);
       logger.info(
         `  Liquidation Threshold: ${reserve.liquidationThreshold}%`

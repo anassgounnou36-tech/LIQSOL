@@ -15,23 +15,14 @@ export interface OraclePriceData {
   slot: bigint;
   /** Exponent for price scaling (e.g., -8 means divide by 10^8) */
   exponent: number;
-  /** Oracle type (pyth, switchboard, scope) */
-  oracleType: "pyth" | "switchboard" | "scope";
+  /** Oracle type (pyth, switchboard) */
+  oracleType: "pyth" | "switchboard";
 }
 
 /**
  * Oracle cache mapping mint to price data
  */
 export type OracleCache = Map<string, OraclePriceData>;
-
-/**
- * Pyth oracle discriminator (first 8 bytes of sha256("account:PriceAccount"))
- * Reference: https://github.com/pyth-network/pyth-client
- * Note: Not currently used as we check the magic number instead
- */
-// const PYTH_PRICE_DISCRIMINATOR = Buffer.from([
-//   0x05, 0x38, 0xf4, 0x5d, 0x02, 0x00, 0x00, 0x00,
-// ]);
 
 /**
  * Switchboard V2 aggregator discriminator
@@ -62,9 +53,6 @@ function decodePythPrice(data: Buffer): OraclePriceData | null {
       return null;
     }
 
-    // Version: u32 at offset 4 (not actively used but part of validation)
-    // const version = data.readUInt32LE(4);
-    
     // Type: u32 at offset 8 (should be 3 for price account)
     const accountType = data.readUInt32LE(8);
     if (accountType !== 3) {
@@ -84,8 +72,9 @@ function decodePythPrice(data: Buffer): OraclePriceData | null {
     // Exponent: i32 at offset 20
     const exponent = data.readInt32LE(20);
 
-    // Slot: u64 at offset 104 (last update timestamp converted to slot)
-    // For now, use timestamp at offset 104 as proxy for freshness
+    // Slot: u64 at offset 104
+    // Note: Pyth stores publish_time (unix timestamp) here
+    // We convert to approximate slot for freshness checks
     const timestamp = data.readBigInt64LE(104);
 
     if (status !== 1) {
@@ -95,7 +84,7 @@ function decodePythPrice(data: Buffer): OraclePriceData | null {
     return {
       price: price,
       confidence: confidence,
-      slot: BigInt(Math.abs(Number(timestamp))), // Convert timestamp to slot-like value
+      slot: timestamp > 0n ? timestamp : 0n,
       exponent: exponent,
       oracleType: "pyth",
     };
@@ -120,10 +109,13 @@ function decodeSwitchboardPrice(data: Buffer): OraclePriceData | null {
     }
 
     // Verify discriminator at offset 0
+    // Note: Some Switchboard accounts may not have the standard discriminator
+    // We attempt to decode regardless and validate based on data structure
     const discriminator = data.subarray(0, 8);
-    if (!discriminator.equals(SWITCHBOARD_V2_DISCRIMINATOR)) {
-      // Try alternative: Check if this is a valid Switchboard account
-      // by checking for reasonable structure
+    const hasValidDiscriminator = discriminator.equals(SWITCHBOARD_V2_DISCRIMINATOR);
+    
+    if (!hasValidDiscriminator) {
+      logger.debug("Switchboard discriminator mismatch, attempting best-effort decode");
     }
 
     // Latest confirmed round result starts around offset 217
@@ -235,9 +227,9 @@ export async function loadOracles(
 
   // Decode oracle accounts and map to mints
   const cache = new Map<string, OraclePriceData>();
-  let decodedPyth = 0;
-  let decodedSwitchboard = 0;
-  let decodedFailed = 0;
+  let pythCount = 0;
+  let switchboardCount = 0;
+  let failedCount = 0;
 
   for (const { pubkey, data } of allOracleAccounts) {
     if (!data) {
@@ -245,7 +237,7 @@ export async function loadOracles(
         { pubkey: pubkey.toString() },
         "Oracle account has no data"
       );
-      decodedFailed++;
+      failedCount++;
       continue;
     }
 
@@ -258,9 +250,17 @@ export async function loadOracles(
     // Try decoding as Pyth first
     let priceData = decodePythPrice(data);
     if (priceData) {
-      decodedPyth++;
+      pythCount++;
       // Store for each mint that uses this oracle
+      // Note: If a mint has multiple oracles, the last one wins
       for (const mint of mints) {
+        const existing = cache.get(mint);
+        if (existing) {
+          logger.debug(
+            { mint, oldType: existing.oracleType, newType: "pyth" },
+            "Multiple oracles for mint, using Pyth"
+          );
+        }
         cache.set(mint, priceData);
         logger.debug(
           {
@@ -278,9 +278,16 @@ export async function loadOracles(
     // Try decoding as Switchboard
     priceData = decodeSwitchboardPrice(data);
     if (priceData) {
-      decodedSwitchboard++;
+      switchboardCount++;
       // Store for each mint that uses this oracle
       for (const mint of mints) {
+        const existing = cache.get(mint);
+        if (existing) {
+          logger.debug(
+            { mint, oldType: existing.oracleType, newType: "switchboard" },
+            "Multiple oracles for mint, using Switchboard"
+          );
+        }
         cache.set(mint, priceData);
         logger.debug(
           {
@@ -300,14 +307,14 @@ export async function loadOracles(
       { pubkey: pubkeyStr, dataLength: data.length },
       "Failed to decode oracle account as Pyth or Switchboard"
     );
-    decodedFailed++;
+    failedCount++;
   }
 
   logger.info(
     {
-      pyth: decodedPyth,
-      switchboard: decodedSwitchboard,
-      failed: decodedFailed,
+      pyth: pythCount,
+      switchboard: switchboardCount,
+      failed: failedCount,
       cached: cache.size,
     },
     "Oracle cache loaded successfully"

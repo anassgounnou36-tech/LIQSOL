@@ -302,15 +302,11 @@ describe("Reserve Cache Tests", () => {
         Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
       );
 
-      // Keep track of all unique mints to ensure we have 150 unique entries
-      const mintMap = new Map<string, string>();
-      
       // Mock decodeReserve to return valid reserves for all
       vi.spyOn(decoder, "decodeReserve").mockImplementation((_data, pubkey) => {
         const pubkeyStr = pubkey.toString();
         // Create a unique mint for each pubkey
         const mint = `mint-${pubkeyStr}`;
-        mintMap.set(pubkeyStr, mint);
         
         return {
           reservePubkey: pubkeyStr,

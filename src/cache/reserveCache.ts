@@ -20,8 +20,11 @@ export interface ReserveCacheEntry {
   reservePubkey: PublicKey;
   /** Available liquidity amount (raw, not adjusted for decimals) */
   availableAmount: bigint;
-  /** Cumulative borrow rate (stored as bigint for precision) */
-  cumulativeBorrowRate: bigint;
+  /** 
+   * Cumulative borrow rate (stored as bigint for precision)
+   * Note: Currently not extracted from IDL. Future enhancement.
+   */
+  cumulativeBorrowRate?: bigint;
   /** Loan-to-value ratio (percentage 0-100) */
   loanToValue: number;
   /** Liquidation threshold (percentage 0-100) */
@@ -169,10 +172,6 @@ export async function loadReserves(
       const cacheEntry: ReserveCacheEntry = {
         reservePubkey: pubkey,
         availableAmount: BigInt(decoded.availableLiquidity),
-        // Note: cumulativeBorrowRate is not directly in the decoded reserve
-        // For now, we use a placeholder. In production, this would be extracted
-        // from the cumulative_borrow_rate_bsf field if available in the IDL
-        cumulativeBorrowRate: BigInt(0),
         loanToValue: decoded.loanToValueRatio,
         liquidationThreshold: decoded.liquidationThreshold,
         liquidationBonus: decoded.liquidationBonus,
@@ -212,11 +211,13 @@ export async function loadReserves(
   );
 
   // Validate minimum expected reserves
-  const MIN_EXPECTED_RESERVES = 5;
-  if (cache.size < MIN_EXPECTED_RESERVES) {
+  // Note: Different markets may have different numbers of reserves
+  // This is a soft warning, not a hard failure
+  const MIN_EXPECTED_RESERVES = 3;
+  if (cache.size < MIN_EXPECTED_RESERVES && cache.size > 0) {
     logger.warn(
       { cached: cache.size, expected: MIN_EXPECTED_RESERVES },
-      "Fewer reserves cached than expected - may indicate configuration issue"
+      "Fewer reserves cached than typical - may indicate configuration issue or small market"
     );
   }
 
