@@ -179,15 +179,13 @@ export async function subscribeToAccounts(
     }
   };
 
-  // Ping ID for Yellowstone gRPC keep-alive
-  const PING_ID = 1;
-
   // Start outbound ping loop to keep connection alive (fallback)
   // Send ping every 5 seconds to prevent silent disconnects
+  // Note: Yellowstone ping is a boolean field, not an object
   pingIntervalId = setInterval(() => {
     if (closeRequested) return;
     try {
-      stream.write({ ping: { id: PING_ID } });
+      stream.write({ ping: true });
       logger.debug("Sent outbound ping to Yellowstone gRPC");
     } catch (err) {
       logger.warn({ err }, "Failed to send outbound ping");
@@ -244,8 +242,9 @@ export async function subscribeToAccounts(
       if (data.ping) {
         logger.debug("Received ping from Yellowstone gRPC, sending reply");
         // Reply to server ping immediately to maintain connection
+        // Note: Yellowstone ping is a boolean field, not an object
         try {
-          stream.write({ ping: { id: PING_ID } });
+          stream.write({ ping: true });
         } catch (err) {
           logger.warn({ err }, "Failed to reply to server ping");
         }
@@ -321,6 +320,11 @@ export async function snapshotAccounts(
   // Map to deduplicate accounts by pubkey
   const accountsMap = new Map<string, [PublicKey, Buffer, bigint]>();
   let startupAccountsCompleted = false;
+  
+  // Track startup completion for natural snapshot ending
+  let sawStartup = false;
+  let lastStartupAtMs = 0;
+  const STARTUP_QUIET_MS = 2000; // Wait 2s after last startup message
 
   // Normalize filters to ensure memcmp.offset is bigint for u64 compatibility
   const normalizedFilters = normalizeFilters(filters as any[]);
@@ -367,6 +371,7 @@ export async function snapshotAccounts(
     
     let maxTimeoutId: NodeJS.Timeout | null = null;
     let inactivityTimeoutId: NodeJS.Timeout | null = null;
+    let startupCheckIntervalId: NodeJS.Timeout | null = null;
     let isResolved = false;
 
     // Helper to clear all timeouts
@@ -378,6 +383,10 @@ export async function snapshotAccounts(
       if (inactivityTimeoutId) {
         clearTimeout(inactivityTimeoutId);
         inactivityTimeoutId = null;
+      }
+      if (startupCheckIntervalId) {
+        clearInterval(startupCheckIntervalId);
+        startupCheckIntervalId = null;
       }
     };
 
@@ -423,7 +432,7 @@ export async function snapshotAccounts(
     };
 
     // Set maximum timeout
-    maxTimeoutId = setTimeout(() => {
+    maxTimeoutId = setTimeout(async () => {
       if (isResolved) return;
       isResolved = true;
       logger.warn(
@@ -432,11 +441,51 @@ export async function snapshotAccounts(
       );
       clearAllTimeouts();
       stream.destroy();
+      
+      // If we collected 0 accounts, run diagnostic to determine if stream is alive
+      if (accountsMap.size === 0) {
+        try {
+          logger.info("No accounts collected. Running stream diagnostics...");
+          const slotsReceived = await diagnosticSlotStream(client, 3);
+          
+          if (slotsReceived > 0) {
+            logger.error(
+              { slotsReceived },
+              "DIAGNOSTIC: Yellowstone stream is ALIVE (slots > 0) but accounts subscription returned 0 results. Issue is likely with accounts filter shape, owner, or discriminator."
+            );
+          } else {
+            logger.error(
+              "DIAGNOSTIC: Yellowstone stream returned 0 slots. Issue is likely with endpoint URL, authentication token, or server not streaming."
+            );
+          }
+        } catch (diagErr) {
+          logger.error({ err: diagErr }, "Failed to run diagnostic slots stream");
+        }
+      }
+      
       resolve(Array.from(accountsMap.values()));
     }, maxTimeoutMs);
 
     // Start inactivity timeout
     resetInactivityTimeout();
+    
+    // Start interval to check if startup is complete
+    // End snapshot naturally when startup dump has finished
+    startupCheckIntervalId = setInterval(() => {
+      if (isResolved) return;
+      
+      // If we saw startup messages, have accounts, and haven't received startup in a while
+      if (sawStartup && accountsMap.size > 0 && Date.now() - lastStartupAtMs > STARTUP_QUIET_MS) {
+        isResolved = true;
+        logger.info(
+          { accountsCollected: accountsMap.size, quietMs: Date.now() - lastStartupAtMs },
+          "Startup dump complete, ending snapshot naturally"
+        );
+        clearAllTimeouts();
+        stream.destroy();
+        resolve(Array.from(accountsMap.values()));
+      }
+    }, 500); // Check every 500ms
 
     stream.on("data", async (data: SubscribeUpdate) => {
       // Reset inactivity timeout on any data received
@@ -455,6 +504,12 @@ export async function snapshotAccounts(
           const pubkey = new PublicKey(pubkeyBytes);
           const accountData = Buffer.from(accountInfo.data);
           const slot = BigInt(data.account.slot);
+          
+          // Track startup messages for natural snapshot ending
+          if (data.account.isStartup) {
+            sawStartup = true;
+            lastStartupAtMs = Date.now();
+          }
 
           // Collect accounts from BOTH startup and non-startup messages
           // Deduplicate by pubkey (keep latest by slot)

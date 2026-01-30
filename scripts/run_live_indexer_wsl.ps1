@@ -133,15 +133,73 @@ if ($dataCheckWSL.Trim() -eq 'missing') {
         exit $snapshotExitCode
     }
     
-    # Verify the snapshot file was created
+    # Verify the snapshot file was created and is not empty
     $dataCheckAfterSnapshot = & wsl.exe -d $Distro -- bash -lc "test -f '$workspace/data/obligations.jsonl' && echo 'exists' || echo 'missing'"
     if ($dataCheckAfterSnapshot.Trim() -eq 'exists') {
-        Write-Host "Snapshot completed successfully, obligations.jsonl created." -ForegroundColor Green
+        Write-Host "Snapshot completed, checking file..." -ForegroundColor Green
+        
+        # Check if file is empty
+        $fileSize = & wsl.exe -d $Distro -- bash -lc "wc -l < '$workspace/data/obligations.jsonl' 2>/dev/null || echo '0'"
+        $lineCount = [int]$fileSize.Trim()
+        
+        if ($lineCount -eq 0) {
+            Write-Host ""
+            Write-Host "ERROR: Snapshot returned 0 obligations (empty file)." -ForegroundColor Red
+            Write-Host "Fix snapshot before running live indexer. Check:" -ForegroundColor Red
+            Write-Host "  - Yellowstone endpoint URL and token are correct" -ForegroundColor Red
+            Write-Host "  - Network connectivity to Yellowstone" -ForegroundColor Red
+            Write-Host "  - Filter configuration (discriminator, program ID)" -ForegroundColor Red
+            Write-Host ""
+            exit 1
+        } else {
+            Write-Host "Snapshot file contains $lineCount obligations." -ForegroundColor Green
+        }
     } else {
-        Write-Host "WARNING: Snapshot ran but obligations.jsonl not found. Proceeding anyway..." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "ERROR: Snapshot ran but obligations.jsonl not found." -ForegroundColor Red
+        Write-Host "Fix snapshot before running live indexer." -ForegroundColor Red
+        Write-Host ""
+        exit 1
     }
 } else {
     Write-Host "data/obligations.jsonl found in WSL workspace." -ForegroundColor Green
+    
+    # Verify the existing file is not empty
+    $fileSize = & wsl.exe -d $Distro -- bash -lc "wc -l < '$workspace/data/obligations.jsonl' 2>/dev/null || echo '0'"
+    $lineCount = [int]$fileSize.Trim()
+    
+    if ($lineCount -eq 0) {
+        Write-Host ""
+        Write-Host "ERROR: Existing obligations.jsonl is empty (0 obligations)." -ForegroundColor Red
+        Write-Host "Running snapshot to generate data..." -ForegroundColor Cyan
+        Write-Host ""
+        
+        # Run snapshot to replace empty file
+        & wsl.exe -d $Distro -- bash -lc "cd '$workspace' && npm install && npm run snapshot:obligations"
+        $snapshotExitCode = $LASTEXITCODE
+        
+        if ($snapshotExitCode -ne 0) {
+            Write-Host ""
+            Write-Host "ERROR: Snapshot failed in WSL." -ForegroundColor Red
+            exit $snapshotExitCode
+        }
+        
+        # Re-check after snapshot
+        $fileSize = & wsl.exe -d $Distro -- bash -lc "wc -l < '$workspace/data/obligations.jsonl' 2>/dev/null || echo '0'"
+        $lineCount = [int]$fileSize.Trim()
+        
+        if ($lineCount -eq 0) {
+            Write-Host ""
+            Write-Host "ERROR: Snapshot returned 0 obligations." -ForegroundColor Red
+            Write-Host "Fix snapshot before running live indexer." -ForegroundColor Red
+            Write-Host ""
+            exit 1
+        } else {
+            Write-Host "Snapshot file now contains $lineCount obligations." -ForegroundColor Green
+        }
+    } else {
+        Write-Host "File contains $lineCount obligations." -ForegroundColor Green
+    }
 }
 Write-Host ""
 
