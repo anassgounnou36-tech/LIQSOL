@@ -7,7 +7,7 @@ import bs58 from "bs58";
 import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
-import { decodeObligation } from "../kamino/decoder.js";
+// Note: decodeObligation not needed - we only fetch pubkeys via dataSlice
 import { checkYellowstoneNativeBinding } from "../yellowstone/preflight.js";
 
 /**
@@ -107,54 +107,21 @@ async function main() {
     ];
 
     // Fetch all matching accounts via RPC
-    logger.info("Fetching obligation accounts via getProgramAccounts...");
+    // Use dataSlice to prevent massive response (only get pubkeys, not account data)
+    logger.info("Fetching obligation pubkeys via getProgramAccounts...");
     
     const rawAccounts = await connection.getProgramAccounts(programId, {
       filters,
-      encoding: "base64", // Required for decoding full obligation layout
+      encoding: "base64",
+      dataSlice: { offset: 0, length: 0 }, // Only return pubkeys + metadata, not account data
     });
 
-    logger.info({ total: rawAccounts.length }, "Fetched obligation accounts");
+    logger.info({ total: rawAccounts.length }, "Fetched obligation pubkeys");
 
-    // Filter and decode obligations by market
-    const obligationPubkeys: string[] = [];
-    
-    for (const rawAccount of rawAccounts) {
-      try {
-        const pubkey = rawAccount.pubkey;
-        // RPC returns data as a tuple: [encodedData, encoding]
-        const [encodedData, encoding] = rawAccount.account.data as unknown as [string, string];
-        const accountData = Buffer.from(encodedData, encoding as BufferEncoding);
-        
-        // Verify the obligation discriminator on the data
-        if (accountData.length < 8) {
-          logger.warn({ pubkey: pubkey.toString() }, "Account data too short");
-          continue;
-        }
-        
-        const dataDiscriminator = accountData.slice(0, 8);
-        if (!dataDiscriminator.equals(obligationDiscriminator)) {
-          logger.warn({ pubkey: pubkey.toString() }, "Discriminator mismatch");
-          continue;
-        }
-        
-        // Decode obligation using IDL-based decoder
-        const decoded = decodeObligation(accountData, pubkey);
-        
-        // Filter by market pubkey using PublicKey comparison for safety
-        const decodedMarket = new PublicKey(decoded.marketPubkey);
-        if (decodedMarket.equals(marketPubkey)) {
-          obligationPubkeys.push(pubkey.toString());
-        }
-      } catch (err) {
-        logger.warn(
-          { pubkey: rawAccount.pubkey.toString(), err },
-          "Failed to decode obligation"
-        );
-      }
-    }
+    // Collect pubkeys (discriminator filter already applied, no need for market filter)
+    const obligationPubkeys: string[] = rawAccounts.map(ra => ra.pubkey.toString());
 
-    logger.info({ count: obligationPubkeys.length }, "Filtered obligations by market");
+    logger.info({ count: obligationPubkeys.length }, "Collected obligation pubkeys");
 
     // Validate minimum expected obligations (fail fast on configuration errors)
     const MIN_EXPECTED_OBLIGATIONS = 50;
