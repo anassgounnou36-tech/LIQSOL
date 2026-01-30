@@ -275,12 +275,13 @@ export async function subscribeToAccounts(
 }
 
 /**
+ * @deprecated Use RPC getProgramAccounts for snapshots instead (more reliable)
+ * 
  * Subscribe and collect all accounts matching filters, then end subscription
  * 
- * This is useful for one-time snapshots where you want to:
- * 1. Subscribe to accounts
- * 2. Collect all existing accounts (startup=true)
- * 3. Stop once initial snapshot is complete
+ * This function is kept for backward compatibility but is no longer recommended.
+ * For snapshot operations, use Connection.getProgramAccounts() from @solana/web3.js
+ * instead, as it's more reliable and doesn't depend on Yellowstone streaming startup behavior.
  * 
  * @param client - Connected Yellowstone gRPC client
  * @param programId - Program ID whose accounts to subscribe to
