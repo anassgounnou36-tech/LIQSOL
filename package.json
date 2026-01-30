@@ -16,6 +16,7 @@
     "live:indexer": "tsx src/commands/liveIndexer.ts",
     "live:indexer:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_live_indexer_wsl.ps1",
     "fetch:fixture": "tsx scripts/fetch_fixture.ts",
+    "verify:reserves": "tsx src/cli/verifyReserves.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
