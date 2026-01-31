@@ -226,7 +226,9 @@ export class ObligationIndexer {
     return {
       totalObligations: this.obligationPubkeys.length,
       cacheSize: cacheEntries.length,
-      lastUpdate: lastUpdateTimes.length > 0 ? Math.max(...lastUpdateTimes) : null,
+      lastUpdate: lastUpdateTimes.length > 0 
+        ? lastUpdateTimes.reduce((a, b) => Math.max(a, b), -Infinity)
+        : null,
     };
   }
 

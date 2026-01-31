@@ -108,6 +108,7 @@ export async function subscribeToAccounts(
     blocks: {},
     blocksMeta: {},
     entry: {},
+    inactivityPing: { enabled: true },
   };
 
   // Debug logging: sanitized request structure (no token)
@@ -332,6 +333,7 @@ export async function snapshotAccounts(
     blocks: {},
     blocksMeta: {},
     entry: {},
+    inactivityPing: { enabled: true },
   };
 
   // Debug logging: sanitized request structure (no token)
@@ -576,6 +578,7 @@ async function diagnosticSlotStream(
     blocks: {},
     blocksMeta: {},
     entry: {},
+    inactivityPing: { enabled: true },
   };
 
   const stream: Duplex = await client.subscribe();
