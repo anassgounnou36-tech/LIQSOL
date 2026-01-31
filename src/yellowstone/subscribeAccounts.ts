@@ -108,7 +108,6 @@ export async function subscribeToAccounts(
     blocks: {},
     blocksMeta: {},
     entry: {},
-    inactivityPing: { enabled: true },
   };
 
   // Debug logging: sanitized request structure (no token)
@@ -132,7 +131,6 @@ export async function subscribeToAccounts(
   let closeRequested = false;
   let settled = false;
   let inactivityTimeoutId: NodeJS.Timeout | null = null;
-  let pingIntervalId: NodeJS.Timeout | null = null;
 
   // Helper to reset inactivity timeout
   const resetInactivityTimeout = () => {
@@ -158,34 +156,12 @@ export async function subscribeToAccounts(
     }
   };
 
-  // Helper to cleanup ping interval
-  const clearPingInterval = () => {
-    if (pingIntervalId) {
-      clearInterval(pingIntervalId);
-      pingIntervalId = null;
-    }
-  };
-
-  // Start outbound ping loop to keep connection alive (fallback)
-  // Send ping every 5 seconds to prevent silent disconnects
-  // Note: Yellowstone ping is a boolean field, not an object
-  pingIntervalId = setInterval(() => {
-    if (closeRequested) return;
-    try {
-      stream.write({ ping: true });
-      logger.debug("Sent outbound ping to Yellowstone gRPC");
-    } catch (err) {
-      logger.warn({ err }, "Failed to send outbound ping");
-    }
-  }, 5000);
-
   const donePromise = new Promise<void>((resolve, reject) => {
     // Helper to settle promise with resolve (guard against multiple settlements)
     const settleResolve = () => {
       if (settled) return;
       settled = true;
       clearInactivityTimeout();
-      clearPingInterval();
       resolve();
     };
 
@@ -194,7 +170,6 @@ export async function subscribeToAccounts(
       if (settled) return;
       settled = true;
       clearInactivityTimeout();
-      clearPingInterval();
       reject(err);
     };
 
@@ -227,14 +202,7 @@ export async function subscribeToAccounts(
 
       // Handle ping updates (keep-alive)
       if (data.ping) {
-        logger.debug("Received ping from Yellowstone gRPC, sending reply");
-        // Reply to server ping immediately to maintain connection
-        // Note: Yellowstone ping is a boolean field, not an object
-        try {
-          stream.write({ ping: true });
-        } catch (err) {
-          logger.warn({ err }, "Failed to reply to server ping");
-        }
+        logger.debug("Received ping from Yellowstone gRPC");
       }
     });
 
@@ -267,7 +235,6 @@ export async function subscribeToAccounts(
       if (closeRequested) return;
       closeRequested = true;
       clearInactivityTimeout();
-      clearPingInterval();
       stream.destroy();
       logger.debug("Subscription stream closed via handle.close()");
     },
@@ -333,7 +300,6 @@ export async function snapshotAccounts(
     blocks: {},
     blocksMeta: {},
     entry: {},
-    inactivityPing: { enabled: true },
   };
 
   // Debug logging: sanitized request structure (no token)
@@ -578,7 +544,6 @@ async function diagnosticSlotStream(
     blocks: {},
     blocksMeta: {},
     entry: {},
-    inactivityPing: { enabled: true },
   };
 
   const stream: Duplex = await client.subscribe();
