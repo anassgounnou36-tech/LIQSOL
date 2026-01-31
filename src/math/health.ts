@@ -48,25 +48,22 @@ function toUIAmount(rawAmount: string, decimals: number): bigint {
 /**
  * Converts oracle price to USD price per token (UI units)
  * @param oraclePrice - Oracle price data
- * @param decimals - Token decimals
  * @returns USD price per token (as number for UI)
  */
-function priceToUSD(oraclePrice: OraclePriceData, decimals: number): number {
+function priceToUSD(oraclePrice: OraclePriceData): number {
   try {
     // Oracle price is scaled by exponent (e.g., -8 for Pyth means divide by 10^8)
-    // Convert: price * 10^exponent gives USD per token (raw)
-    // Then divide by 10^decimals to get USD per UI token
+    // Convert: price * 10^exponent gives USD per token
     
     const priceValue = Number(oraclePrice.price);
     const exponentScale = Math.pow(10, oraclePrice.exponent);
-    const tokenScale = Math.pow(10, decimals);
     
-    // USD per UI token = (price * 10^exponent) / 10^decimals
-    const usdPerToken = (priceValue * exponentScale) / tokenScale;
+    // USD per token = price * 10^exponent
+    const usdPerToken = priceValue * exponentScale;
     
     return usdPerToken;
   } catch (err) {
-    logger.warn({ oraclePrice, decimals, err }, "Failed to convert oracle price to USD");
+    logger.warn({ oraclePrice, err }, "Failed to convert oracle price to USD");
     return 0;
   }
 }
@@ -122,7 +119,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     const depositedAmountRaw = toUIAmount(deposit.depositedAmount, decimals);
     
     // Convert to USD value
-    const usdPerToken = priceToUSD(price, decimals);
+    const usdPerToken = priceToUSD(price);
     const depositValueUSD = Number(depositedAmountRaw) * usdPerToken / Math.pow(10, decimals);
     
     // Weight by LTV (loan-to-value ratio as percentage 0-100)
@@ -175,7 +172,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     // Note: In a full implementation, we should multiply by cumulativeBorrowRate
     // to account for accrued interest. However, this is not currently available
     // in ReserveCacheEntry, so we use the borrowed amount directly.
-    const usdPerToken = priceToUSD(price, decimals);
+    const usdPerToken = priceToUSD(price);
     const borrowValueUSD = Number(borrowedAmountRaw) * usdPerToken / Math.pow(10, decimals);
     
     totalBorrowUSD += borrowValueUSD;
