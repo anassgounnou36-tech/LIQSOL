@@ -587,7 +587,9 @@ export class LiveObligationIndexer {
       isRunning: this.isRunning,
       cacheSize: this.cache.size,
       knownPubkeys: this.obligationPubkeys.size,
-      lastUpdate: lastUpdateTimes.length > 0 ? Math.max(...lastUpdateTimes) : null,
+      lastUpdate: lastUpdateTimes.length > 0 
+        ? lastUpdateTimes.reduce((a, b) => Math.max(a, b), -Infinity)
+        : null,
       oldestSlot: slots.length > 0 ? slots.reduce((a, b) => (a < b ? a : b)).toString() : null,
       newestSlot: slots.length > 0 ? slots.reduce((a, b) => (a > b ? a : b)).toString() : null,
       reconnectCount: this.reconnectCount,
