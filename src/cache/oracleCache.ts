@@ -49,10 +49,9 @@ export type OracleCache = Map<string, OraclePriceData>;
  * Decodes a Pyth price account using the official Pyth SDK
  *
  * @param data - Raw account data
- * @param currentSlot - Current slot for staleness check (optional, unused)
  * @returns Decoded price data or null if invalid
  */
-function decodePythPrice(data: Buffer, _currentSlot?: bigint): OraclePriceData | null {
+function decodePythPrice(data: Buffer): OraclePriceData | null {
   try {
     // Use official Pyth SDK to parse price data
     const priceData = parsePriceData(data);
@@ -102,10 +101,9 @@ function decodePythPrice(data: Buffer, _currentSlot?: bigint): OraclePriceData |
  * and has an incompatible API
  *
  * @param data - Raw account data
- * @param _currentSlot - Current slot for staleness check (optional, unused)
  * @returns Decoded price data or null if invalid
  */
-function decodeSwitchboardPrice(data: Buffer, _currentSlot?: bigint): OraclePriceData | null {
+function decodeSwitchboardPrice(data: Buffer): OraclePriceData | null {
   try {
     // Check minimum size (Switchboard V2 aggregators are ~500 bytes)
     if (data.length < 200) {
@@ -121,7 +119,12 @@ function decodeSwitchboardPrice(data: Buffer, _currentSlot?: bigint): OraclePric
     const mantissa = data.readBigInt64LE(217);
     
     // Scale: u32 at offset 225 (number of decimal places)
+    // Oracle scale values are typically small (0-18), so safe to convert to Number
     const scale = data.readUInt32LE(225);
+    if (scale > Number.MAX_SAFE_INTEGER) {
+      logger.warn({ scale }, "Switchboard scale exceeds safe integer bounds");
+      return null;
+    }
     
     // Standard deviation (confidence proxy): i64 at offset 249
     const stdDev = data.readBigInt64LE(249);
