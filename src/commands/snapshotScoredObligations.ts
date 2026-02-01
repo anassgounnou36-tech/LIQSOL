@@ -79,28 +79,36 @@ async function main() {
     // Load snapshot and bootstrap (this will populate cache with scored obligations)
     logger.info("Loading obligation snapshot and computing health scores...");
     
-    // We need to manually trigger the bootstrap without starting the live stream
-    // Use reflection to access private methods (not ideal but works for CLI tool)
-    // Alternative: refactor indexer to expose bootstrap separately
-    
-    // For now, let's just start and immediately stop to trigger bootstrap
+    // Start indexer - this will complete bootstrap synchronously before starting the subscription
     await indexer.start();
     
-    // Give it time to complete bootstrap
-    await new Promise(resolve => setTimeout(resolve, 5000));
-    
+    // Bootstrap is now complete (it's awaited in start()), so we can stop immediately
+    // The subscription starts in background but we don't need it for scoring
     await indexer.stop();
 
     // Get stats
     const stats = indexer.getStats();
+    const unscoredCount = stats.cacheSize - stats.scoredCount;
+    
     logger.info(
       {
         totalObligations: stats.cacheSize,
         scoredObligations: stats.scoredCount,
+        unscoredObligations: unscoredCount,
         liquidatableObligations: stats.liquidatableCount,
       },
       "Scoring complete"
     );
+    
+    if (unscoredCount > 0) {
+      logger.warn(
+        { 
+          unscoredCount, 
+          percentage: ((unscoredCount / stats.cacheSize) * 100).toFixed(1) + "%" 
+        },
+        "Some obligations were not scored (likely due to missing/stale oracle prices or missing reserves). Check debug logs for details."
+      );
+    }
 
     // Get top-N riskiest obligations
     const TOP_N = 50;
