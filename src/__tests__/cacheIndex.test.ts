@@ -36,6 +36,7 @@ describe("Cache Index Integration Tests", () => {
             loanToValue: 75,
             liquidationThreshold: 80,
             liquidationBonus: 500,
+          borrowFactor: 100,
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 6,
           },

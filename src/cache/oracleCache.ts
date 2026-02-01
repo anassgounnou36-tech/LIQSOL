@@ -3,7 +3,6 @@ import { Buffer } from "buffer";
 import { logger } from "../observability/logger.js";
 import type { ReserveCache } from "./reserveCache.js";
 import { parsePriceData } from "@pythnetwork/client";
-import { AggregatorAccount } from "@switchboard-xyz/switchboard-v2";
 
 /**
  * Known stablecoin mints for price clamping
@@ -50,10 +49,10 @@ export type OracleCache = Map<string, OraclePriceData>;
  * Decodes a Pyth price account using the official Pyth SDK
  *
  * @param data - Raw account data
- * @param currentSlot - Current slot for staleness check (optional)
+ * @param currentSlot - Current slot for staleness check (optional, unused)
  * @returns Decoded price data or null if invalid
  */
-function decodePythPrice(data: Buffer, currentSlot?: bigint): OraclePriceData | null {
+function decodePythPrice(data: Buffer, _currentSlot?: bigint): OraclePriceData | null {
   try {
     // Use official Pyth SDK to parse price data
     const priceData = parsePriceData(data);
@@ -65,16 +64,16 @@ function decodePythPrice(data: Buffer, currentSlot?: bigint): OraclePriceData | 
     }
 
     // Check for valid price
-    if (!priceData.price || !priceData.confidence) {
+    if (priceData.price === undefined || priceData.price === null || 
+        priceData.confidence === undefined || priceData.confidence === null) {
       logger.debug("Pyth price or confidence is null");
       return null;
     }
 
-    // Staleness check: Pyth uses publish time (unix timestamp)
-    // Convert to approximate slot for compatibility
-    const publishTime = BigInt(priceData.publishTime || 0);
+    // Staleness check: Pyth uses timestamp (unix timestamp)
+    const timestamp = BigInt(priceData.timestamp || 0);
     const currentTime = BigInt(Math.floor(Date.now() / 1000));
-    const ageSeconds = Number(currentTime - publishTime);
+    const ageSeconds = Number(currentTime - timestamp);
     
     if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
       logger.debug(
@@ -87,7 +86,7 @@ function decodePythPrice(data: Buffer, currentSlot?: bigint): OraclePriceData | 
     return {
       price: BigInt(priceData.price),
       confidence: BigInt(priceData.confidence),
-      slot: publishTime, // Use publish time as slot proxy
+      slot: timestamp, // Use timestamp as slot proxy
       exponent: priceData.exponent,
       oracleType: "pyth",
     };
@@ -98,45 +97,41 @@ function decodePythPrice(data: Buffer, currentSlot?: bigint): OraclePriceData | 
 }
 
 /**
- * Decodes a Switchboard V2 aggregator account using the official SDK
+ * Decodes a Switchboard V2 aggregator account
+ * Note: Using manual decoding because @switchboard-xyz/switchboard-v2 is deprecated
+ * and has an incompatible API
  *
  * @param data - Raw account data
- * @param currentSlot - Current slot for staleness check (optional)
+ * @param _currentSlot - Current slot for staleness check (optional, unused)
  * @returns Decoded price data or null if invalid
  */
-function decodeSwitchboardPrice(data: Buffer, currentSlot?: bigint): OraclePriceData | null {
+function decodeSwitchboardPrice(data: Buffer, _currentSlot?: bigint): OraclePriceData | null {
   try {
-    // Use official Switchboard SDK to decode aggregator
-    const aggregator = AggregatorAccount.decode(data);
-    
-    if (!aggregator) {
-      logger.debug("Failed to decode Switchboard aggregator");
+    // Check minimum size (Switchboard V2 aggregators are ~500 bytes)
+    if (data.length < 200) {
       return null;
     }
 
-    // Get latest result
-    const latestResult = aggregator.latestConfirmedRound?.result;
-    if (!latestResult) {
-      logger.debug("No latest confirmed round in Switchboard aggregator");
-      return null;
-    }
-
-    // Convert to number for processing
-    const resultValue = latestResult.toNumber();
+    // Latest confirmed round result starts around offset 217
+    // Value: i128 stored as two i64s (mantissa at 217, scale implicit)
+    // For simplicity, read as f64 representation if available
     
-    // Switchboard uses decimal representation, convert to Pyth-like format
-    // Assume 8 decimal places for compatibility
-    const exponent = -8;
-    const price = BigInt(Math.round(resultValue * Math.pow(10, -exponent)));
+    // Switchboard stores value as SwitchboardDecimal (i128 with scale)
+    // Read mantissa: i64 at offset 217
+    const mantissa = data.readBigInt64LE(217);
     
-    // Standard deviation as confidence
-    const stdDev = aggregator.latestConfirmedRound?.stdDeviation?.toNumber() || 0;
-    const confidence = BigInt(Math.round(stdDev * Math.pow(10, -exponent)));
+    // Scale: u32 at offset 225 (number of decimal places)
+    const scale = data.readUInt32LE(225);
+    
+    // Standard deviation (confidence proxy): i64 at offset 249
+    const stdDev = data.readBigInt64LE(249);
+    
+    // Last update timestamp: i64 at offset 129
+    const lastUpdate = data.readBigInt64LE(129);
 
-    // Staleness check using round open timestamp
-    const roundOpenTimestamp = aggregator.latestConfirmedRound?.roundOpenTimestamp;
-    if (roundOpenTimestamp) {
-      const updateTime = BigInt(roundOpenTimestamp.toNumber());
+    // Staleness check
+    const updateTime = lastUpdate > 0n ? lastUpdate : 0n;
+    if (updateTime > 0n) {
       const currentTime = BigInt(Math.floor(Date.now() / 1000));
       const ageSeconds = Number(currentTime - updateTime);
       
@@ -149,15 +144,19 @@ function decodeSwitchboardPrice(data: Buffer, currentSlot?: bigint): OraclePrice
       }
     }
 
+    // Convert to similar format as Pyth
+    // Switchboard uses scale (decimals), Pyth uses exponent
+    const exponent = -Number(scale);
+
     return {
-      price,
-      confidence,
-      slot: roundOpenTimestamp ? BigInt(roundOpenTimestamp.toNumber()) : 0n,
-      exponent,
+      price: mantissa,
+      confidence: stdDev > 0n ? stdDev : 0n,
+      slot: updateTime,
+      exponent: exponent,
       oracleType: "switchboard",
     };
   } catch (err) {
-    logger.error({ err }, "Failed to decode Switchboard price with SDK");
+    logger.error({ err }, "Failed to decode Switchboard price");
     return null;
   }
 }

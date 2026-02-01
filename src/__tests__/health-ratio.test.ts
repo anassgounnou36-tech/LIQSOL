@@ -16,8 +16,9 @@ describe("Health Ratio and Liquidation", () => {
             reservePubkey: PublicKey.unique(),
             availableAmount: 1000000n,
             loanToValue: 80, // 80% LTV
-            liquidationThreshold: 85,
+            liquidationThreshold: 85, // 85% liquidation threshold
             liquidationBonus: 500,
+            borrowFactor: 100, // 100% borrow factor
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
           },
@@ -28,8 +29,9 @@ describe("Health Ratio and Liquidation", () => {
             reservePubkey: PublicKey.unique(),
             availableAmount: 1000000n,
             loanToValue: 90, // 90% LTV
-            liquidationThreshold: 95,
+            liquidationThreshold: 95, // 95% liquidation threshold
             liquidationBonus: 500,
+            borrowFactor: 100, // 100% borrow factor
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 6,
           },
@@ -41,7 +43,7 @@ describe("Health Ratio and Liquidation", () => {
           "SOL",
           {
             price: 10000000000n, // $100 with exponent -8
-            confidence: 1000000n,
+            confidence: 1000000n, // $0.01 confidence
             slot: 1000000n,
             exponent: -8,
             oracleType: "pyth",
@@ -51,7 +53,7 @@ describe("Health Ratio and Liquidation", () => {
           "USDC",
           {
             price: 100000000n, // $1 with exponent -8
-            confidence: 10000n,
+            confidence: 10000n, // $0.0001 confidence
             slot: 1000000n,
             exponent: -8,
             oracleType: "pyth",
@@ -82,12 +84,12 @@ describe("Health Ratio and Liquidation", () => {
         prices,
       });
 
-      // Deposit: 1 SOL * $100 * 0.8 LTV = $80 weighted collateral
-      // Borrow: 50 USDC * $1 = $50
-      // Health ratio: $80 / $50 = 1.6
-      expect(result.collateralValue).toBeCloseTo(80, 1);
-      expect(result.borrowValue).toBeCloseTo(50, 1);
-      expect(result.healthRatio).toBeCloseTo(1.6, 1);
+      // Deposit: 1 SOL * ($100 - $0.01 confidence) * 0.85 liquidationThreshold = $84.9915 weighted collateral
+      // Borrow: 50 USDC * ($1 + $0.0001 confidence) * 1.0 borrowFactor = $50.005 weighted borrow
+      // Health ratio: $84.9915 / $50.005 ≈ 1.699
+      expect(result.collateralValue).toBeCloseTo(84.9915, 2);
+      expect(result.borrowValue).toBeCloseTo(50.005, 2);
+      expect(result.healthRatio).toBeCloseTo(1.699, 2);
     });
 
     it("should handle missing reserve gracefully", () => {
@@ -138,6 +140,7 @@ describe("Health Ratio and Liquidation", () => {
             loanToValue: 80,
             liquidationThreshold: 85,
             liquidationBonus: 500,
+            borrowFactor: 100,
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
           },
@@ -179,6 +182,7 @@ describe("Health Ratio and Liquidation", () => {
             loanToValue: 90,
             liquidationThreshold: 95,
             liquidationBonus: 500,
+            borrowFactor: 100,
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
           },
@@ -233,8 +237,9 @@ describe("Health Ratio and Liquidation", () => {
             reservePubkey: PublicKey.unique(),
             availableAmount: 1000000n,
             loanToValue: 50, // Low LTV
-            liquidationThreshold: 60,
+            liquidationThreshold: 60, // Low liquidation threshold
             liquidationBonus: 500,
+            borrowFactor: 100,
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
           },
@@ -247,6 +252,7 @@ describe("Health Ratio and Liquidation", () => {
             loanToValue: 90,
             liquidationThreshold: 95,
             liquidationBonus: 500,
+            borrowFactor: 100,
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 6,
           },
@@ -299,12 +305,12 @@ describe("Health Ratio and Liquidation", () => {
         prices,
       });
 
-      // Deposit: 0.5 SOL * $100 * 0.5 LTV = $25 weighted collateral
-      // Borrow: 100 USDC * $1 = $100
-      // Health ratio: $25 / $100 = 0.25 (underwater)
-      expect(result.collateralValue).toBeCloseTo(25, 1);
-      expect(result.borrowValue).toBeCloseTo(100, 1);
-      expect(result.healthRatio).toBeCloseTo(0.25, 1);
+      // Deposit: 0.5 SOL * ($100 - $0.01) * 0.6 liquidationThreshold = $29.997 weighted collateral
+      // Borrow: 100 USDC * ($1 + $0.0001) * 1.0 borrowFactor = $100.01 weighted borrow
+      // Health ratio: $29.997 / $100.01 ≈ 0.30 (underwater)
+      expect(result.collateralValue).toBeCloseTo(29.997, 1);
+      expect(result.borrowValue).toBeCloseTo(100.01, 1);
+      expect(result.healthRatio).toBeCloseTo(0.30, 1);
     });
   });
 
