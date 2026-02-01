@@ -1,6 +1,6 @@
 # PowerShell script to run snapshot:scored in WSL2
 # This script is designed for Windows users who face native binding issues
-# To avoid Windows file locks and slow npm installs on /mnt/c, we copy the repo to Linux filesystem
+# Runs directly from the current directory in WSL (no workspace copying needed)
 
 # Force Ubuntu distro for all WSL calls
 $Distro = "Ubuntu"
@@ -34,19 +34,19 @@ Write-Host "Ubuntu distro found." -ForegroundColor Green
 $winPath = (Get-Location).Path
 Write-Host "Current Windows path: $winPath" -ForegroundColor Gray
 
-$wslSource = (& wsl.exe -d $Distro -- wslpath -a "$winPath").Trim()
-if ([string]::IsNullOrWhiteSpace($wslSource)) {
+$wslPath = (& wsl.exe -d $Distro -- wslpath -a "$winPath").Trim()
+if ([string]::IsNullOrWhiteSpace($wslPath)) {
     Write-Host ""
-    Write-Host "ERROR: Failed to compute WSL source path." -ForegroundColor Red
+    Write-Host "ERROR: Failed to compute WSL path." -ForegroundColor Red
     exit 1
 }
 
-Write-Host "WSL source path: $wslSource" -ForegroundColor Gray
+Write-Host "WSL path: $wslPath" -ForegroundColor Gray
 
-# Check if .env exists in source
+# Check if .env exists
 Write-Host "Checking for .env file..." -ForegroundColor Cyan
-$envCheck = & wsl.exe -d $Distro -- bash -lc "test -f '$wslSource/.env' && echo 'exists' || echo 'missing'"
-if ($envCheck.Trim() -eq 'missing') {
+$envCheck = & wsl.exe -d $Distro -- test -f "$wslPath/.env"
+if ($LASTEXITCODE -ne 0) {
     Write-Host ""
     Write-Host "ERROR: .env file not found in repository root." -ForegroundColor Red
     Write-Host "The snapshot:scored command requires environment variables in .env file." -ForegroundColor Yellow
@@ -56,87 +56,31 @@ if ($envCheck.Trim() -eq 'missing') {
 Write-Host ".env file found." -ForegroundColor Green
 Write-Host ""
 
-# Ask Ubuntu for its HOME reliably (using printf to avoid newline issues)
-Write-Host "Setting up Linux workspace..." -ForegroundColor Cyan
-$linuxHome = (& wsl.exe -d $Distro -- bash -lc 'printf "%s" "$HOME"').Trim()
-if ([string]::IsNullOrWhiteSpace($linuxHome) -or -not $linuxHome.StartsWith("/home/")) {
-    Write-Host ""
-    Write-Host "ERROR: Failed to determine valid Linux home directory. Got: $linuxHome" -ForegroundColor Red
-    exit 1
-}
+# Check for obligations snapshot data
+Write-Host "Checking for data/obligations.jsonl..." -ForegroundColor Cyan
+$dataCheck = & wsl.exe -d $Distro -- test -f "$wslPath/data/obligations.jsonl"
 
-$workspace = "$linuxHome/liqsol-workspace"
-Write-Host "Linux workspace: $workspace" -ForegroundColor Gray
-
-# Create workspace directory inside Ubuntu
-Write-Host "Creating workspace directory..." -ForegroundColor Cyan
-& wsl.exe -d $Distro -- bash -lc "mkdir -p '$workspace'"
 if ($LASTEXITCODE -ne 0) {
+    Write-Host "data/obligations.jsonl not found." -ForegroundColor Yellow
+    Write-Host "You need to run 'npm run snapshot:obligations' first to generate obligation data." -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "ERROR: Failed to create workspace directory." -ForegroundColor Red
-    exit 1
-}
-
-# Copy repo using tar pipe (avoids rsync dependency)
-Write-Host "Copying repository to Linux filesystem..." -ForegroundColor Cyan
-& wsl.exe -d $Distro -- bash -lc "rm -rf '$workspace'/* && (cd '$wslSource' && tar -cf - --exclude=node_modules --exclude=.git --exclude=dist .) | (cd '$workspace' && tar -xf -)"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host ""
-    Write-Host "ERROR: Failed to copy repository to Linux filesystem." -ForegroundColor Red
-    exit 1
-}
-
-Write-Host "Repository copied successfully." -ForegroundColor Green
-
-# Copy .env file explicitly
-Write-Host "Copying .env file..." -ForegroundColor Cyan
-& wsl.exe -d $Distro -- bash -lc "cp -f '$wslSource/.env' '$workspace/.env'"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host ""
-    Write-Host "ERROR: Failed to copy .env file." -ForegroundColor Red
-    exit 1
-}
-
-Write-Host ".env copied." -ForegroundColor Green
-
-# Ensure data directory exists and check for obligations.jsonl
-Write-Host "Checking for data/obligations.jsonl in WSL workspace..." -ForegroundColor Cyan
-& wsl.exe -d $Distro -- bash -lc "mkdir -p '$workspace/data'"
-
-# Check if snapshot file exists in Windows repo first
-$dataCheckWindows = & wsl.exe -d $Distro -- bash -lc "test -f '$wslSource/data/obligations.jsonl' && echo 'exists' || echo 'missing'"
-if ($dataCheckWindows.Trim() -eq 'exists') {
-    Write-Host "Found data/obligations.jsonl in Windows repo, copying..." -ForegroundColor Cyan
-    & wsl.exe -d $Distro -- bash -lc "cp -f '$wslSource/data/obligations.jsonl' '$workspace/data/obligations.jsonl'"
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "data/obligations.jsonl copied successfully." -ForegroundColor Green
-    } else {
-        Write-Host "WARNING: Failed to copy data/obligations.jsonl" -ForegroundColor Yellow
-    }
-}
-
-# Check if obligations.jsonl exists in WSL workspace (after potential copy)
-$dataCheckWSL = & wsl.exe -d $Distro -- bash -lc "test -f '$workspace/data/obligations.jsonl' && echo 'exists' || echo 'missing'"
-
-if ($dataCheckWSL.Trim() -eq 'missing') {
-    Write-Host "data/obligations.jsonl not found in WSL workspace." -ForegroundColor Yellow
-    Write-Host "Running snapshot:obligations first to generate obligations data..." -ForegroundColor Cyan
+    Write-Host "Running snapshot:obligations now..." -ForegroundColor Cyan
     Write-Host ""
     
-    # Run snapshot inside WSL workspace to generate obligations.jsonl
-    & wsl.exe -d $Distro -- bash -lc "cd '$workspace' && npm install && npm run snapshot:obligations"
+    # Run snapshot to generate obligations.jsonl
+    & wsl.exe -d $Distro -- bash -c "cd '$wslPath' && npm install && npm run snapshot:obligations"
     $snapshotExitCode = $LASTEXITCODE
     
     if ($snapshotExitCode -ne 0) {
         Write-Host ""
-        Write-Host "ERROR: Snapshot failed in WSL." -ForegroundColor Red
+        Write-Host "ERROR: Snapshot failed." -ForegroundColor Red
         Write-Host "Cannot run snapshot:scored without obligation data." -ForegroundColor Red
         exit $snapshotExitCode
     }
     
     # Verify the snapshot file was created
-    $dataCheckAfterSnapshot = & wsl.exe -d $Distro -- bash -lc "test -f '$workspace/data/obligations.jsonl' && echo 'exists' || echo 'missing'"
-    if ($dataCheckAfterSnapshot.Trim() -eq 'exists') {
+    $dataCheckAfter = & wsl.exe -d $Distro -- test -f "$wslPath/data/obligations.jsonl"
+    if ($LASTEXITCODE -eq 0) {
         Write-Host "Snapshot completed successfully." -ForegroundColor Green
     } else {
         Write-Host ""
@@ -144,23 +88,23 @@ if ($dataCheckWSL.Trim() -eq 'missing') {
         exit 1
     }
 } else {
-    Write-Host "data/obligations.jsonl found in WSL workspace." -ForegroundColor Green
+    Write-Host "data/obligations.jsonl found." -ForegroundColor Green
 }
 Write-Host ""
 
-# Install dependencies and run snapshot:scored inside workspace
-Write-Host "Installing dependencies and running snapshot:scored..." -ForegroundColor Cyan
+# Install dependencies and run snapshot:scored
+Write-Host "Running snapshot:scored in WSL..." -ForegroundColor Cyan
 Write-Host ""
 
-& wsl.exe -d $Distro -- bash -lc "cd '$workspace' && npm install && npm run snapshot:scored"
+& wsl.exe -d $Distro -- bash -c "cd '$wslPath' && npm install && npm run snapshot:scored"
 $scoredExitCode = $LASTEXITCODE
 
 if ($scoredExitCode -eq 0) {
     Write-Host ""
-    Write-Host "SUCCESS: Snapshot scoring completed successfully in WSL." -ForegroundColor Green
+    Write-Host "SUCCESS: Snapshot scoring completed successfully." -ForegroundColor Green
     exit 0
 } else {
     Write-Host ""
-    Write-Host "ERROR: Snapshot scoring failed in WSL." -ForegroundColor Red
+    Write-Host "ERROR: Snapshot scoring failed." -ForegroundColor Red
     exit $scoredExitCode
 }
