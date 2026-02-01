@@ -114,6 +114,7 @@ export function decodeReserve(
     loanToValueRatio: Number(decoded.config.loanToValuePct),
     liquidationThreshold: Number(decoded.config.liquidationThresholdPct),
     liquidationBonus: Number(decoded.config.maxLiquidationBonusBps),
+    borrowFactor: Number(decoded.config.borrowFactorPct || 100), // Default to 100% if not set
     totalBorrowed: toBigInt(decoded.liquidity.borrowedAmountSf).toString(),
     availableLiquidity: toBigInt(decoded.liquidity.availableAmount).toString(),
   };

@@ -23,6 +23,8 @@ export interface DecodedReserve {
   liquidationThreshold: number;
   /** Liquidation bonus in basis points */
   liquidationBonus: number;
+  /** Borrow factor as a percentage (0-100+) for risk-adjusted debt valuation */
+  borrowFactor: number;
   /** Total amount borrowed (as string to avoid precision loss) */
   totalBorrowed: string;
   /** Available liquidity for borrowing (as string to avoid precision loss) */

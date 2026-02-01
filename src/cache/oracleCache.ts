@@ -2,6 +2,28 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { logger } from "../observability/logger.js";
 import type { ReserveCache } from "./reserveCache.js";
+import { parsePriceData } from "@pythnetwork/client";
+import { AggregatorAccount } from "@switchboard-xyz/switchboard-v2";
+
+/**
+ * Known stablecoin mints for price clamping
+ */
+const STABLECOIN_MINTS = new Set([
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
+  "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", // PYUSD
+]);
+
+/**
+ * Staleness threshold in seconds (30 seconds)
+ */
+const STALENESS_THRESHOLD_SECONDS = 30;
+
+/**
+ * Stablecoin price clamp range
+ */
+const STABLECOIN_MIN_PRICE = 0.99;
+const STABLECOIN_MAX_PRICE = 1.01;
 
 /**
  * Oracle price data with confidence and freshness
@@ -25,131 +47,151 @@ export interface OraclePriceData {
 export type OracleCache = Map<string, OraclePriceData>;
 
 /**
- * Switchboard V2 aggregator discriminator
- * Reference: https://github.com/switchboard-xyz/switchboard-v2
- */
-const SWITCHBOARD_V2_DISCRIMINATOR = Buffer.from([
-  0x21, 0x7f, 0xc8, 0xf4, 0x64, 0x00, 0x00, 0x00,
-]);
-
-/**
- * Decodes a Pyth price account
- * Based on Pyth V2 on-chain data structure
+ * Decodes a Pyth price account using the official Pyth SDK
  *
  * @param data - Raw account data
+ * @param currentSlot - Current slot for staleness check (optional)
  * @returns Decoded price data or null if invalid
  */
-function decodePythPrice(data: Buffer): OraclePriceData | null {
+function decodePythPrice(data: Buffer, currentSlot?: bigint): OraclePriceData | null {
   try {
-    // Check minimum size (minimum ~3312 bytes for Pyth V2)
-    if (data.length < 300) {
+    // Use official Pyth SDK to parse price data
+    const priceData = parsePriceData(data);
+    
+    // Check if price is valid (status = trading)
+    if (priceData.status !== 1) {
+      logger.debug({ status: priceData.status }, "Pyth price status not trading");
       return null;
     }
 
-    // Verify discriminator (magic + version + type)
-    // Magic: 0xa1b2c3d4 (4 bytes at offset 0)
-    const magic = data.readUInt32LE(0);
-    if (magic !== 0xa1b2c3d4) {
+    // Check for valid price
+    if (!priceData.price || !priceData.confidence) {
+      logger.debug("Pyth price or confidence is null");
       return null;
     }
 
-    // Type: u32 at offset 8 (should be 3 for price account)
-    const accountType = data.readUInt32LE(8);
-    if (accountType !== 3) {
+    // Staleness check: Pyth uses publish time (unix timestamp)
+    // Convert to approximate slot for compatibility
+    const publishTime = BigInt(priceData.publishTime || 0);
+    const currentTime = BigInt(Math.floor(Date.now() / 1000));
+    const ageSeconds = Number(currentTime - publishTime);
+    
+    if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
+      logger.debug(
+        { ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+        "Pyth price is stale, skipping"
+      );
       return null;
-    }
-
-    // Price aggregate data starts at offset 208
-    // Price: i64 at offset 208
-    const price = data.readBigInt64LE(208);
-    
-    // Confidence: u64 at offset 216
-    const confidence = data.readBigUInt64LE(216);
-    
-    // Status: u32 at offset 224 (1 = trading, 0 = unknown)
-    const status = data.readUInt32LE(224);
-    
-    // Exponent: i32 at offset 20
-    const exponent = data.readInt32LE(20);
-
-    // Slot: u64 at offset 104
-    // Note: Pyth stores publish_time (unix timestamp) here
-    // We convert to approximate slot for freshness checks
-    const timestamp = data.readBigInt64LE(104);
-
-    if (status !== 1) {
-      logger.debug({ status }, "Pyth price status not trading");
     }
 
     return {
-      price: price,
-      confidence: confidence,
-      slot: timestamp > 0n ? timestamp : 0n,
-      exponent: exponent,
+      price: BigInt(priceData.price),
+      confidence: BigInt(priceData.confidence),
+      slot: publishTime, // Use publish time as slot proxy
+      exponent: priceData.exponent,
       oracleType: "pyth",
     };
   } catch (err) {
-    logger.error({ err }, "Failed to decode Pyth price");
+    logger.error({ err }, "Failed to decode Pyth price with SDK");
     return null;
   }
 }
 
 /**
- * Decodes a Switchboard V2 aggregator account
- * Based on Switchboard V2 on-chain data structure
+ * Decodes a Switchboard V2 aggregator account using the official SDK
  *
  * @param data - Raw account data
+ * @param currentSlot - Current slot for staleness check (optional)
  * @returns Decoded price data or null if invalid
  */
-function decodeSwitchboardPrice(data: Buffer): OraclePriceData | null {
+function decodeSwitchboardPrice(data: Buffer, currentSlot?: bigint): OraclePriceData | null {
   try {
-    // Check minimum size (Switchboard V2 aggregators are ~500 bytes)
-    if (data.length < 200) {
+    // Use official Switchboard SDK to decode aggregator
+    const aggregator = AggregatorAccount.decode(data);
+    
+    if (!aggregator) {
+      logger.debug("Failed to decode Switchboard aggregator");
       return null;
     }
 
-    // Verify discriminator at offset 0
-    // Note: Some Switchboard accounts may not have the standard discriminator
-    // We attempt to decode regardless and validate based on data structure
-    const discriminator = data.subarray(0, 8);
-    const hasValidDiscriminator = discriminator.equals(SWITCHBOARD_V2_DISCRIMINATOR);
-    
-    if (!hasValidDiscriminator) {
-      logger.debug("Switchboard discriminator mismatch, attempting best-effort decode");
+    // Get latest result
+    const latestResult = aggregator.latestConfirmedRound?.result;
+    if (!latestResult) {
+      logger.debug("No latest confirmed round in Switchboard aggregator");
+      return null;
     }
 
-    // Latest confirmed round result starts around offset 217
-    // Value: i128 stored as two i64s (mantissa at 217, scale implicit)
-    // For simplicity, read as f64 representation if available
+    // Convert to number for processing
+    const resultValue = latestResult.toNumber();
     
-    // Switchboard stores value as SwitchboardDecimal (i128 with scale)
-    // Read mantissa: i64 at offset 217
-    const mantissa = data.readBigInt64LE(217);
+    // Switchboard uses decimal representation, convert to Pyth-like format
+    // Assume 8 decimal places for compatibility
+    const exponent = -8;
+    const price = BigInt(Math.round(resultValue * Math.pow(10, -exponent)));
     
-    // Scale: u32 at offset 225 (number of decimal places)
-    const scale = data.readUInt32LE(225);
-    
-    // Standard deviation (confidence proxy): i64 at offset 249
-    const stdDev = data.readBigInt64LE(249);
-    
-    // Last update timestamp: i64 at offset 129
-    const lastUpdate = data.readBigInt64LE(129);
+    // Standard deviation as confidence
+    const stdDev = aggregator.latestConfirmedRound?.stdDeviation?.toNumber() || 0;
+    const confidence = BigInt(Math.round(stdDev * Math.pow(10, -exponent)));
 
-    // Convert to similar format as Pyth
-    // Switchboard uses scale (decimals), Pyth uses exponent
-    const exponent = -scale;
+    // Staleness check using round open timestamp
+    const roundOpenTimestamp = aggregator.latestConfirmedRound?.roundOpenTimestamp;
+    if (roundOpenTimestamp) {
+      const updateTime = BigInt(roundOpenTimestamp.toNumber());
+      const currentTime = BigInt(Math.floor(Date.now() / 1000));
+      const ageSeconds = Number(currentTime - updateTime);
+      
+      if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
+        logger.debug(
+          { ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+          "Switchboard price is stale, skipping"
+        );
+        return null;
+      }
+    }
 
     return {
-      price: mantissa,
-      confidence: stdDev > 0n ? stdDev : 0n,
-      slot: lastUpdate > 0n ? lastUpdate : 0n,
-      exponent: exponent,
+      price,
+      confidence,
+      slot: roundOpenTimestamp ? BigInt(roundOpenTimestamp.toNumber()) : 0n,
+      exponent,
       oracleType: "switchboard",
     };
   } catch (err) {
-    logger.error({ err }, "Failed to decode Switchboard price");
+    logger.error({ err }, "Failed to decode Switchboard price with SDK");
     return null;
   }
+}
+
+/**
+ * Applies stablecoin price clamping to keep prices within expected range
+ * 
+ * @param price - Raw price
+ * @param exponent - Price exponent
+ * @param mint - Token mint address
+ * @returns Clamped price
+ */
+function applyStablecoinClamp(price: bigint, exponent: number, mint: string): bigint {
+  if (!STABLECOIN_MINTS.has(mint)) {
+    return price;
+  }
+
+  // Convert price to USD
+  const priceUSD = Number(price) * Math.pow(10, exponent);
+  
+  // Clamp to [0.99, 1.01]
+  const clampedUSD = Math.max(STABLECOIN_MIN_PRICE, Math.min(STABLECOIN_MAX_PRICE, priceUSD));
+  
+  // Convert back to scaled price
+  const clampedPrice = BigInt(Math.round(clampedUSD * Math.pow(10, -exponent)));
+  
+  if (clampedPrice !== price) {
+    logger.debug(
+      { mint, original: priceUSD, clamped: clampedUSD },
+      "Applied stablecoin price clamp"
+    );
+  }
+  
+  return clampedPrice;
 }
 
 /**
@@ -254,6 +296,10 @@ export async function loadOracles(
       // Store for each mint that uses this oracle
       // Note: If a mint has multiple oracles, the last one wins
       for (const mint of mints) {
+        // Apply stablecoin price clamping
+        const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
+        const adjustedPriceData = { ...priceData, price: clampedPrice };
+        
         const existing = cache.get(mint);
         if (existing) {
           logger.debug(
@@ -261,12 +307,12 @@ export async function loadOracles(
             "Multiple oracles for mint, using Pyth"
           );
         }
-        cache.set(mint, priceData);
+        cache.set(mint, adjustedPriceData);
         logger.debug(
           {
             oracle: pubkeyStr,
             mint,
-            price: priceData.price.toString(),
+            price: adjustedPriceData.price.toString(),
             type: "pyth",
           },
           "Cached Pyth oracle"
@@ -281,6 +327,10 @@ export async function loadOracles(
       switchboardCount++;
       // Store for each mint that uses this oracle
       for (const mint of mints) {
+        // Apply stablecoin price clamping
+        const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
+        const adjustedPriceData = { ...priceData, price: clampedPrice };
+        
         const existing = cache.get(mint);
         if (existing) {
           logger.debug(
@@ -288,12 +338,12 @@ export async function loadOracles(
             "Multiple oracles for mint, using Switchboard"
           );
         }
-        cache.set(mint, priceData);
+        cache.set(mint, adjustedPriceData);
         logger.debug(
           {
             oracle: pubkeyStr,
             mint,
-            price: priceData.price.toString(),
+            price: adjustedPriceData.price.toString(),
             type: "switchboard",
           },
           "Cached Switchboard oracle"

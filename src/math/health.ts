@@ -69,16 +69,63 @@ function priceToUSD(oraclePrice: OraclePriceData): number {
 }
 
 /**
+ * Converts oracle price with confidence adjustment for collateral valuation
+ * Uses conservative pricing: price - confidence
+ * @param oraclePrice - Oracle price data
+ * @returns Adjusted USD price per token
+ */
+function priceToUSDForCollateral(oraclePrice: OraclePriceData): number {
+  try {
+    const price = Number(oraclePrice.price);
+    const confidence = Number(oraclePrice.confidence);
+    const exponentScale = Math.pow(10, oraclePrice.exponent);
+    
+    // Conservative pricing for collateral: price - confidence
+    const adjustedPrice = Math.max(0, price - confidence);
+    const usdPerToken = adjustedPrice * exponentScale;
+    
+    return usdPerToken;
+  } catch (err) {
+    logger.warn({ oraclePrice, err }, "Failed to convert oracle price with confidence for collateral");
+    return 0;
+  }
+}
+
+/**
+ * Converts oracle price with confidence adjustment for borrow valuation
+ * Uses conservative pricing: price + confidence
+ * @param oraclePrice - Oracle price data
+ * @returns Adjusted USD price per token
+ */
+function priceToUSDForBorrow(oraclePrice: OraclePriceData): number {
+  try {
+    const price = Number(oraclePrice.price);
+    const confidence = Number(oraclePrice.confidence);
+    const exponentScale = Math.pow(10, oraclePrice.exponent);
+    
+    // Conservative pricing for borrows: price + confidence
+    const adjustedPrice = price + confidence;
+    const usdPerToken = adjustedPrice * exponentScale;
+    
+    return usdPerToken;
+  } catch (err) {
+    logger.warn({ oraclePrice, err }, "Failed to convert oracle price with confidence for borrow");
+    return 0;
+  }
+}
+
+/**
  * Computes health ratio and position values for a Kamino obligation
  * 
- * Logic:
- * - For each deposit: compute USD collateral value using mint decimals from reserves
- *   and uiPrice from oracles; weight by LTV (loan-to-value ratio).
- * - For each borrow: compute USD borrow value using mint decimals and uiPrice from oracles.
- *   Note: cumulativeBorrowRate is not currently available in reserve cache, so we use
- *   the borrowed amount directly as stored in the obligation.
- * - Health ratio = collateralValueWeighted / borrowValue (clamp to [0, 2])
+ * Kamino Logic (aligned with production risk engine):
+ * - For each deposit: compute USD collateral value using confidence-adjusted price
+ *   (price - confidence); weight by liquidationThreshold (not LTV).
+ * - For each borrow: compute USD borrow value using confidence-adjusted price
+ *   (price + confidence); weight by borrowFactor.
+ * - Health ratio = (Σ deposits_i * priceAdjusted_i * liquidationThresholdPct_i) / 
+ *                  (Σ borrows_j * priceAdjusted_j * borrowFactor_j)
  * - Handle missing prices/reserves gracefully (skip and log)
+ * - If both numerator and denominator are 0, clamp healthRatio to 2.0
  * - High-precision math using bigint + scale/exponent for intermediate calculations
  * - Avoid NaN with safe division
  * 
@@ -118,13 +165,13 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     // Convert deposited amount to UI units (still as bigint for precision)
     const depositedAmountRaw = toUIAmount(deposit.depositedAmount, decimals);
     
-    // Convert to USD value
-    const usdPerToken = priceToUSD(price);
+    // Convert to USD value using confidence-adjusted price (conservative for collateral)
+    const usdPerToken = priceToUSDForCollateral(price);
     const depositValueUSD = Number(depositedAmountRaw) * usdPerToken / Math.pow(10, decimals);
     
-    // Weight by LTV (loan-to-value ratio as percentage 0-100)
-    const ltvWeight = reserve.loanToValue / 100;
-    const weightedDepositUSD = depositValueUSD * ltvWeight;
+    // Weight by liquidationThreshold (as percentage 0-100), converting to decimal
+    const liquidationThresholdWeight = reserve.liquidationThreshold / 100;
+    const weightedDepositUSD = depositValueUSD * liquidationThresholdWeight;
     
     totalCollateralWeightedUSD += weightedDepositUSD;
     
@@ -134,7 +181,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
         depositedAmount: deposit.depositedAmount,
         usdPerToken,
         depositValueUSD,
-        ltvWeight,
+        liquidationThresholdWeight,
         weightedDepositUSD,
       },
       "Processed deposit collateral"
@@ -168,14 +215,15 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     // Convert borrowed amount to UI units
     const borrowedAmountRaw = toUIAmount(borrow.borrowedAmount, decimals);
     
-    // Convert to USD value
-    // Note: In a full implementation, we should multiply by cumulativeBorrowRate
-    // to account for accrued interest. However, this is not currently available
-    // in ReserveCacheEntry, so we use the borrowed amount directly.
-    const usdPerToken = priceToUSD(price);
+    // Convert to USD value using confidence-adjusted price (conservative for borrows)
+    const usdPerToken = priceToUSDForBorrow(price);
     const borrowValueUSD = Number(borrowedAmountRaw) * usdPerToken / Math.pow(10, decimals);
     
-    totalBorrowUSD += borrowValueUSD;
+    // Weight by borrowFactor (as percentage, typically 100+), converting to decimal
+    const borrowFactorWeight = reserve.borrowFactor / 100;
+    const weightedBorrowUSD = borrowValueUSD * borrowFactorWeight;
+    
+    totalBorrowUSD += weightedBorrowUSD;
     
     logger.debug(
       {
@@ -183,6 +231,8 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
         borrowedAmount: borrow.borrowedAmount,
         usdPerToken,
         borrowValueUSD,
+        borrowFactorWeight,
+        weightedBorrowUSD,
       },
       "Processed borrow"
     );
@@ -197,7 +247,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     // No collateral with borrows means zero health (liquidatable)
     healthRatio = 0;
   } else {
-    // Normal case: collateral / borrows
+    // Normal case: weighted collateral / weighted borrows
     healthRatio = totalCollateralWeightedUSD / totalBorrowUSD;
   }
   
