@@ -2,6 +2,22 @@ import { logger } from "../observability/logger.js";
 import type { ReserveCacheEntry } from "../cache/reserveCache.js";
 import type { OraclePriceData } from "../cache/oracleCache.js";
 import type { ObligationDeposit, ObligationBorrow } from "../kamino/types.js";
+import { divBigintToNumber } from "../utils/bn.js";
+
+/**
+ * Known stablecoin mints for price clamping
+ */
+const STABLECOIN_MINTS = new Set([
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
+  "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", // PYUSD
+]);
+
+/**
+ * Tolerance for clamping tiny negative floating-point artifacts to zero.
+ * These artifacts can occur from precision parameter (18) in bigint division.
+ */
+const FLOATING_POINT_TOLERANCE = 1e-18;
 
 /**
  * Input for health ratio computation
@@ -25,62 +41,83 @@ export interface HealthRatioResult {
   healthRatio: number;
   /** Total borrow value in USD */
   borrowValue: number;
-  /** Total collateral value in USD (weighted by LTV) */
+  /** Total collateral value in USD (weighted by liquidationThreshold) */
   collateralValue: number;
 }
 
 /**
- * Converts a raw token amount to UI amount using decimals
- * @param rawAmount - Raw token amount as string
- * @param decimals - Token decimals
- * @returns UI amount as bigint (scaled to avoid precision loss)
+ * Check if a mint is a known stablecoin
  */
-function toUIAmount(rawAmount: string, decimals: number): bigint {
-  try {
-    const raw = BigInt(rawAmount);
-    return raw;
-  } catch (err) {
-    logger.warn({ rawAmount, decimals, err }, "Failed to convert raw amount to bigint");
-    return 0n;
-  }
+function isStableMint(mint: string): boolean {
+  return STABLECOIN_MINTS.has(mint);
 }
 
 /**
- * Converts oracle price to USD price per token (UI units)
- * @param oraclePrice - Oracle price data
- * @returns USD price per token (as number for UI)
+ * Convert mantissa to UI price using exponent
+ * Returns null if result is NaN or Infinity
  */
-function priceToUSD(oraclePrice: OraclePriceData): number {
-  try {
-    // Oracle price is scaled by exponent (e.g., -8 for Pyth means divide by 10^8)
-    // Convert: price * 10^exponent gives USD per token
-    
-    const priceValue = Number(oraclePrice.price);
-    const exponentScale = Math.pow(10, oraclePrice.exponent);
-    
-    // USD per token = price * 10^exponent
-    const usdPerToken = priceValue * exponentScale;
-    
-    return usdPerToken;
-  } catch (err) {
-    logger.warn({ oraclePrice, err }, "Failed to convert oracle price to USD");
-    return 0;
+function uiFromMantissa(price: bigint, exponent: number): number | null {
+  const result = Number(price) * Math.pow(10, exponent);
+  if (!isFinite(result)) {
+    return null;
   }
+  return result;
+}
+
+/**
+ * Apply confidence adjustment and stablecoin clamping
+ * Returns null if inputs are not finite or result is invalid
+ * 
+ * @param mint - Token mint address
+ * @param basePrice - Base price in UI units
+ * @param confidence - Confidence in UI units
+ * @param side - Whether this is for collateral or borrow valuation
+ * @returns Adjusted price or null if invalid
+ */
+function adjustedUiPrice(
+  mint: string,
+  basePrice: number,
+  confidence: number,
+  side: "collateral" | "borrow"
+): number | null {
+  // Check for invalid inputs
+  if (!isFinite(basePrice) || !isFinite(confidence)) {
+    return null;
+  }
+  
+  // Apply confidence adjustment
+  const adjustedPrice = side === "collateral" 
+    ? Math.max(0, basePrice - confidence)
+    : basePrice + confidence;
+  
+  // Check for invalid result
+  if (!isFinite(adjustedPrice)) {
+    return null;
+  }
+  
+  // Apply stablecoin clamp [0.99, 1.01]
+  if (isStableMint(mint)) {
+    return Math.min(1.01, Math.max(0.99, adjustedPrice));
+  }
+  
+  return adjustedPrice;
 }
 
 /**
  * Computes health ratio and position values for a Kamino obligation
  * 
- * Logic:
- * - For each deposit: compute USD collateral value using mint decimals from reserves
- *   and uiPrice from oracles; weight by LTV (loan-to-value ratio).
- * - For each borrow: compute USD borrow value using mint decimals and uiPrice from oracles.
- *   Note: cumulativeBorrowRate is not currently available in reserve cache, so we use
- *   the borrowed amount directly as stored in the obligation.
- * - Health ratio = collateralValueWeighted / borrowValue (clamp to [0, 2])
+ * Kamino Logic (aligned with production risk engine):
+ * - For each deposit: compute USD collateral value using confidence-adjusted price
+ *   (price - confidence); weight by liquidationThreshold (not LTV).
+ * - For each borrow: compute USD borrow value using confidence-adjusted price
+ *   (price + confidence); weight by borrowFactor.
+ * - Health ratio = (Σ deposits_i * priceAdjusted_i * liquidationThresholdPct_i) / 
+ *                  (Σ borrows_j * priceAdjusted_j * borrowFactor_j)
  * - Handle missing prices/reserves gracefully (skip and log)
- * - High-precision math using bigint + scale/exponent for intermediate calculations
- * - Avoid NaN with safe division
+ * - Apply staleness guard: skip if slot/timestamp is 0
+ * - Apply stablecoin clamping to prices
+ * - If both numerator and denominator are 0, clamp healthRatio to 2.0
+ * - Clamp final ratio to [0, 2]
  * 
  * @param input - Health ratio computation input
  * @returns Health ratio result with weighted collateral, borrow value, and ratio
@@ -88,134 +125,242 @@ function priceToUSD(oraclePrice: OraclePriceData): number {
 export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
   const { deposits, borrows, reserves, prices } = input;
   
-  let totalCollateralWeightedUSD = 0;
-  let totalBorrowUSD = 0;
+  let collateralUSD = 0;
+  let borrowUSD = 0;
   
   // Process deposits (collateral)
   for (const deposit of deposits) {
     const reserve = reserves.get(deposit.mint);
-    const price = prices.get(deposit.mint);
+    const oraclePrice = prices.get(deposit.mint);
     
     if (!reserve) {
       logger.debug(
         { mint: deposit.mint, reserve: deposit.reserve },
-        "Reserve not found for deposit, skipping collateral calculation"
+        "Reserve not found for deposit, skipping"
       );
       continue;
     }
     
-    if (!price) {
+    if (!oraclePrice) {
       logger.debug(
         { mint: deposit.mint, reserve: deposit.reserve },
-        "Price not found for deposit, skipping collateral calculation"
+        "Price not found for deposit, skipping"
       );
       continue;
     }
     
-    // Get reserve decimals from the liquidity mint
-    const decimals = reserve.liquidityDecimals;
+    // Staleness guard: skip if timestamp/slot is zero
+    if (Number(oraclePrice.slot) <= 0) {
+      logger.debug(
+        { mint: deposit.mint, slot: oraclePrice.slot.toString() },
+        "Stale price (slot=0) for deposit, skipping"
+      );
+      continue;
+    }
     
-    // Convert deposited amount to UI units (still as bigint for precision)
-    const depositedAmountRaw = toUIAmount(deposit.depositedAmount, decimals);
+    // Convert price and confidence to UI units
+    const baseUi = uiFromMantissa(oraclePrice.price, oraclePrice.exponent);
+    const confUi = uiFromMantissa(oraclePrice.confidence, oraclePrice.exponent);
     
-    // Convert to USD value
-    const usdPerToken = priceToUSD(price);
-    const depositValueUSD = Number(depositedAmountRaw) * usdPerToken / Math.pow(10, decimals);
+    if (baseUi === null || confUi === null) {
+      logger.debug(
+        { mint: deposit.mint, baseUi, confUi },
+        "Invalid price conversion for deposit, skipping"
+      );
+      continue;
+    }
     
-    // Weight by LTV (loan-to-value ratio as percentage 0-100)
-    const ltvWeight = reserve.loanToValue / 100;
-    const weightedDepositUSD = depositValueUSD * ltvWeight;
+    // Apply confidence adjustment and stablecoin clamping for collateral
+    const priceUi = adjustedUiPrice(deposit.mint, baseUi, confUi, "collateral");
     
-    totalCollateralWeightedUSD += weightedDepositUSD;
+    if (priceUi === null) {
+      logger.debug(
+        { mint: deposit.mint, baseUi, confUi },
+        "Invalid adjusted price for deposit, skipping"
+      );
+      continue;
+    }
+    
+    // Convert amount to UI units using collateralDecimals (deposits are in collateral token)
+    const amountUi = Number(BigInt(deposit.depositedAmount)) / Math.pow(10, reserve.collateralDecimals);
+    
+    if (!isFinite(amountUi)) {
+      logger.debug(
+        { mint: deposit.mint, depositedAmount: deposit.depositedAmount },
+        "Invalid amount for deposit, skipping"
+      );
+      continue;
+    }
+    
+    // Apply liquidationThreshold weight (convert percentage to decimal)
+    const weight = reserve.liquidationThreshold / 100;
+    
+    collateralUSD += amountUi * priceUi * weight;
     
     logger.debug(
       {
         mint: deposit.mint,
-        depositedAmount: deposit.depositedAmount,
-        usdPerToken,
-        depositValueUSD,
-        ltvWeight,
-        weightedDepositUSD,
+        amount: amountUi,
+        price: priceUi,
+        weight,
+        value: amountUi * priceUi * weight,
       },
-      "Processed deposit collateral"
+      "Processed deposit"
     );
   }
   
   // Process borrows
   for (const borrow of borrows) {
     const reserve = reserves.get(borrow.mint);
-    const price = prices.get(borrow.mint);
+    const oraclePrice = prices.get(borrow.mint);
     
     if (!reserve) {
       logger.debug(
         { mint: borrow.mint, reserve: borrow.reserve },
-        "Reserve not found for borrow, skipping borrow calculation"
+        "Reserve not found for borrow, skipping"
       );
       continue;
     }
     
-    if (!price) {
+    if (!oraclePrice) {
       logger.debug(
         { mint: borrow.mint, reserve: borrow.reserve },
-        "Price not found for borrow, skipping borrow calculation"
+        "Price not found for borrow, skipping"
       );
       continue;
     }
     
-    // Get reserve decimals from the liquidity mint
-    const decimals = reserve.liquidityDecimals;
+    // Staleness guard: skip if timestamp/slot is zero
+    if (Number(oraclePrice.slot) <= 0) {
+      logger.debug(
+        { mint: borrow.mint, slot: oraclePrice.slot.toString() },
+        "Stale price (slot=0) for borrow, skipping"
+      );
+      continue;
+    }
     
-    // Convert borrowed amount to UI units
-    const borrowedAmountRaw = toUIAmount(borrow.borrowedAmount, decimals);
+    // Convert price and confidence to UI units
+    const baseUi = uiFromMantissa(oraclePrice.price, oraclePrice.exponent);
+    const confUi = uiFromMantissa(oraclePrice.confidence, oraclePrice.exponent);
     
-    // Convert to USD value
-    // Note: In a full implementation, we should multiply by cumulativeBorrowRate
-    // to account for accrued interest. However, this is not currently available
-    // in ReserveCacheEntry, so we use the borrowed amount directly.
-    const usdPerToken = priceToUSD(price);
-    const borrowValueUSD = Number(borrowedAmountRaw) * usdPerToken / Math.pow(10, decimals);
+    if (baseUi === null || confUi === null) {
+      logger.debug(
+        { mint: borrow.mint, baseUi, confUi },
+        "Invalid price conversion for borrow, skipping"
+      );
+      continue;
+    }
     
-    totalBorrowUSD += borrowValueUSD;
+    // Apply confidence adjustment and stablecoin clamping for borrow
+    const priceUi = adjustedUiPrice(borrow.mint, baseUi, confUi, "borrow");
+    
+    if (priceUi === null) {
+      logger.debug(
+        { mint: borrow.mint, baseUi, confUi },
+        "Invalid adjusted price for borrow, skipping"
+      );
+      continue;
+    }
+    
+    // Convert borrowedAmountSf (scaled fraction) to actual token amount
+    // borrowedAmountSf needs to be divided by cumulativeBorrowRateBsf
+    // Use safe bigint division to avoid precision loss from Number(BigInt)
+    const borrowedAmountSf = BigInt(borrow.borrowedAmount);
+    const cumulativeBorrowRateBsf = BigInt(reserve.cumulativeBorrowRate);
+    
+    if (cumulativeBorrowRateBsf === 0n) {
+      logger.warn(
+        { mint: borrow.mint, reserve: borrow.reserve },
+        "Cumulative borrow rate is zero, skipping borrow"
+      );
+      continue;
+    }
+    
+    // Convert SF to token amount using safe bigint division
+    // tokenAmount = borrowedAmountSf / cumulativeBorrowRateBsf
+    // This preserves precision by keeping everything in bigint until the final conversion
+    const tokenAmount = divBigintToNumber(borrowedAmountSf, cumulativeBorrowRateBsf, 18);
+    
+    // Check for invalid result
+    if (!isFinite(tokenAmount)) {
+      logger.warn(
+        { 
+          mint: borrow.mint, 
+          borrowedAmountSf: borrow.borrowedAmount,
+          cumulativeBorrowRate: reserve.cumulativeBorrowRate,
+          tokenAmount 
+        },
+        "Invalid token amount after SF conversion (not finite), skipping"
+      );
+      continue;
+    }
+    
+    // Clamp tiny negative floating point artifacts to zero
+    const tokenAmountClamped = tokenAmount < 0 && tokenAmount > -FLOATING_POINT_TOLERANCE ? 0 : tokenAmount;
+    
+    if (tokenAmountClamped < 0) {
+      logger.warn(
+        { 
+          mint: borrow.mint, 
+          tokenAmount: tokenAmountClamped 
+        },
+        "Negative token amount after SF conversion, skipping"
+      );
+      continue;
+    }
+    
+    // Convert to UI units using liquidityDecimals (borrows are in liquidity token)
+    const amountUi = tokenAmountClamped / Math.pow(10, reserve.liquidityDecimals);
+    
+    if (!isFinite(amountUi)) {
+      logger.debug(
+        { mint: borrow.mint, tokenAmount: tokenAmountClamped, amountUi },
+        "Invalid borrow amount after decimal conversion, skipping"
+      );
+      continue;
+    }
+    
+    // Apply borrowFactor (percentage, convert to decimal)
+    // borrowFactor defaults to 100 (meaning 1.0x), so divide by 100
+    const borrowFactorPct = reserve.borrowFactor ?? 100;
+    const borrowFactor = borrowFactorPct / 100;
+    
+    borrowUSD += amountUi * priceUi * borrowFactor;
     
     logger.debug(
       {
         mint: borrow.mint,
-        borrowedAmount: borrow.borrowedAmount,
-        usdPerToken,
-        borrowValueUSD,
+        amount: amountUi,
+        price: priceUi,
+        borrowFactor,
+        value: amountUi * priceUi * borrowFactor,
       },
       "Processed borrow"
     );
   }
   
-  // Compute health ratio with safe division
-  let healthRatio: number;
-  if (totalBorrowUSD === 0) {
-    // No borrows means infinite health (healthy position)
-    healthRatio = 2; // Clamp to max
-  } else if (totalCollateralWeightedUSD === 0) {
-    // No collateral with borrows means zero health (liquidatable)
-    healthRatio = 0;
+  // Calculate health ratio
+  let ratio: number;
+  if (borrowUSD <= 0 && collateralUSD <= 0) {
+    // Empty position
+    ratio = 2.0;
+  } else if (borrowUSD <= 0) {
+    // No debt, maximum health
+    ratio = 2.0;
+  } else if (collateralUSD <= 0) {
+    // No collateral, unhealthy
+    ratio = 0.0;
   } else {
-    // Normal case: collateral / borrows
-    healthRatio = totalCollateralWeightedUSD / totalBorrowUSD;
+    // Normal calculation
+    ratio = collateralUSD / borrowUSD;
   }
   
-  // Clamp to [0, 2] range to avoid extreme values
-  healthRatio = Math.max(0, Math.min(2, healthRatio));
-  
-  // Ensure no NaN (should be caught by safe division above)
-  if (isNaN(healthRatio)) {
-    logger.warn(
-      { totalCollateralWeightedUSD, totalBorrowUSD },
-      "Health ratio is NaN, defaulting to 0"
-    );
-    healthRatio = 0;
-  }
+  // Clamp to [0, 2]
+  ratio = Math.max(0, Math.min(2, ratio));
   
   return {
-    healthRatio,
-    borrowValue: totalBorrowUSD,
-    collateralValue: totalCollateralWeightedUSD,
+    healthRatio: ratio,
+    borrowValue: borrowUSD,
+    collateralValue: collateralUSD,
   };
 }

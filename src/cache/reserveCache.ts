@@ -21,26 +21,39 @@ export interface ReserveCacheEntry {
   /** Available liquidity amount (raw, not adjusted for decimals) */
   availableAmount: bigint;
   /** 
-   * Cumulative borrow rate (stored as bigint for precision)
-   * Note: Currently not extracted from IDL. Future enhancement.
+   * Cumulative borrow rate (big scaled fraction / BSF)
+   * Used to convert borrowedAmountSf to actual token amounts
    */
-  cumulativeBorrowRate?: bigint;
+  cumulativeBorrowRate: bigint;
   /** Loan-to-value ratio (percentage 0-100) */
   loanToValue: number;
   /** Liquidation threshold (percentage 0-100) */
   liquidationThreshold: number;
   /** Liquidation bonus (basis points) */
   liquidationBonus: number;
+  /** Borrow factor (percentage 0-100) for risk-adjusted debt valuation */
+  borrowFactor: number;
   /** Array of oracle public keys for price feeds */
   oraclePubkeys: PublicKey[];
   /** Liquidity mint decimals for precision calculations */
   liquidityDecimals: number;
+  /** Collateral mint decimals for deposit amount normalization */
+  collateralDecimals: number;
+  /** Scope price chain index (0-511) for multi-chain Scope oracles, null if not using Scope */
+  scopePriceChain: number | null;
 }
 
 /**
  * Reserve cache mapping liquidity mint to reserve data
  */
 export type ReserveCache = Map<string, ReserveCacheEntry>;
+
+/**
+ * Scope oracle chain map - maps Scope oracle pubkey to priceChain index
+ * This is populated during reserve loading and used during oracle decoding
+ * to select the correct price from multi-chain Scope oracles
+ */
+export const scopeOracleChainMap = new Map<string, number>();
 
 /**
  * Loads all reserves for a given Kamino market and builds a cache
@@ -179,16 +192,43 @@ export async function loadReserves(
       const oraclePubkeys = decoded.oraclePubkeys.map(
         (pk) => new PublicKey(pk)
       );
+      
+      // If this reserve uses Scope, track the oracle→chain mapping
+      if (decoded.scopePriceChain !== null) {
+        // Find the Scope oracle pubkey (it should be in the oraclePubkeys array)
+        for (const oraclePk of oraclePubkeys) {
+          const oracleStr = oraclePk.toString();
+          // Check if this might be a Scope oracle by checking if it's already in the map
+          // or by checking the owner later during oracle loading
+          // For now, we'll map all oracles if scopePriceChain is set
+          // The oracle loader will determine which ones are actually Scope oracles
+          if (!scopeOracleChainMap.has(oracleStr)) {
+            scopeOracleChainMap.set(oracleStr, decoded.scopePriceChain);
+            logger.debug(
+              {
+                reserve: pubkey.toString(),
+                oracle: oracleStr,
+                priceChain: decoded.scopePriceChain,
+              },
+              "Mapped Scope oracle to price chain"
+            );
+          }
+        }
+      }
 
       // Create cache entry
       const cacheEntry: ReserveCacheEntry = {
         reservePubkey: pubkey,
         availableAmount: BigInt(decoded.availableLiquidity),
+        cumulativeBorrowRate: BigInt(decoded.cumulativeBorrowRate),
         loanToValue: decoded.loanToValueRatio,
         liquidationThreshold: decoded.liquidationThreshold,
         liquidationBonus: decoded.liquidationBonus,
+        borrowFactor: decoded.borrowFactor,
         oraclePubkeys,
         liquidityDecimals: decoded.liquidityDecimals,
+        collateralDecimals: decoded.collateralDecimals,
+        scopePriceChain: decoded.scopePriceChain,
       };
 
       // Store in cache keyed by liquidity mint

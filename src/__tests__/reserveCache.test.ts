@@ -73,8 +73,11 @@ describe("Reserve Cache Tests", () => {
             loanToValueRatio: 75,
             liquidationThreshold: 80,
             liquidationBonus: 500,
+            borrowFactor: 100,
             totalBorrowed: "1000000",
             availableLiquidity: "5000000",
+            cumulativeBorrowRate: "10000000000",
+            scopePriceChain: null,
           };
         } else {
           return {
@@ -88,8 +91,11 @@ describe("Reserve Cache Tests", () => {
             loanToValueRatio: 70,
             liquidationThreshold: 75,
             liquidationBonus: 450,
+            borrowFactor: 100,
             totalBorrowed: "2000000",
             availableLiquidity: "10000000",
+            cumulativeBorrowRate: "10000000000",
+            scopePriceChain: null,
           };
         }
       });
@@ -183,8 +189,11 @@ describe("Reserve Cache Tests", () => {
             loanToValueRatio: 75,
             liquidationThreshold: 80,
             liquidationBonus: 500,
+            borrowFactor: 100,
             totalBorrowed: "1000000",
             availableLiquidity: "5000000",
+            cumulativeBorrowRate: "10000000000",
+            scopePriceChain: null,
           };
         } else {
           return {
@@ -198,8 +207,11 @@ describe("Reserve Cache Tests", () => {
             loanToValueRatio: 70,
             liquidationThreshold: 75,
             liquidationBonus: 450,
+            borrowFactor: 100,
             totalBorrowed: "2000000",
             availableLiquidity: "10000000",
+            cumulativeBorrowRate: "10000000000",
+            scopePriceChain: null,
           };
         }
       });
@@ -319,8 +331,11 @@ describe("Reserve Cache Tests", () => {
           loanToValueRatio: 75,
           liquidationThreshold: 80,
           liquidationBonus: 500,
+          borrowFactor: 100,
           totalBorrowed: "1000000",
           availableLiquidity: "5000000",
+          cumulativeBorrowRate: "10000000000",
+            scopePriceChain: null,
         };
       });
 

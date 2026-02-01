@@ -2,6 +2,44 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { logger } from "../observability/logger.js";
 import type { ReserveCache } from "./reserveCache.js";
+import { scopeOracleChainMap } from "./reserveCache.js";
+import { parsePriceData } from "@pythnetwork/client";
+import { OraclePrices } from "@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js";
+
+/**
+ * Pyth Oracle Program ID (Solana mainnet)
+ */
+const PYTH_PROGRAM_ID = new PublicKey("FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH");
+
+/**
+ * Switchboard V2 Program ID (Solana mainnet)
+ */
+const SWITCHBOARD_V2_PROGRAM_ID = new PublicKey("SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f");
+
+/**
+ * Scope Program ID (Kamino Scope Oracle)
+ */
+const SCOPE_PROGRAM_ID = new PublicKey("HFn8GnPADiny6XqUoWE8uRPPxb29ikn4yTuPa9MF2fWJ");
+
+/**
+ * Known stablecoin mints for price clamping
+ */
+const STABLECOIN_MINTS = new Set([
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
+  "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", // PYUSD
+]);
+
+/**
+ * Staleness threshold in seconds (30 seconds)
+ */
+const STALENESS_THRESHOLD_SECONDS = 30;
+
+/**
+ * Stablecoin price clamp range
+ */
+const STABLECOIN_MIN_PRICE = 0.99;
+const STABLECOIN_MAX_PRICE = 1.01;
 
 /**
  * Oracle price data with confidence and freshness
@@ -15,8 +53,8 @@ export interface OraclePriceData {
   slot: bigint;
   /** Exponent for price scaling (e.g., -8 means divide by 10^8) */
   exponent: number;
-  /** Oracle type (pyth, switchboard) */
-  oracleType: "pyth" | "switchboard";
+  /** Oracle type (pyth, switchboard, scope) */
+  oracleType: "pyth" | "switchboard" | "scope";
 }
 
 /**
@@ -25,109 +63,78 @@ export interface OraclePriceData {
 export type OracleCache = Map<string, OraclePriceData>;
 
 /**
- * Switchboard V2 aggregator discriminator
- * Reference: https://github.com/switchboard-xyz/switchboard-v2
- */
-const SWITCHBOARD_V2_DISCRIMINATOR = Buffer.from([
-  0x21, 0x7f, 0xc8, 0xf4, 0x64, 0x00, 0x00, 0x00,
-]);
-
-/**
- * Decodes a Pyth price account
- * Based on Pyth V2 on-chain data structure
+ * Decodes a Pyth price account using the official Pyth SDK
  *
  * @param data - Raw account data
  * @returns Decoded price data or null if invalid
  */
-function decodePythPrice(data: Buffer): OraclePriceData | null {
+function decodePythPriceWithSdk(data: Buffer): OraclePriceData | null {
   try {
-    // Check minimum size (minimum ~3312 bytes for Pyth V2)
-    if (data.length < 300) {
+    const parsed = parsePriceData(data);
+    
+    // Check status (1 = trading)
+    if (!parsed || parsed.status !== 1) {
+      logger.debug({ status: parsed?.status }, "Pyth price status not trading");
       return null;
     }
 
-    // Verify discriminator (magic + version + type)
-    // Magic: 0xa1b2c3d4 (4 bytes at offset 0)
-    const magic = data.readUInt32LE(0);
-    if (magic !== 0xa1b2c3d4) {
+    // Check for valid price and confidence
+    if (parsed.price === undefined || parsed.price === null || 
+        parsed.confidence === undefined || parsed.confidence === null) {
+      logger.debug("Pyth price or confidence is null");
       return null;
     }
 
-    // Type: u32 at offset 8 (should be 3 for price account)
-    const accountType = data.readUInt32LE(8);
-    if (accountType !== 3) {
+    // Use publishTime for freshness (unix timestamp)
+    const publishTime = BigInt(parsed.timestamp || 0);
+    const currentTime = BigInt(Math.floor(Date.now() / 1000));
+    const ageSeconds = Number(currentTime - publishTime);
+    
+    if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
+      logger.debug(
+        { ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+        "Pyth price is stale, skipping"
+      );
       return null;
-    }
-
-    // Price aggregate data starts at offset 208
-    // Price: i64 at offset 208
-    const price = data.readBigInt64LE(208);
-    
-    // Confidence: u64 at offset 216
-    const confidence = data.readBigUInt64LE(216);
-    
-    // Status: u32 at offset 224 (1 = trading, 0 = unknown)
-    const status = data.readUInt32LE(224);
-    
-    // Exponent: i32 at offset 20
-    const exponent = data.readInt32LE(20);
-
-    // Slot: u64 at offset 104
-    // Note: Pyth stores publish_time (unix timestamp) here
-    // We convert to approximate slot for freshness checks
-    const timestamp = data.readBigInt64LE(104);
-
-    if (status !== 1) {
-      logger.debug({ status }, "Pyth price status not trading");
     }
 
     return {
-      price: price,
-      confidence: confidence,
-      slot: timestamp > 0n ? timestamp : 0n,
-      exponent: exponent,
+      price: BigInt(Math.trunc(parsed.price)),
+      confidence: BigInt(Math.trunc(parsed.confidence)),
+      exponent: parsed.exponent,
+      slot: publishTime,
       oracleType: "pyth",
     };
   } catch (err) {
-    logger.error({ err }, "Failed to decode Pyth price");
+    logger.error({ err }, "Failed to decode Pyth price via SDK");
     return null;
   }
 }
 
 /**
  * Decodes a Switchboard V2 aggregator account
- * Based on Switchboard V2 on-chain data structure
+ * Note: Using manual decoding due to SDK compatibility issues
  *
  * @param data - Raw account data
  * @returns Decoded price data or null if invalid
  */
-function decodeSwitchboardPrice(data: Buffer): OraclePriceData | null {
+function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
   try {
-    // Check minimum size (Switchboard V2 aggregators are ~500 bytes)
+    // Check minimum size
     if (data.length < 200) {
       return null;
     }
 
-    // Verify discriminator at offset 0
-    // Note: Some Switchboard accounts may not have the standard discriminator
-    // We attempt to decode regardless and validate based on data structure
-    const discriminator = data.subarray(0, 8);
-    const hasValidDiscriminator = discriminator.equals(SWITCHBOARD_V2_DISCRIMINATOR);
-    
-    if (!hasValidDiscriminator) {
-      logger.debug("Switchboard discriminator mismatch, attempting best-effort decode");
-    }
-
-    // Latest confirmed round result starts around offset 217
-    // Value: i128 stored as two i64s (mantissa at 217, scale implicit)
-    // For simplicity, read as f64 representation if available
-    
     // Switchboard stores value as SwitchboardDecimal (i128 with scale)
     // Read mantissa: i64 at offset 217
     const mantissa = data.readBigInt64LE(217);
     
     // Scale: u32 at offset 225 (number of decimal places)
     const scale = data.readUInt32LE(225);
+    if (scale > Number.MAX_SAFE_INTEGER) {
+      logger.warn({ scale }, "Switchboard scale exceeds safe integer bounds");
+      return null;
+    }
     
     // Standard deviation (confidence proxy): i64 at offset 249
     const stdDev = data.readBigInt64LE(249);
@@ -135,14 +142,28 @@ function decodeSwitchboardPrice(data: Buffer): OraclePriceData | null {
     // Last update timestamp: i64 at offset 129
     const lastUpdate = data.readBigInt64LE(129);
 
-    // Convert to similar format as Pyth
-    // Switchboard uses scale (decimals), Pyth uses exponent
-    const exponent = -scale;
+    // Staleness check
+    const updateTime = lastUpdate > 0n ? lastUpdate : 0n;
+    if (updateTime > 0n) {
+      const currentTime = BigInt(Math.floor(Date.now() / 1000));
+      const ageSeconds = Number(currentTime - updateTime);
+      
+      if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
+        logger.debug(
+          { ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+          "Switchboard price is stale, skipping"
+        );
+        return null;
+      }
+    }
+
+    // Convert scale to exponent
+    const exponent = -Number(scale);
 
     return {
       price: mantissa,
       confidence: stdDev > 0n ? stdDev : 0n,
-      slot: lastUpdate > 0n ? lastUpdate : 0n,
+      slot: updateTime,
       exponent: exponent,
       oracleType: "switchboard",
     };
@@ -150,6 +171,128 @@ function decodeSwitchboardPrice(data: Buffer): OraclePriceData | null {
     logger.error({ err }, "Failed to decode Switchboard price");
     return null;
   }
+}
+
+/**
+ * Decodes a Scope price feed account using the Kamino Scope SDK
+ *
+ * @param data - Raw account data
+ * @param chain - Price chain index (0-511) to select from the multi-price oracle
+ * @returns Decoded price data or null if invalid
+ */
+function decodeScopePrice(data: Buffer, chain: number = 0): OraclePriceData | null {
+  try {
+    // Use Scope SDK to decode the OraclePrices account
+    const oraclePrices = OraclePrices.decode(data);
+    
+    if (!oraclePrices || !oraclePrices.prices || oraclePrices.prices.length === 0) {
+      logger.debug("Scope OraclePrices has no prices");
+      return null;
+    }
+    
+    // Validate chain index
+    if (chain < 0 || chain >= 512) {
+      logger.warn({ chain }, "Invalid Scope price chain index (must be 0-511)");
+      return null;
+    }
+    
+    // Get the price at the specified chain index
+    if (chain >= oraclePrices.prices.length) {
+      logger.debug(
+        { chain, availablePrices: oraclePrices.prices.length },
+        "Scope price chain index out of bounds"
+      );
+      return null;
+    }
+    
+    const datedPrice = oraclePrices.prices[chain];
+    if (!datedPrice || !datedPrice.price) {
+      logger.debug({ chain }, "Scope DatedPrice or Price is null at chain index");
+      return null;
+    }
+    
+    // Extract price components from the Price struct
+    const value = datedPrice.price.value; // BN (mantissa)
+    const exp = datedPrice.price.exp; // BN (exponent)
+    const unixTimestamp = datedPrice.unixTimestamp; // BN (unix timestamp in seconds)
+    
+    // Guard against zero/invalid price
+    const priceBigInt = BigInt(value.toString());
+    if (priceBigInt === 0n) {
+      logger.debug({ chain }, "Scope price value is zero, skipping");
+      return null;
+    }
+    
+    // Guard against zero timestamp
+    const timestamp = BigInt(unixTimestamp.toString());
+    if (timestamp === 0n) {
+      logger.debug({ chain }, "Scope price timestamp is zero, skipping");
+      return null;
+    }
+    
+    // Staleness check - use unix timestamp
+    const currentTime = BigInt(Math.floor(Date.now() / 1000));
+    
+    if (timestamp > 0n) {
+      const ageSeconds = Number(currentTime - timestamp);
+      
+      if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
+        logger.debug(
+          { chain, ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+          "Scope price is stale, skipping"
+        );
+        return null;
+      }
+    }
+    
+    // Convert to our format
+    // Scope stores value as mantissa and exp as exponent
+    // Price = value * 10^exp
+    const exponent = Number(exp.toString());
+    
+    return {
+      price: priceBigInt,
+      confidence: 0n, // Scope doesn't provide confidence in the same way
+      exponent: exponent,
+      slot: timestamp,
+      oracleType: "scope",
+    };
+  } catch (err) {
+    logger.error({ err, chain }, "Failed to decode Scope price with SDK");
+    return null;
+  }
+}
+
+/**
+ * Applies stablecoin price clamping to keep prices within expected range
+ * 
+ * @param price - Raw price
+ * @param exponent - Price exponent
+ * @param mint - Token mint address
+ * @returns Clamped price
+ */
+function applyStablecoinClamp(price: bigint, exponent: number, mint: string): bigint {
+  if (!STABLECOIN_MINTS.has(mint)) {
+    return price;
+  }
+
+  // Convert price to USD
+  const priceUSD = Number(price) * Math.pow(10, exponent);
+  
+  // Clamp to [0.99, 1.01]
+  const clampedUSD = Math.max(STABLECOIN_MIN_PRICE, Math.min(STABLECOIN_MAX_PRICE, priceUSD));
+  
+  // Convert back to scaled price
+  const clampedPrice = BigInt(Math.round(clampedUSD * Math.pow(10, -exponent)));
+  
+  if (clampedPrice !== price) {
+    logger.debug(
+      { mint, original: priceUSD, clamped: clampedUSD },
+      "Applied stablecoin price clamp"
+    );
+  }
+  
+  return clampedPrice;
 }
 
 /**
@@ -196,11 +339,12 @@ export async function loadOracles(
     return new Map();
   }
 
-  // Batch fetch oracle accounts
+  // Batch fetch oracle accounts (need full account info to check owner)
   const BATCH_SIZE = 100;
   const allOracleAccounts: Array<{
     pubkey: PublicKey;
     data: Buffer | null;
+    owner: PublicKey | null;
   }> = [];
 
   for (let i = 0; i < oraclePubkeys.length; i += BATCH_SIZE) {
@@ -216,6 +360,7 @@ export async function loadOracles(
       allOracleAccounts.push({
         pubkey: batch[j],
         data: accounts[j]?.data || null,
+        owner: accounts[j]?.owner || null,
       });
     }
   }
@@ -225,17 +370,45 @@ export async function loadOracles(
     "Fetched oracle account data"
   );
 
+  // Diagnostic: Check oracle coverage
+  const reserveCount = reserveCache.size;
+  if (oraclePubkeys.length < 10 && reserveCount > 50) {
+    logger.warn(
+      {
+        uniqueOracles: oraclePubkeys.length,
+        reserveCount,
+        sampleReserves: Array.from(reserveCache.entries()).slice(0, 3).map(([mint, reserve]) => ({
+          mint,
+          oracleCount: reserve.oraclePubkeys.length,
+          oracles: reserve.oraclePubkeys.map(pk => pk.toString()),
+        })),
+      },
+      "WARNING: Very few unique oracles for many reserves - possible configuration issue"
+    );
+  }
+
   // Decode oracle accounts and map to mints
   const cache = new Map<string, OraclePriceData>();
   let pythCount = 0;
   let switchboardCount = 0;
+  let scopeCount = 0;
+  let unknownCount = 0;
   let failedCount = 0;
 
-  for (const { pubkey, data } of allOracleAccounts) {
+  for (const { pubkey, data, owner } of allOracleAccounts) {
     if (!data) {
       logger.warn(
         { pubkey: pubkey.toString() },
         "Oracle account has no data"
+      );
+      failedCount++;
+      continue;
+    }
+
+    if (!owner) {
+      logger.debug(
+        { pubkey: pubkey.toString() },
+        "Oracle account has no owner"
       );
       failedCount++;
       continue;
@@ -247,73 +420,92 @@ export async function loadOracles(
       continue;
     }
 
-    // Try decoding as Pyth first
-    let priceData = decodePythPrice(data);
-    if (priceData) {
-      pythCount++;
-      // Store for each mint that uses this oracle
-      // Note: If a mint has multiple oracles, the last one wins
-      for (const mint of mints) {
-        const existing = cache.get(mint);
-        if (existing) {
-          logger.debug(
-            { mint, oldType: existing.oracleType, newType: "pyth" },
-            "Multiple oracles for mint, using Pyth"
-          );
-        }
-        cache.set(mint, priceData);
+    // Detect oracle type by account owner and route to appropriate decoder
+    let priceData: OraclePriceData | null = null;
+    const ownerStr = owner.toString();
+    
+    if (owner.equals(PYTH_PROGRAM_ID)) {
+      // Use Pyth SDK decoder
+      priceData = decodePythPriceWithSdk(data);
+      if (priceData) {
+        pythCount++;
+      }
+    } else if (owner.equals(SWITCHBOARD_V2_PROGRAM_ID)) {
+      // Use Switchboard decoder
+      priceData = decodeSwitchboardPriceWithSdk(data);
+      if (priceData) {
+        switchboardCount++;
+      }
+    } else if (owner.equals(SCOPE_PROGRAM_ID)) {
+      // Use Scope decoder with the correct price chain
+      const chain = scopeOracleChainMap.get(pubkeyStr) ?? 0;
+      priceData = decodeScopePrice(data, chain);
+      if (priceData) {
+        scopeCount++;
         logger.debug(
-          {
-            oracle: pubkeyStr,
-            mint,
-            price: priceData.price.toString(),
-            type: "pyth",
-          },
-          "Cached Pyth oracle"
+          { oracle: pubkeyStr, chain },
+          `Decoded Scope oracle using price chain ${chain}`
         );
       }
+    } else {
+      // Unknown oracle program
+      logger.debug(
+        {
+          pubkey: pubkeyStr,
+          owner: ownerStr,
+          expectedPyth: PYTH_PROGRAM_ID.toString(),
+          expectedSwitchboard: SWITCHBOARD_V2_PROGRAM_ID.toString(),
+          expectedScope: SCOPE_PROGRAM_ID.toString(),
+        },
+        "Oracle account has unknown owner, skipping"
+      );
+      unknownCount++;
+      failedCount++;
       continue;
     }
 
-    // Try decoding as Switchboard
-    priceData = decodeSwitchboardPrice(data);
-    if (priceData) {
-      switchboardCount++;
-      // Store for each mint that uses this oracle
-      for (const mint of mints) {
-        const existing = cache.get(mint);
-        if (existing) {
-          logger.debug(
-            { mint, oldType: existing.oracleType, newType: "switchboard" },
-            "Multiple oracles for mint, using Switchboard"
-          );
-        }
-        cache.set(mint, priceData);
-        logger.debug(
-          {
-            oracle: pubkeyStr,
-            mint,
-            price: priceData.price.toString(),
-            type: "switchboard",
-          },
-          "Cached Switchboard oracle"
-        );
-      }
+    if (!priceData) {
+      logger.warn(
+        { pubkey: pubkeyStr, owner: ownerStr },
+        "Failed to decode oracle price"
+      );
+      failedCount++;
       continue;
     }
 
-    // If neither decoder worked, log and skip
-    logger.warn(
-      { pubkey: pubkeyStr, dataLength: data.length },
-      "Failed to decode oracle account as Pyth or Switchboard"
-    );
-    failedCount++;
+    // Store for each mint that uses this oracle
+    // Note: If a mint has multiple oracles, the last one wins
+    for (const mint of mints) {
+      // Apply stablecoin price clamping
+      const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
+      const adjustedPriceData = { ...priceData, price: clampedPrice };
+      
+      const existing = cache.get(mint);
+      if (existing) {
+        logger.debug(
+          { mint, oldType: existing.oracleType, newType: priceData.oracleType },
+          `Multiple oracles for mint, using ${priceData.oracleType}`
+        );
+      }
+      cache.set(mint, adjustedPriceData);
+      logger.debug(
+        {
+          oracle: pubkeyStr,
+          mint,
+          price: adjustedPriceData.price.toString(),
+          type: priceData.oracleType,
+        },
+        `Cached ${priceData.oracleType} oracle`
+      );
+    }
   }
 
   logger.info(
     {
       pyth: pythCount,
       switchboard: switchboardCount,
+      scope: scopeCount,
+      unknown: unknownCount,
       failed: failedCount,
       cached: cache.size,
     },

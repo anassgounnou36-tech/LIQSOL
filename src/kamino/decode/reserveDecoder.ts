@@ -78,6 +78,43 @@ function extractOraclePubkeys(tokenInfo: {
 }
 
 /**
+ * Extracts scope price chain from Reserve's TokenInfo configuration
+ * @returns The first price chain index (0-511) or null if not configured
+ */
+function extractScopePriceChain(tokenInfo: {
+  scopeConfiguration?: { 
+    priceFeed?: { toString: () => string };
+    priceChain?: number[];
+  };
+}): number | null {
+  const nullPubkey = "11111111111111111111111111111111";
+  
+  // Only extract if scope is configured with a valid priceFeed
+  if (
+    !tokenInfo?.scopeConfiguration?.priceFeed ||
+    tokenInfo.scopeConfiguration.priceFeed.toString() === nullPubkey
+  ) {
+    return null;
+  }
+  
+  // priceChain is an array of u16 [4], use the first element
+  const priceChain = tokenInfo.scopeConfiguration.priceChain;
+  if (!priceChain || !Array.isArray(priceChain) || priceChain.length === 0) {
+    return null;
+  }
+  
+  const chain = Number(priceChain[0]);
+  
+  // Validate: chain should be < 512 (max Scope chains)
+  // 65535 (0xFFFF) is used as a sentinel for "not set"
+  if (chain >= 512 || chain === 65535) {
+    return null;
+  }
+  
+  return chain;
+}
+
+/**
  * Decodes a Reserve account from Kamino Lending protocol
  * @param accountData - Raw account data buffer
  * @param reservePubkey - Public key of the reserve account
@@ -101,9 +138,13 @@ export function decodeReserve(
 
   // Extract oracle pubkeys from config
   const oraclePubkeys = extractOraclePubkeys(decoded.config?.tokenInfo);
+  
+  // Extract scope price chain if configured
+  const scopePriceChain = extractScopePriceChain(decoded.config?.tokenInfo);
 
   // Map to DecodedReserve type with BN-safe conversion
-  return {
+  // Note: cumulativeBorrowRateBsf is a BigFractionBytes structure, not a simple BN
+  const result = {
     reservePubkey: reservePubkey.toString(),
     marketPubkey: decoded.lendingMarket.toString(),
     liquidityMint: decoded.liquidity.mintPubkey.toString(),
@@ -114,8 +155,14 @@ export function decodeReserve(
     loanToValueRatio: Number(decoded.config.loanToValuePct),
     liquidationThreshold: Number(decoded.config.liquidationThresholdPct),
     liquidationBonus: Number(decoded.config.maxLiquidationBonusBps),
+    borrowFactor: Number(decoded.config.borrowFactorPct || 100), // Default to 100% if not set
     totalBorrowed: toBigInt(decoded.liquidity.borrowedAmountSf).toString(),
     availableLiquidity: toBigInt(decoded.liquidity.availableAmount).toString(),
+    // cumulativeBorrowRateBsf is a BigFractionBytes (4 x u64 limbs) - toBigInt now handles this
+    cumulativeBorrowRate: toBigInt(decoded.liquidity.cumulativeBorrowRateBsf).toString(),
+    scopePriceChain,
   };
+
+  return result;
 }
 
