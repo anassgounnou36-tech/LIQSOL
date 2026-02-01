@@ -2,6 +2,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { logger } from "../observability/logger.js";
 import type { ReserveCache } from "./reserveCache.js";
+import { scopeOracleChainMap } from "./reserveCache.js";
 import { parsePriceData } from "@pythnetwork/client";
 import { OraclePrices } from "@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js";
 
@@ -176,9 +177,10 @@ function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
  * Decodes a Scope price feed account using the Kamino Scope SDK
  *
  * @param data - Raw account data
+ * @param chain - Price chain index (0-511) to select from the multi-price oracle
  * @returns Decoded price data or null if invalid
  */
-function decodeScopePrice(data: Buffer): OraclePriceData | null {
+function decodeScopePrice(data: Buffer, chain: number = 0): OraclePriceData | null {
   try {
     // Use Scope SDK to decode the OraclePrices account
     const oraclePrices = OraclePrices.decode(data);
@@ -188,10 +190,24 @@ function decodeScopePrice(data: Buffer): OraclePriceData | null {
       return null;
     }
     
-    // Get the first price (price ID 0)
-    const datedPrice = oraclePrices.prices[0];
+    // Validate chain index
+    if (chain < 0 || chain >= 512) {
+      logger.warn({ chain }, "Invalid Scope price chain index (must be 0-511)");
+      return null;
+    }
+    
+    // Get the price at the specified chain index
+    if (chain >= oraclePrices.prices.length) {
+      logger.debug(
+        { chain, availablePrices: oraclePrices.prices.length },
+        "Scope price chain index out of bounds"
+      );
+      return null;
+    }
+    
+    const datedPrice = oraclePrices.prices[chain];
     if (!datedPrice || !datedPrice.price) {
-      logger.debug("Scope DatedPrice or Price is null");
+      logger.debug({ chain }, "Scope DatedPrice or Price is null at chain index");
       return null;
     }
     
@@ -200,16 +216,29 @@ function decodeScopePrice(data: Buffer): OraclePriceData | null {
     const exp = datedPrice.price.exp; // BN (exponent)
     const unixTimestamp = datedPrice.unixTimestamp; // BN (unix timestamp in seconds)
     
+    // Guard against zero/invalid price
+    const priceBigInt = BigInt(value.toString());
+    if (priceBigInt === 0n) {
+      logger.debug({ chain }, "Scope price value is zero, skipping");
+      return null;
+    }
+    
+    // Guard against zero timestamp
+    const timestamp = BigInt(unixTimestamp.toString());
+    if (timestamp === 0n) {
+      logger.debug({ chain }, "Scope price timestamp is zero, skipping");
+      return null;
+    }
+    
     // Staleness check - use unix timestamp
     const currentTime = BigInt(Math.floor(Date.now() / 1000));
-    const timestamp = BigInt(unixTimestamp.toString());
     
     if (timestamp > 0n) {
       const ageSeconds = Number(currentTime - timestamp);
       
       if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
         logger.debug(
-          { ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+          { chain, ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
           "Scope price is stale, skipping"
         );
         return null;
@@ -219,7 +248,6 @@ function decodeScopePrice(data: Buffer): OraclePriceData | null {
     // Convert to our format
     // Scope stores value as mantissa and exp as exponent
     // Price = value * 10^exp
-    const priceBigInt = BigInt(value.toString());
     const exponent = Number(exp.toString());
     
     return {
@@ -230,7 +258,7 @@ function decodeScopePrice(data: Buffer): OraclePriceData | null {
       oracleType: "scope",
     };
   } catch (err) {
-    logger.error({ err }, "Failed to decode Scope price with SDK");
+    logger.error({ err, chain }, "Failed to decode Scope price with SDK");
     return null;
   }
 }
@@ -409,10 +437,15 @@ export async function loadOracles(
         switchboardCount++;
       }
     } else if (owner.equals(SCOPE_PROGRAM_ID)) {
-      // Use Scope decoder
-      priceData = decodeScopePrice(data);
+      // Use Scope decoder with the correct price chain
+      const chain = scopeOracleChainMap.get(pubkeyStr) ?? 0;
+      priceData = decodeScopePrice(data, chain);
       if (priceData) {
         scopeCount++;
+        logger.debug(
+          { oracle: pubkeyStr, chain },
+          `Decoded Scope oracle using price chain ${chain}`
+        );
       }
     } else {
       // Unknown oracle program

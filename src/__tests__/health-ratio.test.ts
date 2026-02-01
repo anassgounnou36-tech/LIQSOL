@@ -23,6 +23,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
+            scopePriceChain: null,
           },
         ],
         [
@@ -38,6 +39,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 6,
             collateralDecimals: 6,
             cumulativeBorrowRate: 10000000000n,
+            scopePriceChain: null,
           },
         ],
       ]);
@@ -149,6 +151,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
+            scopePriceChain: null,
           },
         ],
       ]);
@@ -193,6 +196,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
+            scopePriceChain: null,
           },
         ],
       ]);
@@ -252,6 +256,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
+            scopePriceChain: null,
           },
         ],
         [
@@ -267,6 +272,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 6,
             collateralDecimals: 6,
             cumulativeBorrowRate: 10000000000n,
+            scopePriceChain: null,
           },
         ],
       ]);

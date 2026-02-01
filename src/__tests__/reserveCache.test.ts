@@ -77,6 +77,7 @@ describe("Reserve Cache Tests", () => {
             totalBorrowed: "1000000",
             availableLiquidity: "5000000",
             cumulativeBorrowRate: "10000000000",
+            scopePriceChain: null,
           };
         } else {
           return {
@@ -94,6 +95,7 @@ describe("Reserve Cache Tests", () => {
             totalBorrowed: "2000000",
             availableLiquidity: "10000000",
             cumulativeBorrowRate: "10000000000",
+            scopePriceChain: null,
           };
         }
       });
@@ -191,6 +193,7 @@ describe("Reserve Cache Tests", () => {
             totalBorrowed: "1000000",
             availableLiquidity: "5000000",
             cumulativeBorrowRate: "10000000000",
+            scopePriceChain: null,
           };
         } else {
           return {
@@ -208,6 +211,7 @@ describe("Reserve Cache Tests", () => {
             totalBorrowed: "2000000",
             availableLiquidity: "10000000",
             cumulativeBorrowRate: "10000000000",
+            scopePriceChain: null,
           };
         }
       });
@@ -331,6 +335,7 @@ describe("Reserve Cache Tests", () => {
           totalBorrowed: "1000000",
           availableLiquidity: "5000000",
           cumulativeBorrowRate: "10000000000",
+            scopePriceChain: null,
         };
       });
 
