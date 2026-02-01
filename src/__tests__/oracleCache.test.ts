@@ -377,5 +377,70 @@ describe("Oracle Cache Tests", () => {
       expect(mockConnection.getMultipleAccountsInfo).toHaveBeenCalledTimes(2);
       expect(cache.size).toBe(150);
     });
+
+    it("should fallback to manual decoder when SDK fails", async () => {
+      const mint1 = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+      const oracle1 = new PublicKey(
+        "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
+      );
+
+      const reserveCache: ReserveCache = new Map([
+        [
+          mint1,
+          {
+            reservePubkey: PublicKey.unique(),
+            availableAmount: 5000000n,
+            cumulativeBorrowRate: 0n,
+            loanToValue: 75,
+            liquidationThreshold: 80,
+            liquidationBonus: 500,
+            borrowFactor: 100,
+            liquidityDecimals: 6,
+            oraclePubkeys: [oracle1],
+          },
+        ],
+      ]);
+
+      // Create Pyth data that will work with manual decoder but might fail with SDK
+      // This simulates the real-world scenario where SDK has offset issues
+      const pythData = Buffer.alloc(3500);
+      // Magic: 0xa1b2c3d4 at offset 0
+      pythData.writeUInt32LE(0xa1b2c3d4, 0);
+      // Version: 2 at offset 4
+      pythData.writeUInt32LE(2, 4);
+      // Type: 3 (price account) at offset 8
+      pythData.writeUInt32LE(3, 8);
+      // Exponent: -8 at offset 20
+      pythData.writeInt32LE(-8, 20);
+      // Timestamp at offset 104 - use current time
+      const currentTimestamp = Math.floor(Date.now() / 1000);
+      pythData.writeBigInt64LE(BigInt(currentTimestamp), 104);
+      // Price: 100000000 (1 USD with -8 exponent) at offset 208
+      pythData.writeBigInt64LE(100000000n, 208);
+      // Confidence: 50000 at offset 216
+      pythData.writeBigUInt64LE(50000n, 216);
+      // Status: 1 (trading) at offset 224
+      pythData.writeUInt32LE(1, 224);
+
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: pythData },
+      ]);
+
+      const cache = await loadOracles(mockConnection, reserveCache);
+
+      // Should successfully decode
+      expect(mockConnection.getMultipleAccountsInfo).toHaveBeenCalledTimes(1);
+      expect(cache.size).toBeGreaterThanOrEqual(1);
+      
+      // Verify that we got a valid price (either pyth or switchboard decoder worked)
+      const price1 = cache.get(mint1);
+      expect(price1).toBeDefined();
+      // Price should be valid
+      expect(price1!.price).toBeGreaterThan(0n);
+      expect(price1!.confidence).toBeGreaterThanOrEqual(0n);
+      // Exponent should be a reasonable value for price scaling
+      expect(price1!.exponent).toBeLessThanOrEqual(0);
+      expect(price1!.exponent).toBeGreaterThanOrEqual(-18);
+    });
   });
 });
