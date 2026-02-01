@@ -2,6 +2,7 @@ import { logger } from "../observability/logger.js";
 import type { ReserveCacheEntry } from "../cache/reserveCache.js";
 import type { OraclePriceData } from "../cache/oracleCache.js";
 import type { ObligationDeposit, ObligationBorrow } from "../kamino/types.js";
+import { divBigintToNumber } from "../utils/bn.js";
 
 /**
  * Known stablecoin mints for price clamping
@@ -257,10 +258,11 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     
     // Convert borrowedAmountSf (scaled fraction) to actual token amount
     // borrowedAmountSf needs to be divided by cumulativeBorrowRateBsf
+    // Use safe bigint division to avoid precision loss from Number(BigInt)
     const borrowedAmountSf = BigInt(borrow.borrowedAmount);
-    const cumulativeBorrowRate = reserve.cumulativeBorrowRate;
+    const cumulativeBorrowRateBsf = BigInt(reserve.cumulativeBorrowRate);
     
-    if (cumulativeBorrowRate === 0n) {
+    if (cumulativeBorrowRateBsf === 0n) {
       logger.warn(
         { mint: borrow.mint, reserve: borrow.reserve },
         "Cumulative borrow rate is zero, skipping borrow"
@@ -268,17 +270,46 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       continue;
     }
     
-    // Convert SF to token amount: tokenAmount = borrowedAmountSf / cumulativeBorrowRate
-    // Use Number for division after converting to avoid overflow
-    const tokenAmount = Number(borrowedAmountSf) / Number(cumulativeBorrowRate);
+    // Convert SF to token amount using safe bigint division
+    // tokenAmount = borrowedAmountSf / cumulativeBorrowRateBsf
+    // This preserves precision by keeping everything in bigint until the final conversion
+    const tokenAmount = divBigintToNumber(borrowedAmountSf, cumulativeBorrowRateBsf, 18);
+    
+    // Check for invalid result
+    if (!isFinite(tokenAmount)) {
+      logger.warn(
+        { 
+          mint: borrow.mint, 
+          borrowedAmountSf: borrow.borrowedAmount,
+          cumulativeBorrowRate: reserve.cumulativeBorrowRate,
+          tokenAmount 
+        },
+        "Invalid token amount after SF conversion (not finite), skipping"
+      );
+      continue;
+    }
+    
+    // Clamp tiny negative floating point artifacts to zero
+    const tokenAmountClamped = tokenAmount < 0 && tokenAmount > -1e-18 ? 0 : tokenAmount;
+    
+    if (tokenAmountClamped < 0) {
+      logger.warn(
+        { 
+          mint: borrow.mint, 
+          tokenAmount: tokenAmountClamped 
+        },
+        "Negative token amount after SF conversion, skipping"
+      );
+      continue;
+    }
     
     // Convert to UI units using liquidityDecimals (borrows are in liquidity token)
-    const amountUi = tokenAmount / Math.pow(10, reserve.liquidityDecimals);
+    const amountUi = tokenAmountClamped / Math.pow(10, reserve.liquidityDecimals);
     
-    if (!isFinite(amountUi) || amountUi < 0) {
+    if (!isFinite(amountUi)) {
       logger.debug(
-        { mint: borrow.mint, borrowedAmountSf: borrow.borrowedAmount, tokenAmount, amountUi },
-        "Invalid borrow amount after SF conversion, skipping"
+        { mint: borrow.mint, tokenAmount: tokenAmountClamped, amountUi },
+        "Invalid borrow amount after decimal conversion, skipping"
       );
       continue;
     }

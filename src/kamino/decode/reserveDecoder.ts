@@ -103,6 +103,7 @@ export function decodeReserve(
   const oraclePubkeys = extractOraclePubkeys(decoded.config?.tokenInfo);
 
   // Map to DecodedReserve type with BN-safe conversion
+  // Note: cumulativeBorrowRateBsf is a BigFractionBytes structure, not a simple BN
   const result = {
     reservePubkey: reservePubkey.toString(),
     marketPubkey: decoded.lendingMarket.toString(),
@@ -117,6 +118,7 @@ export function decodeReserve(
     borrowFactor: Number(decoded.config.borrowFactorPct || 100), // Default to 100% if not set
     totalBorrowed: toBigInt(decoded.liquidity.borrowedAmountSf).toString(),
     availableLiquidity: toBigInt(decoded.liquidity.availableAmount).toString(),
+    // cumulativeBorrowRateBsf is a BigFractionBytes (4 x u64 limbs) - toBigInt now handles this
     cumulativeBorrowRate: toBigInt(decoded.liquidity.cumulativeBorrowRateBsf).toString(),
   };
 
