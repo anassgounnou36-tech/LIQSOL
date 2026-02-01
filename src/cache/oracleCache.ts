@@ -46,12 +46,87 @@ export interface OraclePriceData {
 export type OracleCache = Map<string, OraclePriceData>;
 
 /**
- * Decodes a Pyth price account using the official Pyth SDK
+ * Manually decodes a Pyth price account (fallback method)
+ * Based on Pyth V2 on-chain data structure
+ *
+ * @param data - Raw account data
+ * @returns Decoded price data or null if invalid
+ */
+function decodePythPriceManual(data: Buffer): OraclePriceData | null {
+  try {
+    // Check minimum size (minimum ~3312 bytes for Pyth V2)
+    if (data.length < 300) {
+      return null;
+    }
+
+    // Verify discriminator (magic + version + type)
+    // Magic: 0xa1b2c3d4 (4 bytes at offset 0)
+    const magic = data.readUInt32LE(0);
+    if (magic !== 0xa1b2c3d4) {
+      return null;
+    }
+
+    // Type: u32 at offset 8 (should be 3 for price account)
+    const accountType = data.readUInt32LE(8);
+    if (accountType !== 3) {
+      return null;
+    }
+
+    // Price aggregate data starts at offset 208
+    // Price: i64 at offset 208
+    const price = data.readBigInt64LE(208);
+    
+    // Confidence: u64 at offset 216
+    const confidence = data.readBigUInt64LE(216);
+    
+    // Status: u32 at offset 224 (1 = trading, 0 = unknown)
+    const status = data.readUInt32LE(224);
+    
+    // Exponent: i32 at offset 20
+    const exponent = data.readInt32LE(20);
+
+    // Slot: u64 at offset 104
+    // Note: Pyth stores publish_time (unix timestamp) here
+    const timestamp = data.readBigInt64LE(104);
+
+    if (status !== 1) {
+      logger.debug({ status }, "Pyth price status not trading");
+      return null;
+    }
+
+    // Staleness check
+    const currentTime = BigInt(Math.floor(Date.now() / 1000));
+    const ageSeconds = Number(currentTime - timestamp);
+    
+    if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
+      logger.debug(
+        { ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+        "Pyth price is stale, skipping"
+      );
+      return null;
+    }
+
+    return {
+      price: price,
+      confidence: confidence,
+      slot: timestamp > 0n ? timestamp : 0n,
+      exponent: exponent,
+      oracleType: "pyth",
+    };
+  } catch (err) {
+    logger.debug({ err }, "Failed to manually decode Pyth price");
+    return null;
+  }
+}
+
+/**
+ * Decodes a Pyth price account using the official Pyth SDK with manual fallback
  *
  * @param data - Raw account data
  * @returns Decoded price data or null if invalid
  */
 function decodePythPrice(data: Buffer): OraclePriceData | null {
+  // Try SDK first
   try {
     // Use official Pyth SDK to parse price data
     const priceData = parsePriceData(data);
@@ -90,8 +165,9 @@ function decodePythPrice(data: Buffer): OraclePriceData | null {
       oracleType: "pyth",
     };
   } catch (err) {
-    logger.error({ err }, "Failed to decode Pyth price with SDK");
-    return null;
+    // SDK failed, try manual decoding
+    logger.debug({ err }, "Pyth SDK failed, attempting manual decode");
+    return decodePythPriceManual(data);
   }
 }
 
