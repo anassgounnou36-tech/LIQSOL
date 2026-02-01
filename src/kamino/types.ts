@@ -29,6 +29,8 @@ export interface DecodedReserve {
   totalBorrowed: string;
   /** Available liquidity for borrowing (as string to avoid precision loss) */
   availableLiquidity: string;
+  /** Cumulative borrow rate BSF (big scaled fraction) for SF to token conversion */
+  cumulativeBorrowRate: string;
 }
 
 /**

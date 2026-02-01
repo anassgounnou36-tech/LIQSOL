@@ -117,6 +117,7 @@ export function decodeReserve(
     borrowFactor: Number(decoded.config.borrowFactorPct || 100), // Default to 100% if not set
     totalBorrowed: toBigInt(decoded.liquidity.borrowedAmountSf).toString(),
     availableLiquidity: toBigInt(decoded.liquidity.availableAmount).toString(),
+    cumulativeBorrowRate: toBigInt(decoded.liquidity.cumulativeBorrowRateBsf).toString(),
   };
 
   return result;

@@ -3,6 +3,7 @@ import { Buffer } from "buffer";
 import { logger } from "../observability/logger.js";
 import type { ReserveCache } from "./reserveCache.js";
 import { parsePriceData } from "@pythnetwork/client";
+import { OraclePrices } from "@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js";
 
 /**
  * Pyth Oracle Program ID (Solana mainnet)
@@ -172,30 +173,38 @@ function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
 }
 
 /**
- * Decodes a Scope price feed account
+ * Decodes a Scope price feed account using the Kamino Scope SDK
  *
  * @param data - Raw account data
  * @returns Decoded price data or null if invalid
  */
 function decodeScopePrice(data: Buffer): OraclePriceData | null {
   try {
-    // Scope price feeds are typically smaller
-    if (data.length < 100) {
+    // Use Scope SDK to decode the OraclePrices account
+    const oraclePrices = OraclePrices.decode(data);
+    
+    if (!oraclePrices || !oraclePrices.prices || oraclePrices.prices.length === 0) {
+      logger.debug("Scope OraclePrices has no prices");
       return null;
     }
-
-    // Scope stores prices in a specific format
-    // For now, we'll implement a basic decoder
-    // This is a placeholder - actual Scope format may differ
     
-    // Try to read basic fields (this may need adjustment based on actual Scope format)
-    const mantissa = data.readBigInt64LE(0);
-    const scale = data.readUInt8(8);
-    const timestamp = data.readBigInt64LE(16);
-
-    // Staleness check
+    // Get the first price (price ID 0)
+    const datedPrice = oraclePrices.prices[0];
+    if (!datedPrice || !datedPrice.price) {
+      logger.debug("Scope DatedPrice or Price is null");
+      return null;
+    }
+    
+    // Extract price components from the Price struct
+    const value = datedPrice.price.value; // BN (mantissa)
+    const exp = datedPrice.price.exp; // BN (exponent)
+    const unixTimestamp = datedPrice.unixTimestamp; // BN (unix timestamp in seconds)
+    
+    // Staleness check - use unix timestamp
+    const currentTime = BigInt(Math.floor(Date.now() / 1000));
+    const timestamp = BigInt(unixTimestamp.toString());
+    
     if (timestamp > 0n) {
-      const currentTime = BigInt(Math.floor(Date.now() / 1000));
       const ageSeconds = Number(currentTime - timestamp);
       
       if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
@@ -206,16 +215,22 @@ function decodeScopePrice(data: Buffer): OraclePriceData | null {
         return null;
       }
     }
-
+    
+    // Convert to our format
+    // Scope stores value as mantissa and exp as exponent
+    // Price = value * 10^exp
+    const priceBigInt = BigInt(value.toString());
+    const exponent = Number(exp.toString());
+    
     return {
-      price: mantissa,
-      confidence: 0n, // Scope may not provide confidence
-      exponent: -scale,
+      price: priceBigInt,
+      confidence: 0n, // Scope doesn't provide confidence in the same way
+      exponent: exponent,
       slot: timestamp,
       oracleType: "scope",
     };
   } catch (err) {
-    logger.error({ err }, "Failed to decode Scope price");
+    logger.error({ err }, "Failed to decode Scope price with SDK");
     return null;
   }
 }

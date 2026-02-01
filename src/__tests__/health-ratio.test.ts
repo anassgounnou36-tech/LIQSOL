@@ -22,6 +22,7 @@ describe("Health Ratio and Liquidation", () => {
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
             collateralDecimals: 9,
+            cumulativeBorrowRate: 10000000000n,
           },
         ],
         [
@@ -36,6 +37,7 @@ describe("Health Ratio and Liquidation", () => {
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 6,
             collateralDecimals: 6,
+            cumulativeBorrowRate: 10000000000n,
           },
         ],
       ]);
@@ -75,7 +77,7 @@ describe("Health Ratio and Liquidation", () => {
         {
           reserve: "reserve2",
           mint: "USDC",
-          borrowedAmount: "50000000", // 50 USDC (6 decimals)
+          borrowedAmount: "500000000000000000", // 50 USDC (6 decimals)
         },
       ];
 
@@ -146,6 +148,7 @@ describe("Health Ratio and Liquidation", () => {
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
             collateralDecimals: 9,
+            cumulativeBorrowRate: 10000000000n,
           },
         ],
       ]);
@@ -189,6 +192,7 @@ describe("Health Ratio and Liquidation", () => {
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
             collateralDecimals: 9,
+            cumulativeBorrowRate: 10000000000n,
           },
         ],
       ]);
@@ -218,7 +222,7 @@ describe("Health Ratio and Liquidation", () => {
         {
           reserve: "reserve1",
           mint: "SOL",
-          borrowedAmount: "100000000", // 0.1 SOL
+          borrowedAmount: "1000000000000000000", // 0.1 SOL
         },
       ];
 
@@ -247,6 +251,7 @@ describe("Health Ratio and Liquidation", () => {
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
             collateralDecimals: 9,
+            cumulativeBorrowRate: 10000000000n,
           },
         ],
         [
@@ -261,6 +266,7 @@ describe("Health Ratio and Liquidation", () => {
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 6,
             collateralDecimals: 6,
+            cumulativeBorrowRate: 10000000000n,
           },
         ],
       ]);
@@ -300,7 +306,7 @@ describe("Health Ratio and Liquidation", () => {
         {
           reserve: "reserve2",
           mint: "USDC",
-          borrowedAmount: "100000000", // 100 USDC
+          borrowedAmount: "1000000000000000000", // 100 USDC
         },
       ];
 

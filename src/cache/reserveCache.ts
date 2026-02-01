@@ -21,10 +21,10 @@ export interface ReserveCacheEntry {
   /** Available liquidity amount (raw, not adjusted for decimals) */
   availableAmount: bigint;
   /** 
-   * Cumulative borrow rate (stored as bigint for precision)
-   * Note: Currently not extracted from IDL. Future enhancement.
+   * Cumulative borrow rate (big scaled fraction / BSF)
+   * Used to convert borrowedAmountSf to actual token amounts
    */
-  cumulativeBorrowRate?: bigint;
+  cumulativeBorrowRate: bigint;
   /** Loan-to-value ratio (percentage 0-100) */
   loanToValue: number;
   /** Liquidation threshold (percentage 0-100) */
@@ -188,6 +188,7 @@ export async function loadReserves(
       const cacheEntry: ReserveCacheEntry = {
         reservePubkey: pubkey,
         availableAmount: BigInt(decoded.availableLiquidity),
+        cumulativeBorrowRate: BigInt(decoded.cumulativeBorrowRate),
         loanToValue: decoded.loanToValueRatio,
         liquidationThreshold: decoded.liquidationThreshold,
         liquidationBonus: decoded.liquidationBonus,

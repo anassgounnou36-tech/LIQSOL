@@ -47,30 +47,46 @@ function isStableMint(mint: string): boolean {
 
 /**
  * Convert mantissa to UI price using exponent
+ * Returns null if result is NaN or Infinity
  */
-function uiFromMantissa(price: bigint, exponent: number): number {
-  return Number(price) * Math.pow(10, exponent);
+function uiFromMantissa(price: bigint, exponent: number): number | null {
+  const result = Number(price) * Math.pow(10, exponent);
+  if (!isFinite(result)) {
+    return null;
+  }
+  return result;
 }
 
 /**
  * Apply confidence adjustment and stablecoin clamping
+ * Returns null if inputs are not finite or result is invalid
  * 
  * @param mint - Token mint address
  * @param basePrice - Base price in UI units
  * @param confidence - Confidence in UI units
  * @param side - Whether this is for collateral or borrow valuation
- * @returns Adjusted price
+ * @returns Adjusted price or null if invalid
  */
 function adjustedUiPrice(
   mint: string,
   basePrice: number,
   confidence: number,
   side: "collateral" | "borrow"
-): number {
+): number | null {
+  // Check for invalid inputs
+  if (!isFinite(basePrice) || !isFinite(confidence)) {
+    return null;
+  }
+  
   // Apply confidence adjustment
   const adjustedPrice = side === "collateral" 
     ? Math.max(0, basePrice - confidence)
     : basePrice + confidence;
+  
+  // Check for invalid result
+  if (!isFinite(adjustedPrice)) {
+    return null;
+  }
   
   // Apply stablecoin clamp [0.99, 1.01]
   if (isStableMint(mint)) {
@@ -139,11 +155,35 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     const baseUi = uiFromMantissa(oraclePrice.price, oraclePrice.exponent);
     const confUi = uiFromMantissa(oraclePrice.confidence, oraclePrice.exponent);
     
+    if (baseUi === null || confUi === null) {
+      logger.debug(
+        { mint: deposit.mint, baseUi, confUi },
+        "Invalid price conversion for deposit, skipping"
+      );
+      continue;
+    }
+    
     // Apply confidence adjustment and stablecoin clamping for collateral
     const priceUi = adjustedUiPrice(deposit.mint, baseUi, confUi, "collateral");
     
+    if (priceUi === null) {
+      logger.debug(
+        { mint: deposit.mint, baseUi, confUi },
+        "Invalid adjusted price for deposit, skipping"
+      );
+      continue;
+    }
+    
     // Convert amount to UI units using collateralDecimals (deposits are in collateral token)
     const amountUi = Number(BigInt(deposit.depositedAmount)) / Math.pow(10, reserve.collateralDecimals);
+    
+    if (!isFinite(amountUi)) {
+      logger.debug(
+        { mint: deposit.mint, depositedAmount: deposit.depositedAmount },
+        "Invalid amount for deposit, skipping"
+      );
+      continue;
+    }
     
     // Apply liquidationThreshold weight (convert percentage to decimal)
     const weight = reserve.liquidationThreshold / 100;
@@ -196,11 +236,52 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     const baseUi = uiFromMantissa(oraclePrice.price, oraclePrice.exponent);
     const confUi = uiFromMantissa(oraclePrice.confidence, oraclePrice.exponent);
     
+    if (baseUi === null || confUi === null) {
+      logger.debug(
+        { mint: borrow.mint, baseUi, confUi },
+        "Invalid price conversion for borrow, skipping"
+      );
+      continue;
+    }
+    
     // Apply confidence adjustment and stablecoin clamping for borrow
     const priceUi = adjustedUiPrice(borrow.mint, baseUi, confUi, "borrow");
     
-    // Convert amount to UI units using liquidityDecimals (borrows are in liquidity token)
-    const amountUi = Number(BigInt(borrow.borrowedAmount)) / Math.pow(10, reserve.liquidityDecimals);
+    if (priceUi === null) {
+      logger.debug(
+        { mint: borrow.mint, baseUi, confUi },
+        "Invalid adjusted price for borrow, skipping"
+      );
+      continue;
+    }
+    
+    // Convert borrowedAmountSf (scaled fraction) to actual token amount
+    // borrowedAmountSf needs to be divided by cumulativeBorrowRateBsf
+    const borrowedAmountSf = BigInt(borrow.borrowedAmount);
+    const cumulativeBorrowRate = reserve.cumulativeBorrowRate;
+    
+    if (cumulativeBorrowRate === 0n) {
+      logger.warn(
+        { mint: borrow.mint, reserve: borrow.reserve },
+        "Cumulative borrow rate is zero, skipping borrow"
+      );
+      continue;
+    }
+    
+    // Convert SF to token amount: tokenAmount = borrowedAmountSf / cumulativeBorrowRate
+    // Use Number for division after converting to avoid overflow
+    const tokenAmount = Number(borrowedAmountSf) / Number(cumulativeBorrowRate);
+    
+    // Convert to UI units using liquidityDecimals (borrows are in liquidity token)
+    const amountUi = tokenAmount / Math.pow(10, reserve.liquidityDecimals);
+    
+    if (!isFinite(amountUi) || amountUi < 0) {
+      logger.debug(
+        { mint: borrow.mint, borrowedAmountSf: borrow.borrowedAmount, tokenAmount, amountUi },
+        "Invalid borrow amount after SF conversion, skipping"
+      );
+      continue;
+    }
     
     // Apply borrowFactor (percentage, convert to decimal)
     // borrowFactor defaults to 100 (meaning 1.0x), so divide by 100
