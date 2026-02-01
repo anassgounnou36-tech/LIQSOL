@@ -5,6 +5,16 @@ import type { ReserveCache } from "./reserveCache.js";
 import { parsePriceData } from "@pythnetwork/client";
 
 /**
+ * Pyth Oracle Program ID (Solana mainnet)
+ */
+const PYTH_PROGRAM_ID = new PublicKey("FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH");
+
+/**
+ * Switchboard V2 Program ID (Solana mainnet)
+ */
+const SWITCHBOARD_V2_PROGRAM_ID = new PublicKey("SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f");
+
+/**
  * Known stablecoin mints for price clamping
  */
 const STABLECOIN_MINTS = new Set([
@@ -316,11 +326,12 @@ export async function loadOracles(
     return new Map();
   }
 
-  // Batch fetch oracle accounts
+  // Batch fetch oracle accounts (need full account info to check owner)
   const BATCH_SIZE = 100;
   const allOracleAccounts: Array<{
     pubkey: PublicKey;
     data: Buffer | null;
+    owner: PublicKey | null;
   }> = [];
 
   for (let i = 0; i < oraclePubkeys.length; i += BATCH_SIZE) {
@@ -336,6 +347,7 @@ export async function loadOracles(
       allOracleAccounts.push({
         pubkey: batch[j],
         data: accounts[j]?.data || null,
+        owner: accounts[j]?.owner || null,
       });
     }
   }
@@ -345,17 +357,44 @@ export async function loadOracles(
     "Fetched oracle account data"
   );
 
+  // Diagnostic: Check oracle coverage
+  const reserveCount = reserveCache.size;
+  if (oraclePubkeys.length < 10 && reserveCount > 50) {
+    logger.warn(
+      {
+        uniqueOracles: oraclePubkeys.length,
+        reserveCount,
+        sampleReserves: Array.from(reserveCache.entries()).slice(0, 3).map(([mint, reserve]) => ({
+          mint,
+          oracleCount: reserve.oraclePubkeys.length,
+          oracles: reserve.oraclePubkeys.map(pk => pk.toString()),
+        })),
+      },
+      "WARNING: Very few unique oracles for many reserves - possible configuration issue"
+    );
+  }
+
   // Decode oracle accounts and map to mints
   const cache = new Map<string, OraclePriceData>();
   let pythCount = 0;
   let switchboardCount = 0;
+  let unknownCount = 0;
   let failedCount = 0;
 
-  for (const { pubkey, data } of allOracleAccounts) {
+  for (const { pubkey, data, owner } of allOracleAccounts) {
     if (!data) {
       logger.warn(
         { pubkey: pubkey.toString() },
         "Oracle account has no data"
+      );
+      failedCount++;
+      continue;
+    }
+
+    if (!owner) {
+      logger.debug(
+        { pubkey: pubkey.toString() },
+        "Oracle account has no owner"
       );
       failedCount++;
       continue;
@@ -367,81 +406,78 @@ export async function loadOracles(
       continue;
     }
 
-    // Try decoding as Pyth first
-    let priceData = decodePythPrice(data);
-    if (priceData) {
-      pythCount++;
-      // Store for each mint that uses this oracle
-      // Note: If a mint has multiple oracles, the last one wins
-      for (const mint of mints) {
-        // Apply stablecoin price clamping
-        const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
-        const adjustedPriceData = { ...priceData, price: clampedPrice };
-        
-        const existing = cache.get(mint);
-        if (existing) {
-          logger.debug(
-            { mint, oldType: existing.oracleType, newType: "pyth" },
-            "Multiple oracles for mint, using Pyth"
-          );
-        }
-        cache.set(mint, adjustedPriceData);
-        logger.debug(
-          {
-            oracle: pubkeyStr,
-            mint,
-            price: adjustedPriceData.price.toString(),
-            type: "pyth",
-          },
-          "Cached Pyth oracle"
-        );
+    // Detect oracle type by account owner
+    let priceData: OraclePriceData | null = null;
+    
+    if (owner.equals(PYTH_PROGRAM_ID)) {
+      // This is a Pyth oracle
+      priceData = decodePythPrice(data);
+      if (priceData) {
+        pythCount++;
       }
+    } else if (owner.equals(SWITCHBOARD_V2_PROGRAM_ID)) {
+      // This is a Switchboard oracle
+      priceData = decodeSwitchboardPrice(data);
+      if (priceData) {
+        switchboardCount++;
+      }
+    } else {
+      // Unknown oracle program
+      logger.debug(
+        {
+          pubkey: pubkeyStr,
+          owner: owner.toString(),
+          expectedPyth: PYTH_PROGRAM_ID.toString(),
+          expectedSwitchboard: SWITCHBOARD_V2_PROGRAM_ID.toString(),
+        },
+        "Oracle account has unknown owner, skipping"
+      );
+      unknownCount++;
+      failedCount++;
       continue;
     }
 
-    // Try decoding as Switchboard
-    priceData = decodeSwitchboardPrice(data);
-    if (priceData) {
-      switchboardCount++;
-      // Store for each mint that uses this oracle
-      for (const mint of mints) {
-        // Apply stablecoin price clamping
-        const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
-        const adjustedPriceData = { ...priceData, price: clampedPrice };
-        
-        const existing = cache.get(mint);
-        if (existing) {
-          logger.debug(
-            { mint, oldType: existing.oracleType, newType: "switchboard" },
-            "Multiple oracles for mint, using Switchboard"
-          );
-        }
-        cache.set(mint, adjustedPriceData);
-        logger.debug(
-          {
-            oracle: pubkeyStr,
-            mint,
-            price: adjustedPriceData.price.toString(),
-            type: "switchboard",
-          },
-          "Cached Switchboard oracle"
-        );
-      }
+    if (!priceData) {
+      logger.debug(
+        { pubkey: pubkeyStr, owner: owner.toString() },
+        "Failed to decode oracle price"
+      );
+      failedCount++;
       continue;
     }
 
-    // If neither decoder worked, log and skip
-    logger.warn(
-      { pubkey: pubkeyStr, dataLength: data.length },
-      "Failed to decode oracle account as Pyth or Switchboard"
-    );
-    failedCount++;
+    // Store for each mint that uses this oracle
+    // Note: If a mint has multiple oracles, the last one wins
+    for (const mint of mints) {
+      // Apply stablecoin price clamping
+      const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
+      const adjustedPriceData = { ...priceData, price: clampedPrice };
+      
+      const existing = cache.get(mint);
+      if (existing) {
+        logger.debug(
+          { mint, oldType: existing.oracleType, newType: priceData.oracleType },
+          `Multiple oracles for mint, using ${priceData.oracleType}`
+        );
+      }
+      cache.set(mint, adjustedPriceData);
+      logger.debug(
+        {
+          oracle: pubkeyStr,
+          mint,
+          price: adjustedPriceData.price.toString(),
+          type: priceData.oracleType,
+        },
+        `Cached ${priceData.oracleType} oracle`
+      );
+    }
   }
 
   logger.info(
     {
       pyth: pythCount,
       switchboard: switchboardCount,
+      unknown: unknownCount,
       failed: failedCount,
       cached: cache.size,
     },
