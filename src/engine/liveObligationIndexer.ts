@@ -646,6 +646,29 @@ export class LiveObligationIndexer {
   }
 
   /**
+   * Bootstrap only - loads obligations from snapshot and RPC without starting the stream
+   * Useful for one-time scoring operations (e.g., CLI tools)
+   */
+  public async bootstrapOnly(): Promise<void> {
+    logger.info("Running bootstrap only (no streaming)");
+    
+    // Load pubkeys from snapshot
+    this.loadObligationPubkeys();
+    
+    // Bootstrap cache from RPC
+    await this.bootstrapCacheFromRpc();
+    
+    const stats = this.getStats();
+    logger.info(
+      {
+        cacheSize: stats.cacheSize,
+        scoredCount: stats.scoredCount,
+      },
+      "Bootstrap complete"
+    );
+  }
+
+  /**
    * Get a decoded obligation from the cache
    */
   public getObligation(pubkey: string): DecodedObligation | null {

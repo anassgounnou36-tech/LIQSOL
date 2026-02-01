@@ -79,12 +79,8 @@ async function main() {
     // Load snapshot and bootstrap (this will populate cache with scored obligations)
     logger.info("Loading obligation snapshot and computing health scores...");
     
-    // Start indexer - this will complete bootstrap synchronously before starting the subscription
-    await indexer.start();
-    
-    // Bootstrap is now complete (it's awaited in start()), so we can stop immediately
-    // The subscription starts in background but we don't need it for scoring
-    await indexer.stop();
+    // Use bootstrapOnly() - loads obligations and computes health without streaming
+    await indexer.bootstrapOnly();
 
     // Get stats
     const stats = indexer.getStats();

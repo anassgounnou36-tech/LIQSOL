@@ -202,8 +202,10 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     // Convert amount to UI units
     const amountUi = Number(BigInt(borrow.borrowedAmount)) / Math.pow(10, reserve.liquidityDecimals);
     
-    // Apply borrowFactor (should be in reserve, default to 1.0)
-    const borrowFactor = (reserve as any).borrowFactor ?? 1.0;
+    // Apply borrowFactor (percentage, convert to decimal)
+    // borrowFactor defaults to 100 (meaning 1.0x), so divide by 100
+    const borrowFactorPct = (reserve as any).borrowFactor ?? 100;
+    const borrowFactor = borrowFactorPct / 100;
     
     borrowUSD += amountUi * priceUi * borrowFactor;
     
