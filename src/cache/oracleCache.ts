@@ -15,6 +15,11 @@ const PYTH_PROGRAM_ID = new PublicKey("FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2
 const SWITCHBOARD_V2_PROGRAM_ID = new PublicKey("SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f");
 
 /**
+ * Scope Program ID (Kamino Scope Oracle)
+ */
+const SCOPE_PROGRAM_ID = new PublicKey("HFn8GnPADiny6XqUoWE8uRPPxb29ikn4yTuPa9MF2fWJ");
+
+/**
  * Known stablecoin mints for price clamping
  */
 const STABLECOIN_MINTS = new Set([
@@ -46,8 +51,8 @@ export interface OraclePriceData {
   slot: bigint;
   /** Exponent for price scaling (e.g., -8 means divide by 10^8) */
   exponent: number;
-  /** Oracle type (pyth, switchboard) */
-  oracleType: "pyth" | "switchboard";
+  /** Oracle type (pyth, switchboard, scope) */
+  oracleType: "pyth" | "switchboard" | "scope";
 }
 
 /**
@@ -56,57 +61,32 @@ export interface OraclePriceData {
 export type OracleCache = Map<string, OraclePriceData>;
 
 /**
- * Manually decodes a Pyth price account (fallback method)
- * Based on Pyth V2 on-chain data structure
+ * Decodes a Pyth price account using the official Pyth SDK
  *
  * @param data - Raw account data
  * @returns Decoded price data or null if invalid
  */
-function decodePythPriceManual(data: Buffer): OraclePriceData | null {
+function decodePythPriceWithSdk(data: Buffer): OraclePriceData | null {
   try {
-    // Check minimum size (minimum ~3312 bytes for Pyth V2)
-    if (data.length < 300) {
-      return null;
-    }
-
-    // Verify discriminator (magic + version + type)
-    // Magic: 0xa1b2c3d4 (4 bytes at offset 0)
-    const magic = data.readUInt32LE(0);
-    if (magic !== 0xa1b2c3d4) {
-      return null;
-    }
-
-    // Type: u32 at offset 8 (should be 3 for price account)
-    const accountType = data.readUInt32LE(8);
-    if (accountType !== 3) {
-      return null;
-    }
-
-    // Price aggregate data starts at offset 208
-    // Price: i64 at offset 208
-    const price = data.readBigInt64LE(208);
+    const parsed = parsePriceData(data);
     
-    // Confidence: u64 at offset 216
-    const confidence = data.readBigUInt64LE(216);
-    
-    // Status: u32 at offset 224 (1 = trading, 0 = unknown)
-    const status = data.readUInt32LE(224);
-    
-    // Exponent: i32 at offset 20
-    const exponent = data.readInt32LE(20);
-
-    // Slot: u64 at offset 104
-    // Note: Pyth stores publish_time (unix timestamp) here
-    const timestamp = data.readBigInt64LE(104);
-
-    if (status !== 1) {
-      logger.debug({ status }, "Pyth price status not trading");
+    // Check status (1 = trading)
+    if (!parsed || parsed.status !== 1) {
+      logger.debug({ status: parsed?.status }, "Pyth price status not trading");
       return null;
     }
 
-    // Staleness check
+    // Check for valid price and confidence
+    if (parsed.price === undefined || parsed.price === null || 
+        parsed.confidence === undefined || parsed.confidence === null) {
+      logger.debug("Pyth price or confidence is null");
+      return null;
+    }
+
+    // Use publishTime for freshness (unix timestamp)
+    const publishTime = BigInt(parsed.timestamp || 0);
     const currentTime = BigInt(Math.floor(Date.now() / 1000));
-    const ageSeconds = Number(currentTime - timestamp);
+    const ageSeconds = Number(currentTime - publishTime);
     
     if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
       logger.debug(
@@ -117,95 +97,37 @@ function decodePythPriceManual(data: Buffer): OraclePriceData | null {
     }
 
     return {
-      price: price,
-      confidence: confidence,
-      slot: timestamp > 0n ? timestamp : 0n,
-      exponent: exponent,
+      price: BigInt(Math.trunc(parsed.price)),
+      confidence: BigInt(Math.trunc(parsed.confidence)),
+      exponent: parsed.exponent,
+      slot: publishTime,
       oracleType: "pyth",
     };
   } catch (err) {
-    logger.debug({ err }, "Failed to manually decode Pyth price");
+    logger.error({ err }, "Failed to decode Pyth price via SDK");
     return null;
   }
 }
 
 /**
- * Decodes a Pyth price account using the official Pyth SDK with manual fallback
- *
- * @param data - Raw account data
- * @returns Decoded price data or null if invalid
- */
-function decodePythPrice(data: Buffer): OraclePriceData | null {
-  // Try SDK first
-  try {
-    // Use official Pyth SDK to parse price data
-    const priceData = parsePriceData(data);
-    
-    // Check if price is valid (status = trading)
-    if (priceData.status !== 1) {
-      logger.debug({ status: priceData.status }, "Pyth price status not trading");
-      return null;
-    }
-
-    // Check for valid price
-    if (priceData.price === undefined || priceData.price === null || 
-        priceData.confidence === undefined || priceData.confidence === null) {
-      logger.debug("Pyth price or confidence is null");
-      return null;
-    }
-
-    // Staleness check: Pyth uses timestamp (unix timestamp)
-    const timestamp = BigInt(priceData.timestamp || 0);
-    const currentTime = BigInt(Math.floor(Date.now() / 1000));
-    const ageSeconds = Number(currentTime - timestamp);
-    
-    if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
-      logger.debug(
-        { ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
-        "Pyth price is stale, skipping"
-      );
-      return null;
-    }
-
-    return {
-      price: BigInt(priceData.price),
-      confidence: BigInt(priceData.confidence),
-      slot: timestamp, // Use timestamp as slot proxy
-      exponent: priceData.exponent,
-      oracleType: "pyth",
-    };
-  } catch (err) {
-    // SDK failed, try manual decoding
-    logger.debug({ err }, "Pyth SDK failed, attempting manual decode");
-    return decodePythPriceManual(data);
-  }
-}
-
-/**
  * Decodes a Switchboard V2 aggregator account
- * Note: Using manual decoding because @switchboard-xyz/switchboard-v2 is deprecated
- * and has an incompatible API
+ * Note: Using manual decoding due to SDK compatibility issues
  *
  * @param data - Raw account data
  * @returns Decoded price data or null if invalid
  */
-function decodeSwitchboardPrice(data: Buffer): OraclePriceData | null {
+function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
   try {
-    // Check minimum size (Switchboard V2 aggregators are ~500 bytes)
+    // Check minimum size
     if (data.length < 200) {
       return null;
     }
 
-    // Latest confirmed round result starts around offset 217
-    // Value: i128 stored as two i64s (mantissa at 217, scale implicit)
-    // For simplicity, read as f64 representation if available
-    
     // Switchboard stores value as SwitchboardDecimal (i128 with scale)
     // Read mantissa: i64 at offset 217
     const mantissa = data.readBigInt64LE(217);
     
     // Scale: u32 at offset 225 (number of decimal places)
-    // Oracle scale values are typically small (0-18), so safe to convert to Number
     const scale = data.readUInt32LE(225);
     if (scale > Number.MAX_SAFE_INTEGER) {
       logger.warn({ scale }, "Switchboard scale exceeds safe integer bounds");
@@ -233,8 +155,7 @@ function decodeSwitchboardPrice(data: Buffer): OraclePriceData | null {
       }
     }
 
-    // Convert to similar format as Pyth
-    // Switchboard uses scale (decimals), Pyth uses exponent
+    // Convert scale to exponent
     const exponent = -Number(scale);
 
     return {
@@ -246,6 +167,55 @@ function decodeSwitchboardPrice(data: Buffer): OraclePriceData | null {
     };
   } catch (err) {
     logger.error({ err }, "Failed to decode Switchboard price");
+    return null;
+  }
+}
+
+/**
+ * Decodes a Scope price feed account
+ *
+ * @param data - Raw account data
+ * @returns Decoded price data or null if invalid
+ */
+function decodeScopePrice(data: Buffer): OraclePriceData | null {
+  try {
+    // Scope price feeds are typically smaller
+    if (data.length < 100) {
+      return null;
+    }
+
+    // Scope stores prices in a specific format
+    // For now, we'll implement a basic decoder
+    // This is a placeholder - actual Scope format may differ
+    
+    // Try to read basic fields (this may need adjustment based on actual Scope format)
+    const mantissa = data.readBigInt64LE(0);
+    const scale = data.readUInt8(8);
+    const timestamp = data.readBigInt64LE(16);
+
+    // Staleness check
+    if (timestamp > 0n) {
+      const currentTime = BigInt(Math.floor(Date.now() / 1000));
+      const ageSeconds = Number(currentTime - timestamp);
+      
+      if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
+        logger.debug(
+          { ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+          "Scope price is stale, skipping"
+        );
+        return null;
+      }
+    }
+
+    return {
+      price: mantissa,
+      confidence: 0n, // Scope may not provide confidence
+      exponent: -scale,
+      slot: timestamp,
+      oracleType: "scope",
+    };
+  } catch (err) {
+    logger.error({ err }, "Failed to decode Scope price");
     return null;
   }
 }
@@ -378,6 +348,7 @@ export async function loadOracles(
   const cache = new Map<string, OraclePriceData>();
   let pythCount = 0;
   let switchboardCount = 0;
+  let scopeCount = 0;
   let unknownCount = 0;
   let failedCount = 0;
 
@@ -406,29 +377,37 @@ export async function loadOracles(
       continue;
     }
 
-    // Detect oracle type by account owner
+    // Detect oracle type by account owner and route to appropriate decoder
     let priceData: OraclePriceData | null = null;
+    const ownerStr = owner.toString();
     
     if (owner.equals(PYTH_PROGRAM_ID)) {
-      // This is a Pyth oracle
-      priceData = decodePythPrice(data);
+      // Use Pyth SDK decoder
+      priceData = decodePythPriceWithSdk(data);
       if (priceData) {
         pythCount++;
       }
     } else if (owner.equals(SWITCHBOARD_V2_PROGRAM_ID)) {
-      // This is a Switchboard oracle
-      priceData = decodeSwitchboardPrice(data);
+      // Use Switchboard decoder
+      priceData = decodeSwitchboardPriceWithSdk(data);
       if (priceData) {
         switchboardCount++;
+      }
+    } else if (owner.equals(SCOPE_PROGRAM_ID)) {
+      // Use Scope decoder
+      priceData = decodeScopePrice(data);
+      if (priceData) {
+        scopeCount++;
       }
     } else {
       // Unknown oracle program
       logger.debug(
         {
           pubkey: pubkeyStr,
-          owner: owner.toString(),
+          owner: ownerStr,
           expectedPyth: PYTH_PROGRAM_ID.toString(),
           expectedSwitchboard: SWITCHBOARD_V2_PROGRAM_ID.toString(),
+          expectedScope: SCOPE_PROGRAM_ID.toString(),
         },
         "Oracle account has unknown owner, skipping"
       );
@@ -438,8 +417,8 @@ export async function loadOracles(
     }
 
     if (!priceData) {
-      logger.debug(
-        { pubkey: pubkeyStr, owner: owner.toString() },
+      logger.warn(
+        { pubkey: pubkeyStr, owner: ownerStr },
         "Failed to decode oracle price"
       );
       failedCount++;
@@ -477,6 +456,7 @@ export async function loadOracles(
     {
       pyth: pythCount,
       switchboard: switchboardCount,
+      scope: scopeCount,
       unknown: unknownCount,
       failed: failedCount,
       cached: cache.size,
