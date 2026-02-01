@@ -33,6 +33,8 @@ export interface ReserveCacheEntry {
   liquidationBonus: number;
   /** Array of oracle public keys for price feeds */
   oraclePubkeys: PublicKey[];
+  /** Liquidity mint decimals for precision calculations */
+  liquidityDecimals: number;
 }
 
 /**
@@ -186,6 +188,7 @@ export async function loadReserves(
         liquidationThreshold: decoded.liquidationThreshold,
         liquidationBonus: decoded.liquidationBonus,
         oraclePubkeys,
+        liquidityDecimals: decoded.liquidityDecimals,
       };
 
       // Store in cache keyed by liquidity mint
