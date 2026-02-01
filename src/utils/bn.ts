@@ -72,12 +72,12 @@ export function divBigintToNumber(
     throw new Error("Division by zero");
   }
   
-  // Scale numerator by 10^precision, then divide
-  const scaleFactor = BigInt(10 ** precision);
+  // Scale numerator by 10^precision (using bigint exponentiation to avoid overflow)
+  const scaleFactor = 10n ** BigInt(precision);
   const scaled = (numerator * scaleFactor) / denominator;
   
   // Convert to number and scale back
-  return Number(scaled) / (10 ** precision);
+  return Number(scaled) / Number(scaleFactor);
 }
 
 export function toBigInt(v: unknown): bigint {

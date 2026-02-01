@@ -14,6 +14,12 @@ const STABLECOIN_MINTS = new Set([
 ]);
 
 /**
+ * Tolerance for clamping tiny negative floating-point artifacts to zero.
+ * These artifacts can occur from precision parameter (18) in bigint division.
+ */
+const FLOATING_POINT_TOLERANCE = 1e-18;
+
+/**
  * Input for health ratio computation
  */
 export interface HealthRatioInput {
@@ -290,7 +296,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     }
     
     // Clamp tiny negative floating point artifacts to zero
-    const tokenAmountClamped = tokenAmount < 0 && tokenAmount > -1e-18 ? 0 : tokenAmount;
+    const tokenAmountClamped = tokenAmount < 0 && tokenAmount > -FLOATING_POINT_TOLERANCE ? 0 : tokenAmount;
     
     if (tokenAmountClamped < 0) {
       logger.warn(
