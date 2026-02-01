@@ -142,8 +142,8 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     // Apply confidence adjustment and stablecoin clamping for collateral
     const priceUi = adjustedUiPrice(deposit.mint, baseUi, confUi, "collateral");
     
-    // Convert amount to UI units
-    const amountUi = Number(BigInt(deposit.depositedAmount)) / Math.pow(10, reserve.liquidityDecimals);
+    // Convert amount to UI units using collateralDecimals (deposits are in collateral token)
+    const amountUi = Number(BigInt(deposit.depositedAmount)) / Math.pow(10, reserve.collateralDecimals);
     
     // Apply liquidationThreshold weight (convert percentage to decimal)
     const weight = reserve.liquidationThreshold / 100;
@@ -199,12 +199,12 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     // Apply confidence adjustment and stablecoin clamping for borrow
     const priceUi = adjustedUiPrice(borrow.mint, baseUi, confUi, "borrow");
     
-    // Convert amount to UI units
+    // Convert amount to UI units using liquidityDecimals (borrows are in liquidity token)
     const amountUi = Number(BigInt(borrow.borrowedAmount)) / Math.pow(10, reserve.liquidityDecimals);
     
     // Apply borrowFactor (percentage, convert to decimal)
     // borrowFactor defaults to 100 (meaning 1.0x), so divide by 100
-    const borrowFactorPct = (reserve as any).borrowFactor ?? 100;
+    const borrowFactorPct = reserve.borrowFactor ?? 100;
     const borrowFactor = borrowFactorPct / 100;
     
     borrowUSD += amountUi * priceUi * borrowFactor;

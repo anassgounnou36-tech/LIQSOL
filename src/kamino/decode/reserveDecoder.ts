@@ -103,7 +103,7 @@ export function decodeReserve(
   const oraclePubkeys = extractOraclePubkeys(decoded.config?.tokenInfo);
 
   // Map to DecodedReserve type with BN-safe conversion
-  return {
+  const result = {
     reservePubkey: reservePubkey.toString(),
     marketPubkey: decoded.lendingMarket.toString(),
     liquidityMint: decoded.liquidity.mintPubkey.toString(),
@@ -118,5 +118,7 @@ export function decodeReserve(
     totalBorrowed: toBigInt(decoded.liquidity.borrowedAmountSf).toString(),
     availableLiquidity: toBigInt(decoded.liquidity.availableAmount).toString(),
   };
+
+  return result;
 }
 

@@ -21,6 +21,7 @@ describe("Health Ratio and Liquidation", () => {
             borrowFactor: 100, // 100% borrow factor
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
+            collateralDecimals: 9,
           },
         ],
         [
@@ -34,6 +35,7 @@ describe("Health Ratio and Liquidation", () => {
             borrowFactor: 100, // 100% borrow factor
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 6,
+            collateralDecimals: 6,
           },
         ],
       ]);
@@ -143,6 +145,7 @@ describe("Health Ratio and Liquidation", () => {
             borrowFactor: 100,
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
+            collateralDecimals: 9,
           },
         ],
       ]);
@@ -185,6 +188,7 @@ describe("Health Ratio and Liquidation", () => {
             borrowFactor: 100,
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
+            collateralDecimals: 9,
           },
         ],
       ]);
@@ -242,6 +246,7 @@ describe("Health Ratio and Liquidation", () => {
             borrowFactor: 100,
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 9,
+            collateralDecimals: 9,
           },
         ],
         [
@@ -255,6 +260,7 @@ describe("Health Ratio and Liquidation", () => {
             borrowFactor: 100,
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 6,
+            collateralDecimals: 6,
           },
         ],
       ]);

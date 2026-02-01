@@ -39,6 +39,7 @@ describe("Cache Index Integration Tests", () => {
           borrowFactor: 100,
             oraclePubkeys: [PublicKey.unique()],
             liquidityDecimals: 6,
+            collateralDecimals: 6,
           },
         ],
       ]);

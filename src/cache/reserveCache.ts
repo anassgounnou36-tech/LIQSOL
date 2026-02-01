@@ -37,6 +37,8 @@ export interface ReserveCacheEntry {
   oraclePubkeys: PublicKey[];
   /** Liquidity mint decimals for precision calculations */
   liquidityDecimals: number;
+  /** Collateral mint decimals for deposit amount normalization */
+  collateralDecimals: number;
 }
 
 /**
@@ -192,6 +194,7 @@ export async function loadReserves(
         borrowFactor: decoded.borrowFactor,
         oraclePubkeys,
         liquidityDecimals: decoded.liquidityDecimals,
+        collateralDecimals: decoded.collateralDecimals,
       };
 
       // Store in cache keyed by liquidity mint
