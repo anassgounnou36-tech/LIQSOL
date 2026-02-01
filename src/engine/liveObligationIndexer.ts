@@ -10,6 +10,10 @@ import { subscribeToAccounts, YellowstoneSubscriptionHandle } from "../yellowsto
 import { CommitmentLevel, SubscribeRequestFilterAccounts } from "@triton-one/yellowstone-grpc";
 import { withRetry } from "../utils/retry.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
+import { computeHealthRatio } from "../math/health.js";
+import { isLiquidatable } from "../math/liquidation.js";
+import type { ReserveCache } from "../cache/reserveCache.js";
+import type { OracleCache } from "../cache/oracleCache.js";
 
 /**
  * Live Obligation Indexer - Production-grade indexer with Yellowstone gRPC streaming
@@ -39,16 +43,32 @@ export interface LiveObligationIndexerConfig {
   bootstrapBatchSize?: number; // Default 100
   bootstrapConcurrency?: number; // Default 1
   inactivityTimeoutSeconds?: number; // Default 15
+  reserveCache?: ReserveCache; // Optional: reserve cache for health scoring
+  oracleCache?: OracleCache; // Optional: oracle cache for health scoring
 }
 
 interface ObligationEntry {
   decoded: DecodedObligation;
   lastUpdated: number;
   slot: bigint;
+  healthRatio?: number;
+  borrowValue?: number;
+  collateralValue?: number;
+  liquidationEligible?: boolean;
 }
 
 export class LiveObligationIndexer {
-  private config: Required<LiveObligationIndexerConfig>;
+  private config: LiveObligationIndexerConfig & {
+    obligationsFilePath: string;
+    filters: SubscribeRequestFilterAccounts["filters"];
+    commitment: CommitmentLevel;
+    maxReconnectAttempts: number;
+    reconnectDelayMs: number;
+    reconnectBackoffFactor: number;
+    bootstrapBatchSize: number;
+    bootstrapConcurrency: number;
+    inactivityTimeoutSeconds: number;
+  };
   private cache: Map<string, ObligationEntry> = new Map();
   private obligationPubkeys: Set<string> = new Set();
   private client: YellowstoneClientInstance | null = null;
@@ -57,6 +77,8 @@ export class LiveObligationIndexer {
   private shouldReconnect = true;
   private currentReconnectAttempt = 0;
   private reconnectCount = 0;
+  private reserveCache?: ReserveCache;
+  private oracleCache?: OracleCache;
   
   // Circuit breaker for decode failures
   private decodeFailures: number[] = []; // timestamps of failures
@@ -65,6 +87,7 @@ export class LiveObligationIndexer {
 
   constructor(config: LiveObligationIndexerConfig) {
     this.config = {
+      ...config,
       obligationsFilePath: config.obligationsFilePath || join(process.cwd(), "data", "obligations.jsonl"),
       filters: config.filters || [],
       commitment: config.commitment || CommitmentLevel.CONFIRMED,
@@ -74,8 +97,9 @@ export class LiveObligationIndexer {
       bootstrapBatchSize: config.bootstrapBatchSize || 100,
       bootstrapConcurrency: config.bootstrapConcurrency || 1,
       inactivityTimeoutSeconds: config.inactivityTimeoutSeconds || 15,
-      ...config,
     };
+    this.reserveCache = config.reserveCache;
+    this.oracleCache = config.oracleCache;
   }
 
   /**
@@ -178,11 +202,15 @@ export class LiveObligationIndexer {
                 const decoded = decodeObligation(Buffer.from(account.data), pubkey);
                 const pubkeyStr = pubkey.toString();
                 
+                // Compute health scoring if caches are available
+                const scoring = this.computeHealthScoring(decoded);
+                
                 // Use slot 0n for bootstrap data (lowest priority)
                 this.cache.set(pubkeyStr, {
                   decoded,
                   lastUpdated: Date.now(),
                   slot: 0n,
+                  ...scoring,
                 });
                 
                 successCount++;
@@ -238,6 +266,65 @@ export class LiveObligationIndexer {
   }
 
   /**
+   * Compute health scoring for an obligation if caches are available
+   */
+  private computeHealthScoring(decoded: DecodedObligation): {
+    healthRatio?: number;
+    borrowValue?: number;
+    collateralValue?: number;
+    liquidationEligible?: boolean;
+  } {
+    // Only compute scoring if both caches are available
+    if (!this.reserveCache || !this.oracleCache) {
+      return {};
+    }
+
+    try {
+      // Compute health ratio
+      const { healthRatio, borrowValue, collateralValue } = computeHealthRatio({
+        deposits: decoded.deposits,
+        borrows: decoded.borrows,
+        reserves: this.reserveCache,
+        prices: this.oracleCache,
+      });
+
+      // Determine liquidation threshold
+      // Use the minimum liquidation threshold from all involved reserves (conservative approach)
+      let minLiquidationThreshold = 1.0; // Default threshold (100%)
+      
+      // Check all deposit and borrow reserves
+      const allMints = new Set<string>();
+      decoded.deposits.forEach(d => allMints.add(d.mint));
+      decoded.borrows.forEach(b => allMints.add(b.mint));
+      
+      for (const mint of allMints) {
+        const reserve = this.reserveCache.get(mint);
+        if (reserve) {
+          // liquidationThreshold is percentage (0-100), convert to decimal (0-1)
+          const threshold = reserve.liquidationThreshold / 100;
+          minLiquidationThreshold = Math.min(minLiquidationThreshold, threshold);
+        }
+      }
+
+      // Determine liquidation eligibility
+      const liquidationEligible = isLiquidatable(healthRatio, minLiquidationThreshold);
+
+      return {
+        healthRatio,
+        borrowValue,
+        collateralValue,
+        liquidationEligible,
+      };
+    } catch (err) {
+      logger.warn(
+        { err, obligationPubkey: decoded.obligationPubkey },
+        "Failed to compute health scoring for obligation"
+      );
+      return {};
+    }
+  }
+
+  /**
    * Handle incoming account update
    */
   private handleAccountUpdate = async (
@@ -268,11 +355,15 @@ export class LiveObligationIndexer {
         return;
       }
 
+      // Compute health scoring if caches are available
+      const scoring = this.computeHealthScoring(decoded);
+
       // Accept the update
       this.cache.set(pubkeyStr, {
         decoded,
         lastUpdated: Date.now(),
         slot,
+        ...scoring,
       });
 
       // Add to known pubkeys set
@@ -284,6 +375,8 @@ export class LiveObligationIndexer {
           slot: slot.toString(),
           depositsCount: decoded.deposits.length,
           borrowsCount: decoded.borrows.length,
+          healthRatio: scoring.healthRatio,
+          liquidationEligible: scoring.liquidationEligible,
         }, 
         "Updated obligation in cache"
       );
@@ -578,10 +671,16 @@ export class LiveObligationIndexer {
     oldestSlot: string | null;
     newestSlot: string | null;
     reconnectCount: number;
+    scoredCount: number;
+    liquidatableCount: number;
   } {
     const entries = Array.from(this.cache.values());
     const lastUpdateTimes = entries.map(e => e.lastUpdated);
     const slots = entries.map(e => e.slot);
+    
+    // Count scored and liquidatable obligations
+    const scoredCount = entries.filter(e => e.healthRatio !== undefined).length;
+    const liquidatableCount = entries.filter(e => e.liquidationEligible === true).length;
 
     return {
       isRunning: this.isRunning,
@@ -593,6 +692,8 @@ export class LiveObligationIndexer {
       oldestSlot: slots.length > 0 ? slots.reduce((a, b) => (a < b ? a : b)).toString() : null,
       newestSlot: slots.length > 0 ? slots.reduce((a, b) => (a > b ? a : b)).toString() : null,
       reconnectCount: this.reconnectCount,
+      scoredCount,
+      liquidatableCount,
     };
   }
 
@@ -609,5 +710,41 @@ export class LiveObligationIndexer {
   public reloadSnapshot(): void {
     logger.info("Reloading obligation snapshot");
     this.loadObligationPubkeys();
+  }
+
+  /**
+   * Get scored obligations sorted by health ratio (riskiest first)
+   * @param limit - Maximum number of obligations to return
+   * @returns Array of scored obligations with health data
+   */
+  public getScoredObligations(limit?: number): Array<{
+    obligationPubkey: string;
+    ownerPubkey: string;
+    healthRatio: number;
+    borrowValue: number;
+    collateralValue: number;
+    liquidationEligible: boolean;
+    depositsCount: number;
+    borrowsCount: number;
+  }> {
+    const scored = Array.from(this.cache.values())
+      .filter(entry => entry.healthRatio !== undefined)
+      .map(entry => ({
+        obligationPubkey: entry.decoded.obligationPubkey,
+        ownerPubkey: entry.decoded.ownerPubkey,
+        healthRatio: entry.healthRatio!,
+        borrowValue: entry.borrowValue!,
+        collateralValue: entry.collateralValue!,
+        liquidationEligible: entry.liquidationEligible!,
+        depositsCount: entry.decoded.deposits.length,
+        borrowsCount: entry.decoded.borrows.length,
+      }))
+      .sort((a, b) => a.healthRatio - b.healthRatio); // Sort by health ratio (lowest first = riskiest)
+
+    if (limit !== undefined && limit > 0) {
+      return scored.slice(0, limit);
+    }
+
+    return scored;
   }
 }
