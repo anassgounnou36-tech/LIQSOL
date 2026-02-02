@@ -39,8 +39,8 @@ export interface ReserveCacheEntry {
   liquidityDecimals: number;
   /** Collateral mint decimals for deposit amount normalization */
   collateralDecimals: number;
-  /** Scope price chain index (0-511) for multi-chain Scope oracles, null if not using Scope */
-  scopePriceChain: number | null;
+  /** Scope price chain indices array (0-511) for multi-chain Scope oracles, null if not using Scope */
+  scopePriceChain: number[] | null;
 }
 
 /**
@@ -49,11 +49,11 @@ export interface ReserveCacheEntry {
 export type ReserveCache = Map<string, ReserveCacheEntry>;
 
 /**
- * Scope oracle chain map - maps Scope oracle pubkey to priceChain index
+ * Scope oracle chain map - maps Scope oracle pubkey to priceChain indices array
  * This is populated during reserve loading and used during oracle decoding
- * to select the correct price from multi-chain Scope oracles
+ * to select the correct price from multi-chain Scope oracles by trying fallback chains
  */
-export const scopeOracleChainMap = new Map<string, number>();
+export const scopeOracleChainMap = new Map<string, number[]>();
 
 /**
  * Loads all reserves for a given Kamino market and builds a cache
@@ -193,14 +193,12 @@ export async function loadReserves(
         (pk) => new PublicKey(pk)
       );
       
-      // If this reserve uses Scope, track the oracle→chain mapping
-      if (decoded.scopePriceChain !== null) {
+      // If this reserve uses Scope, track the oracle→priceChain array mapping
+      if (decoded.scopePriceChain !== null && decoded.scopePriceChain.length > 0) {
         // Find the Scope oracle pubkey (it should be in the oraclePubkeys array)
         for (const oraclePk of oraclePubkeys) {
           const oracleStr = oraclePk.toString();
-          // Check if this might be a Scope oracle by checking if it's already in the map
-          // or by checking the owner later during oracle loading
-          // For now, we'll map all oracles if scopePriceChain is set
+          // Map all oracles if scopePriceChain is set
           // The oracle loader will determine which ones are actually Scope oracles
           if (!scopeOracleChainMap.has(oracleStr)) {
             scopeOracleChainMap.set(oracleStr, decoded.scopePriceChain);
@@ -210,7 +208,7 @@ export async function loadReserves(
                 oracle: oracleStr,
                 priceChain: decoded.scopePriceChain,
               },
-              "Mapped Scope oracle to price chain"
+              "Mapped Scope oracle to price chain array"
             );
           }
         }

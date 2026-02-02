@@ -78,15 +78,15 @@ function extractOraclePubkeys(tokenInfo: {
 }
 
 /**
- * Extracts scope price chain from Reserve's TokenInfo configuration
- * @returns The first price chain index (0-511) or null if not configured
+ * Extracts scope price chain array from Reserve's TokenInfo configuration
+ * @returns Array of all price chain indices (0-511), excluding 65535 sentinel, or null if not configured
  */
 function extractScopePriceChain(tokenInfo: {
   scopeConfiguration?: { 
     priceFeed?: { toString: () => string };
     priceChain?: number[];
   };
-}): number | null {
+}): number[] | null {
   const nullPubkey = "11111111111111111111111111111111";
   
   // Only extract if scope is configured with a valid priceFeed
@@ -97,21 +97,29 @@ function extractScopePriceChain(tokenInfo: {
     return null;
   }
   
-  // priceChain is an array of u16 [4], use the first element
+  // priceChain is an array of u16 [4], extract all valid indices
   const priceChain = tokenInfo.scopeConfiguration.priceChain;
   if (!priceChain || !Array.isArray(priceChain) || priceChain.length === 0) {
     return null;
   }
   
-  const chain = Number(priceChain[0]);
-  
-  // Validate: chain should be < 512 (max Scope chains)
-  // 65535 (0xFFFF) is used as a sentinel for "not set"
-  if (chain >= 512 || chain === 65535) {
-    return null;
+  // Filter and validate chain indices
+  const validChains: number[] = [];
+  for (const chainValue of priceChain) {
+    const chain = Number(chainValue);
+    
+    // Skip sentinel value 65535 (0xFFFF) which means "not set"
+    if (chain === 65535) {
+      continue;
+    }
+    
+    // Validate: chain should be < 512 (max Scope chains)
+    if (chain >= 0 && chain < 512) {
+      validChains.push(chain);
+    }
   }
   
-  return chain;
+  return validChains.length > 0 ? validChains : null;
 }
 
 /**

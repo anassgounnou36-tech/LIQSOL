@@ -288,26 +288,10 @@ export class LiveObligationIndexer {
         prices: this.oracleCache,
       });
 
-      // Determine liquidation threshold
-      // Use the minimum liquidation threshold from all involved reserves (conservative approach)
-      let minLiquidationThreshold = 1.0; // Default threshold (100%)
-      
-      // Check all deposit and borrow reserves
-      const allMints = new Set<string>();
-      decoded.deposits.forEach(d => allMints.add(d.mint));
-      decoded.borrows.forEach(b => allMints.add(b.mint));
-      
-      for (const mint of allMints) {
-        const reserve = this.reserveCache.get(mint);
-        if (reserve) {
-          // liquidationThreshold is percentage (0-100), convert to decimal (0-1)
-          const threshold = reserve.liquidationThreshold / 100;
-          minLiquidationThreshold = Math.min(minLiquidationThreshold, threshold);
-        }
-      }
-
       // Determine liquidation eligibility
-      const liquidationEligible = isLiquidatable(healthRatio, minLiquidationThreshold);
+      // Since health ratio is computed with liquidation-threshold-weighted collateral,
+      // we simply check if healthRatio < 1.0 (no need to apply threshold again)
+      const liquidationEligible = isLiquidatable(healthRatio);
 
       return {
         healthRatio,

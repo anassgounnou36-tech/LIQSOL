@@ -31,8 +31,8 @@ export interface DecodedReserve {
   availableLiquidity: string;
   /** Cumulative borrow rate BSF (big scaled fraction) for SF to token conversion */
   cumulativeBorrowRate: string;
-  /** Scope price chain index (0-511) for multi-chain Scope oracles, null if not using Scope */
-  scopePriceChain: number | null;
+  /** Scope price chain indices array (0-511) for multi-chain Scope oracles with fallback, null if not using Scope */
+  scopePriceChain: number[] | null;
 }
 
 /**
