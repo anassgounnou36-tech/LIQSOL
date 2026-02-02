@@ -246,7 +246,9 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
       }
       
       // Guard against invalid exponent (but 0 is valid)
-      const exponent = Number(exp.toString());
+      // Scope's exp is a scale (decimal places), so we need negative exponent for UI price conversion
+      // UI price = mantissa × 10^(-exp)
+      const exponent = -Number(exp.toString());
       if (!isFinite(exponent)) {
         logger.debug({ chain, exponent }, "Scope price exponent is invalid at chain index");
         continue;

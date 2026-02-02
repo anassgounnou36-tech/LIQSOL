@@ -381,6 +381,15 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
   // Clamp to [0, 2]
   ratio = Math.max(0, Math.min(2, ratio));
   
+  // Final check to ensure no NaN sneaks through
+  if (!isFinite(ratio)) {
+    return { 
+      healthRatio: null, 
+      borrowValue: borrowUSD, 
+      collateralValue: collateralUSD 
+    };
+  }
+  
   return {
     healthRatio: ratio,
     borrowValue: borrowUSD,
