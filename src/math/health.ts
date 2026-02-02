@@ -357,8 +357,8 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
   if (!scored) {
     return { 
       healthRatio: null, 
-      borrowValue: borrowUSD || 0, 
-      collateralValue: collateralUSD || 0 
+      borrowValue: isFinite(borrowUSD) ? borrowUSD : 0, 
+      collateralValue: isFinite(collateralUSD) ? collateralUSD : 0 
     };
   }
   

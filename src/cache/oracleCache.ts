@@ -245,16 +245,16 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
         continue;
       }
       
-      // Guard against invalid exponent
+      // Guard against invalid exponent (but 0 is valid)
       const exponent = Number(exp.toString());
-      if (exponent === 0) {
-        logger.debug({ chain, exponent }, "Scope price exponent is zero at chain index");
+      if (!isFinite(exponent)) {
+        logger.debug({ chain, exponent }, "Scope price exponent is invalid at chain index");
         continue;
       }
       
       // Guard against zero/invalid timestamp
       const timestamp = BigInt(unixTimestamp?.toString() || "0");
-      if (!unixTimestamp || timestamp === 0n) {
+      if (timestamp === 0n) {
         logger.debug({ chain, timestamp: timestamp.toString() }, "Scope price entry invalid/stale (no timestamp)");
         continue;
       }
@@ -274,8 +274,8 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
       // Found a valid, fresh price!
       logger.info({ chain, value: priceBigInt.toString(), exponent }, "Scope price selected");
       
-      // Extract confidence if available
-      const confidence = datedPrice.price.value ? BigInt((datedPrice as any).confidence?.toString() || "0") : 0n;
+      // Extract confidence if available from the feed
+      const confidence = BigInt((datedPrice as any).confidence?.toString() || "0");
       
       return {
         price: priceBigInt,
