@@ -51,7 +51,7 @@ interface ObligationEntry {
   decoded: DecodedObligation;
   lastUpdated: number;
   slot: bigint;
-  healthRatio?: number;
+  healthRatio?: number | null;
   borrowValue?: number;
   collateralValue?: number;
   liquidationEligible?: boolean;
@@ -269,7 +269,7 @@ export class LiveObligationIndexer {
    * Compute health scoring for an obligation if caches are available
    */
   private computeHealthScoring(decoded: DecodedObligation): {
-    healthRatio?: number;
+    healthRatio?: number | null;
     borrowValue?: number;
     collateralValue?: number;
     liquidationEligible?: boolean;
@@ -686,7 +686,7 @@ export class LiveObligationIndexer {
     const slots = entries.map(e => e.slot);
     
     // Count scored and liquidatable obligations
-    const scoredCount = entries.filter(e => e.healthRatio !== undefined).length;
+    const scoredCount = entries.filter(e => typeof e.healthRatio === 'number').length;
     const liquidatableCount = entries.filter(e => e.liquidationEligible === true).length;
 
     return {
@@ -735,7 +735,7 @@ export class LiveObligationIndexer {
     borrowsCount: number;
   }> {
     const scored = Array.from(this.cache.values())
-      .filter(entry => entry.healthRatio !== undefined)
+      .filter(entry => typeof entry.healthRatio === 'number')
       .map(entry => ({
         obligationPubkey: entry.decoded.obligationPubkey,
         ownerPubkey: entry.decoded.ownerPubkey,
