@@ -9,8 +9,10 @@ import { divBigintToNumber } from "../utils/bn.js";
  */
 const STABLECOIN_MINTS = new Set([
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
-  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT (old)
+  "Es9vMFrzaCERZz7zV1bG8gNBr2F9Wq8jqfZ3Wfz3BfQx", // USDT (new)
   "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", // PYUSD
+  "7XS55hUuoRrw1rUixhJv8o2zdX1kH31ZQAz1r4qAS8Fh", // USDH
 ]);
 
 /**
@@ -37,8 +39,8 @@ export interface HealthRatioInput {
  * Result of health ratio computation
  */
 export interface HealthRatioResult {
-  /** Health ratio (collateralValueWeighted / borrowValue), clamped to [0, 2] */
-  healthRatio: number;
+  /** Health ratio (collateralValueWeighted / borrowValue), clamped to [0, 2], or null if unscored */
+  healthRatio: number | null;
   /** Total borrow value in USD */
   borrowValue: number;
   /** Total collateral value in USD (weighted by liquidationThreshold) */
@@ -127,6 +129,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
   
   let collateralUSD = 0;
   let borrowUSD = 0;
+  let scored = true; // Track if we have sufficient data to score
   
   // Process deposits (collateral)
   for (const deposit of deposits) {
@@ -138,6 +141,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
         { mint: deposit.mint, reserve: deposit.reserve },
         "Reserve not found for deposit, skipping"
       );
+      scored = false;
       continue;
     }
     
@@ -146,6 +150,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
         { mint: deposit.mint, reserve: deposit.reserve },
         "Price not found for deposit, skipping"
       );
+      scored = false;
       continue;
     }
     
@@ -155,6 +160,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
         { mint: deposit.mint, slot: oraclePrice.slot.toString() },
         "Stale price (slot=0) for deposit, skipping"
       );
+      scored = false;
       continue;
     }
     
@@ -219,6 +225,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
         { mint: borrow.mint, reserve: borrow.reserve },
         "Reserve not found for borrow, skipping"
       );
+      scored = false;
       continue;
     }
     
@@ -227,6 +234,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
         { mint: borrow.mint, reserve: borrow.reserve },
         "Price not found for borrow, skipping"
       );
+      scored = false;
       continue;
     }
     
@@ -236,6 +244,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
         { mint: borrow.mint, slot: oraclePrice.slot.toString() },
         "Stale price (slot=0) for borrow, skipping"
       );
+      scored = false;
       continue;
     }
     
@@ -337,6 +346,20 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       },
       "Processed borrow"
     );
+  }
+  
+  // Check for NaN/Infinity in USD values
+  if (!isFinite(collateralUSD) || !isFinite(borrowUSD)) {
+    scored = false;
+  }
+  
+  // If not scored (missing components), return null healthRatio
+  if (!scored) {
+    return { 
+      healthRatio: null, 
+      borrowValue: borrowUSD || 0, 
+      collateralValue: collateralUSD || 0 
+    };
   }
   
   // Calculate health ratio

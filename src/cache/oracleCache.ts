@@ -31,6 +31,14 @@ const STABLECOIN_MINTS = new Set([
 ]);
 
 /**
+ * Scope chain overrides for known problematic feeds
+ * Maps oracle pubkey to priority-ordered chain indices to try
+ */
+const scopeChainOverrides: Record<string, number[]> = {
+  "3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH": [0, 2, 4, 6],
+};
+
+/**
  * Sentinel value used in Scope priceChain arrays to indicate "not set"
  * This is 0xFFFF (max u16 value)
  */
@@ -192,7 +200,7 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
     const oraclePrices = OraclePrices.decode(data);
     
     if (!oraclePrices || !oraclePrices.prices || oraclePrices.prices.length === 0) {
-      logger.debug("Scope OraclePrices has no prices");
+      logger.warn("Scope decode failed: prices array missing");
       return null;
     }
     
@@ -213,8 +221,8 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
       // Check if chain index is out of bounds for this oracle
       if (chain >= oraclePrices.prices.length) {
         logger.debug(
-          { chain, availablePrices: oraclePrices.prices.length },
-          "Scope price chain index out of bounds for this oracle, trying next chain"
+          { chain, total: oraclePrices.prices.length },
+          "Scope chain index out of bounds"
         );
         continue;
       }
@@ -232,50 +240,46 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
       
       // Guard against zero/invalid price
       const priceBigInt = BigInt(value.toString());
-      if (priceBigInt === 0n) {
-        logger.debug({ chain, value: priceBigInt.toString() }, "Scope price value is zero at chain index, trying next chain");
+      if (priceBigInt <= 0n) {
+        logger.debug({ chain, value: priceBigInt.toString() }, "Scope price value invalid (<=0) at chain index");
         continue;
       }
       
-      // Guard against zero timestamp
-      const timestamp = BigInt(unixTimestamp.toString());
-      if (timestamp === 0n) {
-        logger.debug({ chain, timestamp: timestamp.toString() }, "Scope price timestamp is zero at chain index, trying next chain");
+      // Guard against invalid exponent
+      const exponent = Number(exp.toString());
+      if (exponent === 0) {
+        logger.debug({ chain, exponent }, "Scope price exponent is zero at chain index");
+        continue;
+      }
+      
+      // Guard against zero/invalid timestamp
+      const timestamp = BigInt(unixTimestamp?.toString() || "0");
+      if (!unixTimestamp || timestamp === 0n) {
+        logger.debug({ chain, timestamp: timestamp.toString() }, "Scope price entry invalid/stale (no timestamp)");
         continue;
       }
       
       // Staleness check - use unix timestamp
       const currentTime = BigInt(Math.floor(Date.now() / 1000));
+      const ageSeconds = Number(currentTime - timestamp);
       
-      if (timestamp > 0n) {
-        const ageSeconds = Number(currentTime - timestamp);
-        
-        if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
-          logger.debug(
-            { chain, ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
-            "Scope price is stale at chain index, trying next chain"
-          );
-          continue;
-        }
+      if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
+        logger.debug(
+          { chain, ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+          "Scope price entry invalid/stale"
+        );
+        continue;
       }
       
       // Found a valid, fresh price!
-      const exponent = Number(exp.toString());
+      logger.info({ chain, value: priceBigInt.toString(), exponent }, "Scope price selected");
       
-      logger.debug(
-        { 
-          chain, 
-          price: priceBigInt.toString(), 
-          exponent, 
-          timestamp: timestamp.toString(),
-          triedChains: chains.slice(0, chains.indexOf(chain) + 1)
-        },
-        `Successfully decoded Scope price using chain index ${chain}`
-      );
+      // Extract confidence if available
+      const confidence = datedPrice.price.value ? BigInt((datedPrice as any).confidence?.toString() || "0") : 0n;
       
       return {
         price: priceBigInt,
-        confidence: 0n, // Scope doesn't provide confidence in the same way
+        confidence: confidence,
         exponent: exponent,
         slot: timestamp,
         oracleType: "scope",
@@ -472,12 +476,19 @@ export async function loadOracles(
       }
     } else if (owner.equals(SCOPE_PROGRAM_ID)) {
       // Use Scope decoder with the configured price chain array (with fallback support)
-      const chains = scopeOracleChainMap.get(pubkeyStr) ?? [0];
-      priceData = decodeScopePrice(data, chains);
+      // Merge override chains with reserve-configured chains
+      const fallbackChains = scopeChainOverrides[pubkeyStr] || [];
+      const configChains = scopeOracleChainMap.get(pubkeyStr) || [];
+      // Merge and de-duplicate, preserve order (overrides first, then config)
+      const chains = Array.from(new Set([...fallbackChains, ...configChains]));
+      // If empty after merge, use default [0]
+      const finalChains = chains.length > 0 ? chains : [0];
+      
+      priceData = decodeScopePrice(data, finalChains);
       if (priceData) {
         scopeCount++;
         logger.debug(
-          { oracle: pubkeyStr, chains },
+          { oracle: pubkeyStr, chains: finalChains },
           `Decoded Scope oracle using price chain array with fallback`
         );
       }
