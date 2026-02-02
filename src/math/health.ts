@@ -3,7 +3,6 @@ import type { ReserveCacheEntry } from "../cache/reserveCache.js";
 import type { OraclePriceData } from "../cache/oracleCache.js";
 import type { ObligationDeposit, ObligationBorrow } from "../kamino/types.js";
 import { divBigintToNumber } from "../utils/bn.js";
-import { divBigintToNumber } from "../utils/bn.js";
 
 /**
  * Known stablecoin mints for price clamping
