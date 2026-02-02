@@ -13,6 +13,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /**
+ * Sentinel value used in Scope priceChain arrays to indicate "not set"
+ * This is 0xFFFF (max u16 value)
+ */
+const SCOPE_CHAIN_SENTINEL_VALUE = 65535;
+
+/**
  * Kamino Lending Program ID (mainnet)
  * Source: https://github.com/Kamino-Finance/klend-sdk
  */
@@ -108,8 +114,8 @@ function extractScopePriceChain(tokenInfo: {
   for (const chainValue of priceChain) {
     const chain = Number(chainValue);
     
-    // Skip sentinel value 65535 (0xFFFF) which means "not set"
-    if (chain === 65535) {
+    // Skip sentinel value which means "not set"
+    if (chain === SCOPE_CHAIN_SENTINEL_VALUE) {
       continue;
     }
     

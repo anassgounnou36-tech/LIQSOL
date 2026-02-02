@@ -31,6 +31,12 @@ const STABLECOIN_MINTS = new Set([
 ]);
 
 /**
+ * Sentinel value used in Scope priceChain arrays to indicate "not set"
+ * This is 0xFFFF (max u16 value)
+ */
+const SCOPE_CHAIN_SENTINEL_VALUE = 65535;
+
+/**
  * Staleness threshold in seconds (30 seconds)
  */
 const STALENESS_THRESHOLD_SECONDS = 30;
@@ -193,8 +199,8 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
     // Try each chain index in order until we find a valid, fresh price
     for (const chain of chains) {
       // Skip sentinel value
-      if (chain === 65535) {
-        logger.debug({ chain }, "Skipping Scope chain index 65535 (sentinel value)");
+      if (chain === SCOPE_CHAIN_SENTINEL_VALUE) {
+        logger.debug({ chain }, "Skipping Scope chain index (sentinel value)");
         continue;
       }
       
