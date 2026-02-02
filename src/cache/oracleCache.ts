@@ -358,10 +358,16 @@ export async function loadOracles(
       oraclePubkeySet.add(oraclePubkeyStr);
 
       // Track which mints use this oracle
+      // Add both liquidity mint AND collateral mint so deposits can resolve prices
       if (!oracleToMints.has(oraclePubkeyStr)) {
         oracleToMints.set(oraclePubkeyStr, new Set());
       }
       oracleToMints.get(oraclePubkeyStr)!.add(mint);
+      
+      // Also add the collateral mint if it's different
+      if (reserve.collateralMint && reserve.collateralMint !== mint) {
+        oracleToMints.get(oraclePubkeyStr)!.add(reserve.collateralMint);
+      }
     }
   }
 

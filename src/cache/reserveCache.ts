@@ -41,6 +41,13 @@ export interface ReserveCacheEntry {
   collateralDecimals: number;
   /** Scope price chain indices array (0-511) for multi-chain Scope oracles, null if not using Scope */
   scopePriceChain: number[] | null;
+  /** Collateral mint public key (for mapping deposits to reserves) */
+  collateralMint: string;
+  /** 
+   * Collateral exchange rate (big scaled fraction / BSF)
+   * Used to convert deposit notes (collateral tokens) to underlying liquidity tokens
+   */
+  collateralExchangeRateBsf: bigint;
 }
 
 /**
@@ -227,10 +234,14 @@ export async function loadReserves(
         liquidityDecimals: decoded.liquidityDecimals,
         collateralDecimals: decoded.collateralDecimals,
         scopePriceChain: decoded.scopePriceChain,
+        collateralMint: decoded.collateralMint,
+        collateralExchangeRateBsf: BigInt(decoded.collateralExchangeRateBsf),
       };
 
-      // Store in cache keyed by liquidity mint
+      // Store in cache keyed by BOTH liquidity and collateral mints
+      // This enables lookups by deposit.mint (collateral mint) to find the reserve and prices
       cache.set(decoded.liquidityMint, cacheEntry);
+      cache.set(decoded.collateralMint, cacheEntry);
 
       // Populate setReserveMintCache for obligation decoding
       setReserveMintCache(pubkey.toString(), decoded.liquidityMint);
@@ -238,11 +249,12 @@ export async function loadReserves(
       logger.debug(
         {
           reserve: pubkey.toString(),
-          mint: decoded.liquidityMint,
+          liquidityMint: decoded.liquidityMint,
+          collateralMint: decoded.collateralMint,
           availableAmount: cacheEntry.availableAmount.toString(),
           oracleCount: oraclePubkeys.length,
         },
-        "Cached reserve"
+        "Cached reserve with both mints"
       );
     } catch (err) {
       logger.error(

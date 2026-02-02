@@ -3,6 +3,7 @@ import type { ReserveCacheEntry } from "../cache/reserveCache.js";
 import type { OraclePriceData } from "../cache/oracleCache.js";
 import type { ObligationDeposit, ObligationBorrow } from "../kamino/types.js";
 import { divBigintToNumber } from "../utils/bn.js";
+import { divBigintToNumber } from "../utils/bn.js";
 
 /**
  * Known stablecoin mints for price clamping
@@ -187,13 +188,31 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       continue;
     }
     
-    // Convert amount to UI units using collateralDecimals (deposits are in collateral token)
-    const amountUi = Number(BigInt(deposit.depositedAmount)) / Math.pow(10, reserve.collateralDecimals);
+    // Convert deposit notes (collateral tokens) to underlying liquidity tokens using exchange rate
+    // Deposits are in cToken notes; exchange rate converts them to underlying amount
+    const depositedNotesSf = BigInt(deposit.depositedAmount);
+    const collateralRateBsf = reserve.collateralExchangeRateBsf;
     
-    if (!isFinite(amountUi)) {
+    if (collateralRateBsf === 0n) {
+      logger.warn(
+        { mint: deposit.mint, reserve: deposit.reserve },
+        "Collateral exchange rate is zero, skipping deposit"
+      );
+      scored = false;
+      continue;
+    }
+    
+    // Use safe bigint division to avoid precision loss
+    // underlyingBaseUnits = depositedNotesSf / collateralExchangeRateBsf
+    const underlyingBaseUnits = divBigintToNumber(depositedNotesSf, collateralRateBsf, 18);
+    
+    // Now normalize to UI using LIQUIDITY decimals (since we're now in underlying units)
+    const amountUi = underlyingBaseUnits / Math.pow(10, reserve.liquidityDecimals);
+    
+    if (!isFinite(amountUi) || amountUi < 0) {
       logger.debug(
-        { mint: deposit.mint, depositedAmount: deposit.depositedAmount },
-        "Invalid amount for deposit, skipping"
+        { mint: deposit.mint, underlyingBaseUnits, amountUi },
+        "Invalid deposit amount after exchange rate conversion, skipping"
       );
       continue;
     }

@@ -31,6 +31,8 @@ export interface DecodedReserve {
   availableLiquidity: string;
   /** Cumulative borrow rate BSF (big scaled fraction) for SF to token conversion */
   cumulativeBorrowRate: string;
+  /** Collateral exchange rate BSF (big scaled fraction) for converting deposit notes to underlying */
+  collateralExchangeRateBsf: string;
   /** Scope price chain indices array (0-511) for multi-chain Scope oracles with fallback, null if not using Scope */
   scopePriceChain: number[] | null;
 }

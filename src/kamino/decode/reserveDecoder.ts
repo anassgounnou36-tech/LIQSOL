@@ -174,6 +174,8 @@ export function decodeReserve(
     availableLiquidity: toBigInt(decoded.liquidity.availableAmount).toString(),
     // cumulativeBorrowRateBsf is a BigFractionBytes (4 x u64 limbs) - toBigInt now handles this
     cumulativeBorrowRate: toBigInt(decoded.liquidity.cumulativeBorrowRateBsf).toString(),
+    // collateralExchangeRateBsf is also a BigFractionBytes used to convert deposit notes to underlying
+    collateralExchangeRateBsf: toBigInt(decoded.collateral.exchangeRateBsf).toString(),
     scopePriceChain,
   };
 
