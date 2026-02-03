@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 import { Buffer } from "buffer";
 import { DecodedReserve } from "../types.js";
 import { hasDiscriminator } from "./discriminator.js";
-import { toBigInt } from "../../utils/bn.js";
+import { toBigInt, toBigIntSafe } from "../../utils/bn.js";
 
 // Get the directory of the current module
 const __filename = fileURLToPath(import.meta.url);
@@ -157,6 +157,7 @@ export function decodeReserve(
   const scopePriceChain = extractScopePriceChain(decoded.config?.tokenInfo);
 
   // Map to DecodedReserve type with BN-safe conversion
+  // Use toBigIntSafe to handle potentially missing/undefined fields gracefully
   // Note: cumulativeBorrowRateBsf is a BigFractionBytes structure, not a simple BN
   const result = {
     reservePubkey: reservePubkey.toString(),
@@ -170,12 +171,12 @@ export function decodeReserve(
     liquidationThreshold: Number(decoded.config.liquidationThresholdPct),
     liquidationBonus: Number(decoded.config.maxLiquidationBonusBps),
     borrowFactor: Number(decoded.config.borrowFactorPct || 100), // Default to 100% if not set
-    totalBorrowed: toBigInt(decoded.liquidity.borrowedAmountSf).toString(),
-    availableLiquidity: toBigInt(decoded.liquidity.availableAmount).toString(),
-    // cumulativeBorrowRateBsf is a BigFractionBytes (4 x u64 limbs) - toBigInt now handles this
-    cumulativeBorrowRate: toBigInt(decoded.liquidity.cumulativeBorrowRateBsf).toString(),
+    totalBorrowed: toBigIntSafe(decoded.liquidity?.borrowedAmountSf, 0n).toString(),
+    availableLiquidity: toBigIntSafe(decoded.liquidity?.availableAmount, 0n).toString(),
+    // cumulativeBorrowRateBsf is a BigFractionBytes (4 x u64 limbs) - toBigIntSafe now handles this
+    cumulativeBorrowRate: toBigIntSafe(decoded.liquidity?.cumulativeBorrowRateBsf, 0n).toString(),
     // collateralExchangeRateBsf is also a BigFractionBytes used to convert deposit notes to underlying
-    collateralExchangeRateBsf: toBigInt(decoded.collateral.exchangeRateBsf).toString(),
+    collateralExchangeRateBsf: toBigIntSafe(decoded.collateral?.exchangeRateBsf, 0n).toString(),
     scopePriceChain,
   };
 

@@ -104,6 +104,41 @@ export function toBigInt(v: unknown): bigint {
   throw new Error(`Unsupported BN-like value: ${String(v)}`);
 }
 
+/**
+ * Safely converts a value to bigint without throwing on undefined/null.
+ * Returns defaultValue if conversion fails or value is null/undefined.
+ * 
+ * @param value - Value to convert
+ * @param defaultValue - Value to return on failure (default: 0n)
+ * @returns bigint value or defaultValue
+ */
+export function toBigIntSafe(value: unknown, defaultValue: bigint = 0n): bigint {
+  try {
+    if (value === null || value === undefined) return defaultValue;
+    return toBigInt(value);
+  } catch {
+    return defaultValue;
+  }
+}
+
+/**
+ * Safely divides a bigint by a power of 10 and returns a number.
+ * Returns 0 if numerator is null/undefined or denominatorPow10 is invalid.
+ * 
+ * @param numerator - The dividend (can be null/undefined)
+ * @param denominatorPow10 - Power of 10 to divide by
+ * @returns Division result as a number
+ */
+export function divBigintToNumberSafe(
+  numerator: bigint | null | undefined,
+  denominatorPow10: number
+): number {
+  const num = numerator ?? 0n;
+  if (!Number.isFinite(denominatorPow10) || denominatorPow10 < 0) return 0;
+  const denom = 10n ** BigInt(denominatorPow10);
+  return Number(num) / Number(denom);
+}
+
 export function isZero(v: unknown): boolean {
   return toBigInt(v) === 0n;
 }
