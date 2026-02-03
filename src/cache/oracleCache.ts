@@ -31,6 +31,20 @@ const STABLECOIN_MINTS = new Set([
 ]);
 
 /**
+ * Scope chain overrides for known problematic feeds
+ * Maps oracle pubkey to priority-ordered chain indices to try
+ */
+const scopeChainOverrides: Record<string, number[]> = {
+  "3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH": [0, 2, 4, 6],
+};
+
+/**
+ * Sentinel value used in Scope priceChain arrays to indicate "not set"
+ * This is 0xFFFF (max u16 value)
+ */
+const SCOPE_CHAIN_SENTINEL_VALUE = 65535;
+
+/**
  * Staleness threshold in seconds (30 seconds)
  */
 const STALENESS_THRESHOLD_SECONDS = 30;
@@ -174,91 +188,117 @@ function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
 }
 
 /**
- * Decodes a Scope price feed account using the Kamino Scope SDK
+ * Decodes a Scope price feed account using the Kamino Scope SDK with fallback support
  *
  * @param data - Raw account data
- * @param chain - Price chain index (0-511) to select from the multi-price oracle
- * @returns Decoded price data or null if invalid
+ * @param chains - Array of price chain indices (0-511) to try in order until a valid price is found
+ * @returns Decoded price data or null if no valid price found in any chain
  */
-function decodeScopePrice(data: Buffer, chain: number = 0): OraclePriceData | null {
+function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData | null {
   try {
     // Use Scope SDK to decode the OraclePrices account
     const oraclePrices = OraclePrices.decode(data);
     
     if (!oraclePrices || !oraclePrices.prices || oraclePrices.prices.length === 0) {
-      logger.debug("Scope OraclePrices has no prices");
+      logger.warn("Scope decode failed: prices array missing");
       return null;
     }
     
-    // Validate chain index
-    if (chain < 0 || chain >= 512) {
-      logger.warn({ chain }, "Invalid Scope price chain index (must be 0-511)");
-      return null;
-    }
-    
-    // Get the price at the specified chain index
-    if (chain >= oraclePrices.prices.length) {
-      logger.debug(
-        { chain, availablePrices: oraclePrices.prices.length },
-        "Scope price chain index out of bounds"
-      );
-      return null;
-    }
-    
-    const datedPrice = oraclePrices.prices[chain];
-    if (!datedPrice || !datedPrice.price) {
-      logger.debug({ chain }, "Scope DatedPrice or Price is null at chain index");
-      return null;
-    }
-    
-    // Extract price components from the Price struct
-    const value = datedPrice.price.value; // BN (mantissa)
-    const exp = datedPrice.price.exp; // BN (exponent)
-    const unixTimestamp = datedPrice.unixTimestamp; // BN (unix timestamp in seconds)
-    
-    // Guard against zero/invalid price
-    const priceBigInt = BigInt(value.toString());
-    if (priceBigInt === 0n) {
-      logger.debug({ chain }, "Scope price value is zero, skipping");
-      return null;
-    }
-    
-    // Guard against zero timestamp
-    const timestamp = BigInt(unixTimestamp.toString());
-    if (timestamp === 0n) {
-      logger.debug({ chain }, "Scope price timestamp is zero, skipping");
-      return null;
-    }
-    
-    // Staleness check - use unix timestamp
-    const currentTime = BigInt(Math.floor(Date.now() / 1000));
-    
-    if (timestamp > 0n) {
+    // Try each chain index in order until we find a valid, fresh price
+    for (const chain of chains) {
+      // Skip sentinel value
+      if (chain === SCOPE_CHAIN_SENTINEL_VALUE) {
+        logger.debug({ chain }, "Skipping Scope chain index (sentinel value)");
+        continue;
+      }
+      
+      // Validate chain index
+      if (chain < 0 || chain >= 512) {
+        logger.warn({ chain }, "Invalid Scope price chain index (must be 0-511), skipping");
+        continue;
+      }
+      
+      // Check if chain index is out of bounds for this oracle
+      if (chain >= oraclePrices.prices.length) {
+        logger.debug(
+          { chain, total: oraclePrices.prices.length },
+          "Scope chain index out of bounds"
+        );
+        continue;
+      }
+      
+      const datedPrice = oraclePrices.prices[chain];
+      if (!datedPrice || !datedPrice.price) {
+        logger.debug({ chain }, "Scope DatedPrice or Price is null at chain index, trying next chain");
+        continue;
+      }
+      
+      // Extract price components from the Price struct
+      const value = datedPrice.price.value; // BN (mantissa)
+      const exp = datedPrice.price.exp; // BN (exponent)
+      const unixTimestamp = datedPrice.unixTimestamp; // BN (unix timestamp in seconds)
+      
+      // Guard against zero/invalid price
+      const priceBigInt = BigInt(value.toString());
+      if (priceBigInt <= 0n) {
+        logger.debug({ chain, value: priceBigInt.toString() }, "Scope price value invalid (<=0) at chain index");
+        continue;
+      }
+      
+      // Guard against invalid exponent (but 0 is valid)
+      // Scope's exp is a scale (decimal places), so we need negative exponent for UI price conversion
+      // UI price = mantissa × 10^(-exp)
+      const exponent = -Number(exp.toString());
+      if (!isFinite(exponent)) {
+        logger.debug({ chain, exponent }, "Scope price exponent is invalid at chain index");
+        continue;
+      }
+      
+      // Guard against zero/invalid timestamp
+      const timestamp = BigInt(unixTimestamp?.toString() || "0");
+      if (timestamp === 0n) {
+        logger.debug({ chain, timestamp: timestamp.toString() }, "Scope price entry invalid/stale (no timestamp)");
+        continue;
+      }
+      
+      // Staleness check - use unix timestamp
+      const currentTime = BigInt(Math.floor(Date.now() / 1000));
       const ageSeconds = Number(currentTime - timestamp);
       
       if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
         logger.debug(
           { chain, ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
-          "Scope price is stale, skipping"
+          "Scope price entry invalid/stale"
         );
-        return null;
+        continue;
       }
+      
+      // Found a valid, fresh price!
+      logger.info({ chain, value: priceBigInt.toString(), exponent }, "Scope price selected");
+      
+      // Extract confidence if available from the feed
+      const confidence = BigInt((datedPrice as any).confidence?.toString() || "0");
+      
+      return {
+        price: priceBigInt,
+        confidence: confidence,
+        exponent: exponent,
+        slot: timestamp,
+        oracleType: "scope",
+      };
     }
     
-    // Convert to our format
-    // Scope stores value as mantissa and exp as exponent
-    // Price = value * 10^exp
-    const exponent = Number(exp.toString());
-    
-    return {
-      price: priceBigInt,
-      confidence: 0n, // Scope doesn't provide confidence in the same way
-      exponent: exponent,
-      slot: timestamp,
-      oracleType: "scope",
-    };
+    // No valid price found in any chain
+    logger.warn(
+      { 
+        chains, 
+        availablePrices: oraclePrices.prices.length 
+      },
+      "No usable Scope price found after trying all configured chain indices"
+    );
+    return null;
   } catch (err) {
-    logger.error({ err, chain }, "Failed to decode Scope price with SDK");
+    logger.error({ err, chains }, "Failed to decode Scope price with SDK");
     return null;
   }
 }
@@ -318,10 +358,16 @@ export async function loadOracles(
       oraclePubkeySet.add(oraclePubkeyStr);
 
       // Track which mints use this oracle
+      // Add both liquidity mint AND collateral mint so deposits can resolve prices
       if (!oracleToMints.has(oraclePubkeyStr)) {
         oracleToMints.set(oraclePubkeyStr, new Set());
       }
       oracleToMints.get(oraclePubkeyStr)!.add(mint);
+      
+      // Also add the collateral mint if it's different
+      if (reserve.collateralMint && reserve.collateralMint !== mint) {
+        oracleToMints.get(oraclePubkeyStr)!.add(reserve.collateralMint);
+      }
     }
   }
 
@@ -437,14 +483,21 @@ export async function loadOracles(
         switchboardCount++;
       }
     } else if (owner.equals(SCOPE_PROGRAM_ID)) {
-      // Use Scope decoder with the correct price chain
-      const chain = scopeOracleChainMap.get(pubkeyStr) ?? 0;
-      priceData = decodeScopePrice(data, chain);
+      // Use Scope decoder with the configured price chain array (with fallback support)
+      // Merge override chains with reserve-configured chains
+      const fallbackChains = scopeChainOverrides[pubkeyStr] || [];
+      const configChains = scopeOracleChainMap.get(pubkeyStr) || [];
+      // Merge and de-duplicate, preserve order (overrides first, then config)
+      const chains = Array.from(new Set([...fallbackChains, ...configChains]));
+      // If empty after merge, use default [0]
+      const finalChains = chains.length > 0 ? chains : [0];
+      
+      priceData = decodeScopePrice(data, finalChains);
       if (priceData) {
         scopeCount++;
         logger.debug(
-          { oracle: pubkeyStr, chain },
-          `Decoded Scope oracle using price chain ${chain}`
+          { oracle: pubkeyStr, chains: finalChains },
+          `Decoded Scope oracle using price chain array with fallback`
         );
       }
     } else {

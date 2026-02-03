@@ -23,6 +23,8 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
+            collateralMint: "mock-collateral-mint",
+            collateralExchangeRateBsf: 1000000000000000000n,
             scopePriceChain: null,
           },
         ],
@@ -39,6 +41,8 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 6,
             collateralDecimals: 6,
             cumulativeBorrowRate: 10000000000n,
+            collateralMint: "mock-collateral-mint",
+            collateralExchangeRateBsf: 1000000000000000000n,
             scopePriceChain: null,
           },
         ],
@@ -151,6 +155,8 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
+            collateralMint: "mock-collateral-mint",
+            collateralExchangeRateBsf: 1000000000000000000n,
             scopePriceChain: null,
           },
         ],
@@ -196,6 +202,8 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
+            collateralMint: "mock-collateral-mint",
+            collateralExchangeRateBsf: 1000000000000000000n,
             scopePriceChain: null,
           },
         ],
@@ -256,6 +264,8 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
+            collateralMint: "mock-collateral-mint",
+            collateralExchangeRateBsf: 1000000000000000000n,
             scopePriceChain: null,
           },
         ],
@@ -272,6 +282,8 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 6,
             collateralDecimals: 6,
             cumulativeBorrowRate: 10000000000n,
+            collateralMint: "mock-collateral-mint",
+            collateralExchangeRateBsf: 1000000000000000000n,
             scopePriceChain: null,
           },
         ],
@@ -333,21 +345,22 @@ describe("Health Ratio and Liquidation", () => {
   });
 
   describe("isLiquidatable", () => {
-    it("should return true when health ratio is below threshold", () => {
-      expect(isLiquidatable(0.8, 1.0)).toBe(true);
-      expect(isLiquidatable(0.5, 0.85)).toBe(true);
-      expect(isLiquidatable(0.0, 0.5)).toBe(true);
+    it("should return true when health ratio is below 1.0", () => {
+      expect(isLiquidatable(0.8)).toBe(true);
+      expect(isLiquidatable(0.5)).toBe(true);
+      expect(isLiquidatable(0.0)).toBe(true);
+      expect(isLiquidatable(0.9999)).toBe(true);
     });
 
-    it("should return false when health ratio is at or above threshold", () => {
-      expect(isLiquidatable(1.0, 1.0)).toBe(false);
-      expect(isLiquidatable(1.5, 1.0)).toBe(false);
-      expect(isLiquidatable(2.0, 1.0)).toBe(false);
+    it("should return false when health ratio is at or above 1.0", () => {
+      expect(isLiquidatable(1.0)).toBe(false);
+      expect(isLiquidatable(1.5)).toBe(false);
+      expect(isLiquidatable(2.0)).toBe(false);
+      expect(isLiquidatable(1.0001)).toBe(false);
     });
 
-    it("should handle edge cases", () => {
-      expect(isLiquidatable(0.9999, 1.0)).toBe(true);
-      expect(isLiquidatable(1.0001, 1.0)).toBe(false);
+    it("should return false when health ratio is null (unscored)", () => {
+      expect(isLiquidatable(null)).toBe(false);
     });
   });
 });

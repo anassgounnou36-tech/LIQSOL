@@ -51,7 +51,7 @@ interface ObligationEntry {
   decoded: DecodedObligation;
   lastUpdated: number;
   slot: bigint;
-  healthRatio?: number;
+  healthRatio?: number | null;
   borrowValue?: number;
   collateralValue?: number;
   liquidationEligible?: boolean;
@@ -269,7 +269,7 @@ export class LiveObligationIndexer {
    * Compute health scoring for an obligation if caches are available
    */
   private computeHealthScoring(decoded: DecodedObligation): {
-    healthRatio?: number;
+    healthRatio?: number | null;
     borrowValue?: number;
     collateralValue?: number;
     liquidationEligible?: boolean;
@@ -288,26 +288,10 @@ export class LiveObligationIndexer {
         prices: this.oracleCache,
       });
 
-      // Determine liquidation threshold
-      // Use the minimum liquidation threshold from all involved reserves (conservative approach)
-      let minLiquidationThreshold = 1.0; // Default threshold (100%)
-      
-      // Check all deposit and borrow reserves
-      const allMints = new Set<string>();
-      decoded.deposits.forEach(d => allMints.add(d.mint));
-      decoded.borrows.forEach(b => allMints.add(b.mint));
-      
-      for (const mint of allMints) {
-        const reserve = this.reserveCache.get(mint);
-        if (reserve) {
-          // liquidationThreshold is percentage (0-100), convert to decimal (0-1)
-          const threshold = reserve.liquidationThreshold / 100;
-          minLiquidationThreshold = Math.min(minLiquidationThreshold, threshold);
-        }
-      }
-
       // Determine liquidation eligibility
-      const liquidationEligible = isLiquidatable(healthRatio, minLiquidationThreshold);
+      // Since health ratio is computed with liquidation-threshold-weighted collateral,
+      // we simply check if healthRatio < 1.0 (no need to apply threshold again)
+      const liquidationEligible = isLiquidatable(healthRatio);
 
       return {
         healthRatio,
@@ -702,7 +686,7 @@ export class LiveObligationIndexer {
     const slots = entries.map(e => e.slot);
     
     // Count scored and liquidatable obligations
-    const scoredCount = entries.filter(e => e.healthRatio !== undefined).length;
+    const scoredCount = entries.filter(e => typeof e.healthRatio === 'number').length;
     const liquidatableCount = entries.filter(e => e.liquidationEligible === true).length;
 
     return {
@@ -751,7 +735,7 @@ export class LiveObligationIndexer {
     borrowsCount: number;
   }> {
     const scored = Array.from(this.cache.values())
-      .filter(entry => entry.healthRatio !== undefined)
+      .filter(entry => typeof entry.healthRatio === 'number')
       .map(entry => ({
         obligationPubkey: entry.decoded.obligationPubkey,
         ownerPubkey: entry.decoded.ownerPubkey,
