@@ -300,8 +300,9 @@ export function getMintsByOracle(
 ): string[] {
   const result: string[] = [];
   for (const [mint, reserve] of reserveCache.entries()) {
-    const oraclePubkeys = reserve.oraclePubkeys.map(pk => pk.toString());
-    if (oraclePubkeys.includes(oraclePubkey)) {
+    // Check if any oracle in the reserve matches (compare as PublicKey first for efficiency)
+    const hasOracle = reserve.oraclePubkeys.some(pk => pk.toString() === oraclePubkey);
+    if (hasOracle) {
       result.push(mint);
     }
   }

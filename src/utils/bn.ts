@@ -126,7 +126,7 @@ export function toBigIntSafe(value: unknown, defaultValue: bigint = 0n): bigint 
  * Returns 0 if numerator is null/undefined or denominatorPow10 is invalid.
  * 
  * @param numerator - The dividend (can be null/undefined)
- * @param denominatorPow10 - Power of 10 to divide by
+ * @param denominatorPow10 - Power of 10 to divide by (must be a non-negative integer)
  * @returns Division result as a number
  */
 export function divBigintToNumberSafe(
@@ -134,7 +134,7 @@ export function divBigintToNumberSafe(
   denominatorPow10: number
 ): number {
   const num = numerator ?? 0n;
-  if (!Number.isFinite(denominatorPow10) || denominatorPow10 < 0) return 0;
+  if (!Number.isInteger(denominatorPow10) || denominatorPow10 < 0) return 0;
   const denom = 10n ** BigInt(denominatorPow10);
   return Number(num) / Number(denom);
 }
