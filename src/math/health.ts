@@ -36,22 +36,67 @@ export interface HealthRatioInput {
 }
 
 /**
- * Result of health ratio computation
+ * Result of health ratio computation - discriminated union for scored vs unscored
  */
-export interface HealthRatioResult {
-  /** Health ratio (collateralValueWeighted / borrowValue), clamped to [0, 2], or null if unscored */
-  healthRatio: number | null;
-  /** Total borrow value in USD */
-  borrowValue: number;
-  /** Total collateral value in USD (weighted by liquidationThreshold) */
-  collateralValue: number;
-}
+export type HealthRatioResult =
+  | {
+      /** Obligation was successfully scored */
+      scored: true;
+      /** Health ratio (collateralValueWeighted / borrowValue), clamped to [0, 2] */
+      healthRatio: number;
+      /** Total borrow value in USD */
+      borrowValue: number;
+      /** Total collateral value in USD (weighted by liquidationThreshold) */
+      collateralValue: number;
+    }
+  | {
+      /** Obligation could not be scored */
+      scored: false;
+      /** Reason why the obligation was not scored */
+      reason: "MISSING_RESERVE" | "MISSING_ORACLE_PRICE" | "MISSING_EXCHANGE_RATE" | "INVALID_MATH" | "OTHER_MARKET";
+    };
 
 /**
  * Check if a mint is a known stablecoin
  */
 function isStableMint(mint: string): boolean {
   return STABLECOIN_MINTS.has(mint);
+}
+
+/**
+ * Parse collateral exchange rate from BSF string to UI rate
+ * Returns null if missing, zero, or invalid
+ */
+function parseExchangeRateUi(
+  collateralExchangeRateBsf: string | undefined | null,
+  liquidityDecimals: number
+): number | null {
+  if (!collateralExchangeRateBsf) return null;
+  
+  const scaled = Number(collateralExchangeRateBsf);
+  if (!Number.isFinite(scaled) || scaled <= 0) return null;
+  
+  // BigFraction is typically in 1e18 scale; normalize by liquidity decimals
+  // This converts deposit notes (cTokens) to underlying tokens
+  const rate = scaled / (10 ** 18);
+  return rate > 0 ? rate : null;
+}
+
+/**
+ * Convert borrowedAmountSf (scaled fraction) to UI units
+ * Returns 0 for invalid/missing values
+ */
+function convertBorrowSfToUi(
+  borrowedAmountSf: string | undefined | null,
+  liquidityDecimals: number
+): number {
+  if (!borrowedAmountSf) return 0;
+  
+  const num = Number(borrowedAmountSf);
+  if (!Number.isFinite(num) || num < 0) return 0;
+  
+  // Divide by 10^decimals to convert to UI units
+  return num / (10 ** liquidityDecimals);
 }
 
 /**
@@ -108,60 +153,37 @@ function adjustedUiPrice(
 /**
  * Computes health ratio and position values for a Kamino obligation
  * 
- * Kamino Logic (aligned with production risk engine):
- * - For each deposit: compute USD collateral value using confidence-adjusted price
- *   (price - confidence); weight by liquidationThreshold (not LTV).
- * - For each borrow: compute USD borrow value using confidence-adjusted price
- *   (price + confidence); weight by borrowFactor.
- * - Health ratio = (Σ deposits_i * priceAdjusted_i * liquidationThresholdPct_i) / 
- *                  (Σ borrows_j * priceAdjusted_j * borrowFactor_j)
- * - Handle missing prices/reserves gracefully (skip and log)
- * - Apply staleness guard: skip if slot/timestamp is 0
- * - Apply stablecoin clamping to prices
- * - If both numerator and denominator are 0, clamp healthRatio to 2.0
- * - Clamp final ratio to [0, 2]
+ * Returns a discriminated union:
+ * - { scored: true, healthRatio, borrowValue, collateralValue } on success
+ * - { scored: false, reason } when data is missing or invalid
+ * 
+ * This prevents treating missing data as "$0 collateral" and enables
+ * proper aggregation of unscored reasons without per-deposit spam logs.
  * 
  * @param input - Health ratio computation input
- * @returns Health ratio result with weighted collateral, borrow value, and ratio
+ * @returns Health ratio result or unscored with reason
  */
 export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
   const { deposits, borrows, reserves, prices } = input;
   
   let collateralUSD = 0;
   let borrowUSD = 0;
-  let scored = true; // Track if we have sufficient data to score
   
   // Process deposits (collateral)
   for (const deposit of deposits) {
     const reserve = reserves.get(deposit.mint);
-    const oraclePrice = prices.get(deposit.mint);
-    
     if (!reserve) {
-      logger.debug(
-        { mint: deposit.mint, reserve: deposit.reserve },
-        "Reserve not found for deposit, skipping"
-      );
-      scored = false;
-      continue;
+      return { scored: false, reason: "MISSING_RESERVE" };
     }
     
+    const oraclePrice = prices.get(deposit.mint);
     if (!oraclePrice) {
-      logger.debug(
-        { mint: deposit.mint, reserve: deposit.reserve },
-        "Price not found for deposit, skipping"
-      );
-      scored = false;
-      continue;
+      return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
     // Staleness guard: skip if timestamp/slot is zero
     if (Number(oraclePrice.slot) <= 0) {
-      logger.debug(
-        { mint: deposit.mint, slot: oraclePrice.slot.toString() },
-        "Stale price (slot=0) for deposit, skipping"
-      );
-      scored = false;
-      continue;
+      return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
     // Convert price and confidence to UI units
@@ -169,101 +191,61 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     const confUi = uiFromMantissa(oraclePrice.confidence, oraclePrice.exponent);
     
     if (baseUi === null || confUi === null) {
-      logger.debug(
-        { mint: deposit.mint, baseUi, confUi },
-        "Invalid price conversion for deposit, skipping"
-      );
-      continue;
+      return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
     // Apply confidence adjustment and stablecoin clamping for collateral
     const priceUi = adjustedUiPrice(deposit.mint, baseUi, confUi, "collateral");
     
-    if (priceUi === null) {
-      logger.debug(
-        { mint: deposit.mint, baseUi, confUi },
-        "Invalid adjusted price for deposit, skipping"
-      );
-      continue;
+    if (priceUi === null || priceUi <= 0) {
+      return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Convert deposit notes (collateral tokens) to underlying liquidity tokens using exchange rate
-    // Deposits are in cToken notes; exchange rate converts them to underlying amount
-    const depositedNotesSf = BigInt(deposit.depositedAmount);
-    const collateralRateBsf = reserve.collateralExchangeRateBsf;
-    
-    if (collateralRateBsf === 0n) {
-      logger.warn(
-        { mint: deposit.mint, reserve: deposit.reserve },
-        "Collateral exchange rate is zero, skipping deposit"
-      );
-      scored = false;
-      continue;
-    }
-    
-    // Use safe bigint division to avoid precision loss
-    // underlyingBaseUnits = depositedNotesSf / collateralExchangeRateBsf
-    const underlyingBaseUnits = divBigintToNumber(depositedNotesSf, collateralRateBsf, 18);
-    
-    // Now normalize to UI using LIQUIDITY decimals (since we're now in underlying units)
-    const amountUi = underlyingBaseUnits / Math.pow(10, reserve.liquidityDecimals);
-    
-    if (!isFinite(amountUi) || amountUi < 0) {
-      logger.debug(
-        { mint: deposit.mint, underlyingBaseUnits, amountUi },
-        "Invalid deposit amount after exchange rate conversion, skipping"
-      );
-      continue;
-    }
-    
-    // Apply liquidationThreshold weight (convert percentage to decimal)
-    const weight = reserve.liquidationThreshold / 100;
-    
-    collateralUSD += amountUi * priceUi * weight;
-    
-    logger.debug(
-      {
-        mint: deposit.mint,
-        amount: amountUi,
-        price: priceUi,
-        weight,
-        value: amountUi * priceUi * weight,
-      },
-      "Processed deposit"
+    // Parse exchange rate: if missing or zero, mark unscored (not $0 collateral)
+    const exchangeRateUi = parseExchangeRateUi(
+      reserve.collateralExchangeRateBsf.toString(),
+      reserve.liquidityDecimals
     );
+    
+    if (exchangeRateUi === null || exchangeRateUi <= 0) {
+      return { scored: false, reason: "MISSING_EXCHANGE_RATE" };
+    }
+    
+    // Convert deposit notes to underlying tokens
+    const depositedNotes = Number(deposit.depositedAmount);
+    if (!Number.isFinite(depositedNotes) || depositedNotes < 0) {
+      return { scored: false, reason: "INVALID_MATH" };
+    }
+    
+    // Normalize to UI units using liquidity decimals
+    const depositUi = (depositedNotes / (10 ** reserve.liquidityDecimals)) * exchangeRateUi;
+    
+    // Apply liquidation threshold weight
+    const weight = reserve.liquidationThreshold / 100;
+    const valueUSD = depositUi * priceUi * weight;
+    
+    if (!Number.isFinite(valueUSD)) {
+      return { scored: false, reason: "INVALID_MATH" };
+    }
+    
+    collateralUSD += Math.max(0, valueUSD);
   }
   
   // Process borrows
   for (const borrow of borrows) {
     const reserve = reserves.get(borrow.mint);
-    const oraclePrice = prices.get(borrow.mint);
-    
     if (!reserve) {
-      logger.debug(
-        { mint: borrow.mint, reserve: borrow.reserve },
-        "Reserve not found for borrow, skipping"
-      );
-      scored = false;
-      continue;
+      return { scored: false, reason: "MISSING_RESERVE" };
     }
     
+    const oraclePrice = prices.get(borrow.mint);
     if (!oraclePrice) {
-      logger.debug(
-        { mint: borrow.mint, reserve: borrow.reserve },
-        "Price not found for borrow, skipping"
-      );
-      scored = false;
-      continue;
+      return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Staleness guard: skip if timestamp/slot is zero
+    // Staleness guard
     if (Number(oraclePrice.slot) <= 0) {
-      logger.debug(
-        { mint: borrow.mint, slot: oraclePrice.slot.toString() },
-        "Stale price (slot=0) for borrow, skipping"
-      );
-      scored = false;
-      continue;
+      return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
     // Convert price and confidence to UI units
@@ -271,113 +253,32 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     const confUi = uiFromMantissa(oraclePrice.confidence, oraclePrice.exponent);
     
     if (baseUi === null || confUi === null) {
-      logger.debug(
-        { mint: borrow.mint, baseUi, confUi },
-        "Invalid price conversion for borrow, skipping"
-      );
-      continue;
+      return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
     // Apply confidence adjustment and stablecoin clamping for borrow
     const priceUi = adjustedUiPrice(borrow.mint, baseUi, confUi, "borrow");
     
-    if (priceUi === null) {
-      logger.debug(
-        { mint: borrow.mint, baseUi, confUi },
-        "Invalid adjusted price for borrow, skipping"
-      );
-      continue;
+    if (priceUi === null || priceUi <= 0) {
+      return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Convert borrowedAmountSf (scaled fraction) to actual token amount
-    // borrowedAmountSf needs to be divided by cumulativeBorrowRateBsf
-    // Use safe bigint division to avoid precision loss from Number(BigInt)
-    const borrowedAmountSf = BigInt(borrow.borrowedAmount);
-    const cumulativeBorrowRateBsf = BigInt(reserve.cumulativeBorrowRate);
+    // Convert SF to UI units using safe helper
+    const borrowUi = convertBorrowSfToUi(borrow.borrowedAmount, reserve.liquidityDecimals);
     
-    if (cumulativeBorrowRateBsf === 0n) {
-      logger.warn(
-        { mint: borrow.mint, reserve: borrow.reserve },
-        "Cumulative borrow rate is zero, skipping borrow"
-      );
-      continue;
+    if (!Number.isFinite(borrowUi)) {
+      return { scored: false, reason: "INVALID_MATH" };
     }
     
-    // Convert SF to token amount using safe bigint division
-    // tokenAmount = borrowedAmountSf / cumulativeBorrowRateBsf
-    // This preserves precision by keeping everything in bigint until the final conversion
-    const tokenAmount = divBigintToNumber(borrowedAmountSf, cumulativeBorrowRateBsf, 18);
+    // Apply borrow factor (defaults to 100 = 1.0x)
+    const borrowFactor = (reserve.borrowFactor ?? 100) / 100;
+    const valueUSD = borrowUi * priceUi * borrowFactor;
     
-    // Check for invalid result
-    if (!isFinite(tokenAmount)) {
-      logger.warn(
-        { 
-          mint: borrow.mint, 
-          borrowedAmountSf: borrow.borrowedAmount,
-          cumulativeBorrowRate: reserve.cumulativeBorrowRate,
-          tokenAmount 
-        },
-        "Invalid token amount after SF conversion (not finite), skipping"
-      );
-      continue;
+    if (!Number.isFinite(valueUSD)) {
+      return { scored: false, reason: "INVALID_MATH" };
     }
     
-    // Clamp tiny negative floating point artifacts to zero
-    const tokenAmountClamped = tokenAmount < 0 && tokenAmount > -FLOATING_POINT_TOLERANCE ? 0 : tokenAmount;
-    
-    if (tokenAmountClamped < 0) {
-      logger.warn(
-        { 
-          mint: borrow.mint, 
-          tokenAmount: tokenAmountClamped 
-        },
-        "Negative token amount after SF conversion, skipping"
-      );
-      continue;
-    }
-    
-    // Convert to UI units using liquidityDecimals (borrows are in liquidity token)
-    const amountUi = tokenAmountClamped / Math.pow(10, reserve.liquidityDecimals);
-    
-    if (!isFinite(amountUi)) {
-      logger.debug(
-        { mint: borrow.mint, tokenAmount: tokenAmountClamped, amountUi },
-        "Invalid borrow amount after decimal conversion, skipping"
-      );
-      continue;
-    }
-    
-    // Apply borrowFactor (percentage, convert to decimal)
-    // borrowFactor defaults to 100 (meaning 1.0x), so divide by 100
-    const borrowFactorPct = reserve.borrowFactor ?? 100;
-    const borrowFactor = borrowFactorPct / 100;
-    
-    borrowUSD += amountUi * priceUi * borrowFactor;
-    
-    logger.debug(
-      {
-        mint: borrow.mint,
-        amount: amountUi,
-        price: priceUi,
-        borrowFactor,
-        value: amountUi * priceUi * borrowFactor,
-      },
-      "Processed borrow"
-    );
-  }
-  
-  // Check for NaN/Infinity in USD values
-  if (!isFinite(collateralUSD) || !isFinite(borrowUSD)) {
-    scored = false;
-  }
-  
-  // If not scored (missing components), return null healthRatio
-  if (!scored) {
-    return { 
-      healthRatio: null, 
-      borrowValue: isFinite(borrowUSD) ? borrowUSD : 0, 
-      collateralValue: isFinite(collateralUSD) ? collateralUSD : 0 
-    };
+    borrowUSD += Math.max(0, valueUSD);
   }
   
   // Calculate health ratio
@@ -399,16 +300,13 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
   // Clamp to [0, 2]
   ratio = Math.max(0, Math.min(2, ratio));
   
-  // Final check to ensure no NaN sneaks through
-  if (!isFinite(ratio)) {
-    return { 
-      healthRatio: null, 
-      borrowValue: borrowUSD, 
-      collateralValue: collateralUSD 
-    };
+  // Final sanity check
+  if (!Number.isFinite(ratio)) {
+    return { scored: false, reason: "INVALID_MATH" };
   }
   
   return {
+    scored: true,
     healthRatio: ratio,
     borrowValue: borrowUSD,
     collateralValue: collateralUSD,
