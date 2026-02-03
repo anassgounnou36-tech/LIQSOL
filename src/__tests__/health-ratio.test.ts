@@ -1,10 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { computeHealthRatio } from "../math/health.js";
+import { computeHealthRatio, type HealthRatioResult } from "../math/health.js";
 import { isLiquidatable } from "../math/liquidation.js";
 import { PublicKey } from "@solana/web3.js";
 import type { ReserveCache } from "../cache/reserveCache.js";
 import type { OracleCache } from "../cache/oracleCache.js";
 import type { ObligationDeposit, ObligationBorrow } from "../kamino/types.js";
+
+// Helper type and function to work with discriminated union
+type Scored = Extract<HealthRatioResult, { scored: true }>;
+
+function expectScored(result: HealthRatioResult): Scored {
+  expect(result.scored).toBe(true);
+  return result as Scored;
+}
 
 describe("Health Ratio and Liquidation", () => {
   describe("computeHealthRatio", () => {
@@ -97,9 +105,10 @@ describe("Health Ratio and Liquidation", () => {
       // Deposit: 1 SOL * ($100 - $0.01 confidence) * 0.85 liquidationThreshold = $84.9915 weighted collateral
       // Borrow: 50 USDC * ($1 + $0.0001 confidence) * 1.0 borrowFactor = $50.005 weighted borrow
       // Health ratio: $84.9915 / $50.005 ≈ 1.699
-      expect(result.collateralValue).toBeCloseTo(84.9915, 2);
-      expect(result.borrowValue).toBeCloseTo(50.005, 2);
-      expect(result.healthRatio).toBeCloseTo(1.699, 2);
+      const scored = expectScored(result);
+      expect(scored.collateralValue).toBeCloseTo(84.9915, 2);
+      expect(scored.borrowValue).toBeCloseTo(50.005, 2);
+      expect(scored.healthRatio).toBeCloseTo(1.699, 2);
     });
 
     it("should handle missing reserve gracefully", () => {
@@ -134,10 +143,11 @@ describe("Health Ratio and Liquidation", () => {
         prices,
       });
 
-      // Should skip deposit with missing reserve
-      expect(result.collateralValue).toBe(0);
-      expect(result.borrowValue).toBe(0);
-      expect(result.healthRatio).toBe(2); // Clamped to max (no borrows)
+      // Should return unscored when reserve is missing
+      expect(result.scored).toBe(false);
+      if (!result.scored) {
+        expect(result.reason).toBe("MISSING_RESERVE");
+      }
     });
 
     it("should handle missing price gracefully", () => {
@@ -181,10 +191,11 @@ describe("Health Ratio and Liquidation", () => {
         prices,
       });
 
-      // Should skip deposit with missing price
-      expect(result.collateralValue).toBe(0);
-      expect(result.borrowValue).toBe(0);
-      expect(result.healthRatio).toBe(2); // Clamped to max (no borrows)
+      // Should return unscored when price is missing
+      expect(result.scored).toBe(false);
+      if (!result.scored) {
+        expect(result.reason).toBe("MISSING_ORACLE_PRICE");
+      }
     });
 
     it("should clamp health ratio to [0, 2]", () => {
@@ -246,7 +257,8 @@ describe("Health Ratio and Liquidation", () => {
       });
 
       // Very high health ratio should be clamped to 2
-      expect(result.healthRatio).toBe(2);
+      const scored = expectScored(result);
+      expect(scored.healthRatio).toBe(2);
     });
 
     it("should return 0 health ratio for underwater position", () => {
@@ -338,9 +350,10 @@ describe("Health Ratio and Liquidation", () => {
       // Deposit: 0.5 SOL * ($100 - $0.01) * 0.6 liquidationThreshold = $29.997 weighted collateral
       // Borrow: 100 USDC * ($1 + $0.0001) * 1.0 borrowFactor = $100.01 weighted borrow
       // Health ratio: $29.997 / $100.01 ≈ 0.30 (underwater)
-      expect(result.collateralValue).toBeCloseTo(29.997, 1);
-      expect(result.borrowValue).toBeCloseTo(100.01, 1);
-      expect(result.healthRatio).toBeCloseTo(0.30, 1);
+      const scored = expectScored(result);
+      expect(scored.collateralValue).toBeCloseTo(29.997, 1);
+      expect(scored.borrowValue).toBeCloseTo(100.01, 1);
+      expect(scored.healthRatio).toBeCloseTo(0.30, 1);
     });
   });
 

@@ -1,8 +1,6 @@
-import { logger } from "../observability/logger.js";
 import type { ReserveCacheEntry } from "../cache/reserveCache.js";
 import type { OraclePriceData } from "../cache/oracleCache.js";
 import type { ObligationDeposit, ObligationBorrow } from "../kamino/types.js";
-import { divBigintToNumber } from "../utils/bn.js";
 
 /**
  * Known stablecoin mints for price clamping
@@ -14,12 +12,6 @@ const STABLECOIN_MINTS = new Set([
   "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", // PYUSD
   "7XS55hUuoRrw1rUixhJv8o2zdX1kH31ZQAz1r4qAS8Fh", // USDH
 ]);
-
-/**
- * Tolerance for clamping tiny negative floating-point artifacts to zero.
- * These artifacts can occur from precision parameter (18) in bigint division.
- */
-const FLOATING_POINT_TOLERANCE = 1e-18;
 
 /**
  * Input for health ratio computation
@@ -68,15 +60,14 @@ function isStableMint(mint: string): boolean {
  * Returns null if missing, zero, or invalid
  */
 function parseExchangeRateUi(
-  collateralExchangeRateBsf: string | undefined | null,
-  liquidityDecimals: number
+  collateralExchangeRateBsf: string | undefined | null
 ): number | null {
   if (!collateralExchangeRateBsf) return null;
   
   const scaled = Number(collateralExchangeRateBsf);
   if (!Number.isFinite(scaled) || scaled <= 0) return null;
   
-  // BigFraction is typically in 1e18 scale; normalize by liquidity decimals
+  // BigFraction is typically in 1e18 scale
   // This converts deposit notes (cTokens) to underlying tokens
   const rate = scaled / (10 ** 18);
   return rate > 0 ? rate : null;
@@ -203,8 +194,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     
     // Parse exchange rate: if missing or zero, mark unscored (not $0 collateral)
     const exchangeRateUi = parseExchangeRateUi(
-      reserve.collateralExchangeRateBsf.toString(),
-      reserve.liquidityDecimals
+      reserve.collateralExchangeRateBsf.toString()
     );
     
     if (exchangeRateUi === null || exchangeRateUi <= 0) {
