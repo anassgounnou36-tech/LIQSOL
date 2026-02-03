@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 import { Buffer } from "buffer";
 import { DecodedReserve } from "../types.js";
 import { hasDiscriminator } from "./discriminator.js";
-import { toBigInt, toBigIntSafe } from "../../utils/bn.js";
+import { toBigIntSafe } from "../../utils/bn.js";
 
 // Get the directory of the current module
 const __filename = fileURLToPath(import.meta.url);
