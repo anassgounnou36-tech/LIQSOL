@@ -39,6 +39,11 @@ describe("Scope Fallback Chain Search Tests", () => {
    * Helper to create mock Scope price data at a specific chain index
    */
   function createMockScopePriceArray(validChains: Map<number, { price: string; exp: number; timestamp: number }>): any[] {
+    // Handle empty map case
+    if (validChains.size === 0) {
+      return new Array(512).fill(null);
+    }
+    
     const maxChain = Math.max(...Array.from(validChains.keys()));
     const prices = new Array(Math.max(512, maxChain + 1)).fill(null);
     

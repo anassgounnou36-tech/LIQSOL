@@ -217,8 +217,8 @@ const FALLBACK_CHAIN_CANDIDATES = [
 ];
 
 /**
- * Helper function to check if a price entry is usable (non-zero, finite exponent, fresh)
- * 
+ * Helper function to check if a price entry is usable (non-zero, finite exponent)
+ * Note: Does not check for freshness - that is validated separately in tryChain
  * @param priceData - Price data to validate
  * @returns true if the price is usable, false otherwise
  */
