@@ -29,6 +29,8 @@ export interface DecodedReserve {
   availableAmountRaw: string;
   /** Borrowed amount in SF (scaled fraction, 1e18-scaled) */
   borrowedAmountSf: string;
+  /** Cumulative borrow rate BSF (BigFractionBytes as bigint string) */
+  cumulativeBorrowRateBsfRaw: string;
   /** Total supply of collateral mint tokens */
   collateralMintTotalSupply: string;
   /** Scope price chain indices array (0-511) for multi-chain Scope oracles with fallback, null if not using Scope */

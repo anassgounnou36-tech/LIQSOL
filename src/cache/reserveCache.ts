@@ -27,6 +27,11 @@ export interface ReserveCacheEntry {
    * Used to convert borrowedAmountSf to actual token amounts
    */
   cumulativeBorrowRate: bigint;
+  /** 
+   * Raw cumulative borrow rate (BigFractionBytes as bigint)
+   * Used in health computation to convert borrowedAmountSf to tokens
+   */
+  cumulativeBorrowRateBsfRaw: bigint;
   /** Loan-to-value ratio (percentage 0-100) */
   loanToValue: number;
   /** Liquidation threshold (percentage 0-100) */
@@ -69,7 +74,9 @@ export const scopeOracleChainMap = new Map<string, number[]>();
  * Exchange rate = (available + borrowed) / supply, normalized by decimals.
  * 
  * Formula:
- * exchangeRateUi = ((availableAmountRaw + borrowedAmountSf/1e18) * 10^collateralDecimals) / (supply * 10^liquidityDecimals)
+ * exchangeRateUi = ((availableAmountRaw + borrowTokensRaw) * 10^collateralDecimals) / (supply * 10^liquidityDecimals)
+ * 
+ * Where borrowTokensRaw = borrowedAmountSf / cumulativeBorrowRateBsf (both are bigints)
  * 
  * @param decoded - Decoded reserve with raw state fields
  * @returns Exchange rate in UI units, or 0 if supply is zero or invalid
@@ -78,6 +85,7 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
   try {
     const avail = BigInt(decoded.availableAmountRaw);
     const borrowSf = BigInt(decoded.borrowedAmountSf);
+    const cumRate = BigInt(decoded.cumulativeBorrowRateBsfRaw);
     const supply = BigInt(decoded.collateralMintTotalSupply);
     
     // Guard: if supply is zero or negative, exchange rate is undefined
@@ -85,11 +93,23 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
       return 0;
     }
     
-    // Convert borrowed SF (1e18-scaled) to raw units
-    const borrowRaw = borrowSf / (10n ** 18n);
+    // Guard: if cumulative rate is zero or negative, can't compute borrowed tokens
+    if (cumRate <= 0n) {
+      logger.warn(
+        { 
+          reserve: decoded.reservePubkey,
+          cumulativeBorrowRateBsfRaw: decoded.cumulativeBorrowRateBsfRaw
+        },
+        "Invalid cumulative borrow rate, defaulting exchange rate to 0"
+      );
+      return 0;
+    }
+    
+    // Convert borrowed SF to raw tokens: borrowTokensRaw = borrowSf / cumRate
+    const borrowTokensRaw = borrowSf / cumRate;
     
     // Calculate numerator: (available + borrowed) * 10^collateralDecimals
-    const totalLiquidity = avail + borrowRaw;
+    const totalLiquidity = avail + borrowTokensRaw;
     const num = totalLiquidity * (10n ** BigInt(decoded.collateralDecimals));
     
     // Calculate denominator: supply * 10^liquidityDecimals
@@ -112,6 +132,7 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
         error,
         availableAmountRaw: decoded.availableAmountRaw,
         borrowedAmountSf: decoded.borrowedAmountSf,
+        cumulativeBorrowRateBsfRaw: decoded.cumulativeBorrowRateBsfRaw,
         collateralMintTotalSupply: decoded.collateralMintTotalSupply
       },
       "Failed to compute exchange rate, defaulting to 0"
@@ -283,7 +304,8 @@ export async function loadReserves(
       const cacheEntry: ReserveCacheEntry = {
         reservePubkey: pubkey,
         availableAmount: BigInt(decoded.availableAmountRaw),
-        cumulativeBorrowRate: 0n, // Not needed for current operations
+        cumulativeBorrowRate: 0n, // Legacy field, not used
+        cumulativeBorrowRateBsfRaw: BigInt(decoded.cumulativeBorrowRateBsfRaw),
         loanToValue: decoded.loanToValueRatio,
         liquidationThreshold: decoded.liquidationThreshold,
         liquidationBonus: decoded.liquidationBonus,

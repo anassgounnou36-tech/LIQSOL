@@ -33,6 +33,7 @@ describe("Cache Index Integration Tests", () => {
             reservePubkey: PublicKey.unique(),
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
+            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
             scopePriceChain: null,
             loanToValue: 75,
             liquidationThreshold: 80,
