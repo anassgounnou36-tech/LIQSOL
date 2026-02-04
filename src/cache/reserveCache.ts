@@ -6,6 +6,7 @@ import { decodeReserve, setReserveMintCache } from "../kamino/decoder.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 import type { DecodedReserve } from "../kamino/types.js";
 import { divBigintToNumber } from "../utils/bn.js";
+import { parseSplMintDecimals } from "../utils/splMint.js";
 
 /**
  * Kamino Lending Program ID (mainnet)
@@ -82,6 +83,15 @@ export const scopeOracleChainMap = new Map<string, number[]>();
  * @returns Exchange rate in UI units, or 0 if supply is zero or invalid
  */
 function computeExchangeRateUi(decoded: DecodedReserve): number {
+  // Guard: check for missing decimals (sentinel value -1)
+  if (decoded.liquidityDecimals < 0 || decoded.collateralDecimals < 0) {
+    logger.warn(
+      { reserve: decoded.reservePubkey },
+      "Missing mint decimals; skipping exchange rate until fallback resolves"
+    );
+    return 0;
+  }
+  
   try {
     const avail = BigInt(decoded.availableAmountRaw);
     const borrowSf = BigInt(decoded.borrowedAmountSfRaw);
@@ -128,8 +138,10 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
   } catch (error) {
     logger.warn(
       { 
-        reserve: decoded.reservePubkey, 
-        error,
+        reserve: decoded.reservePubkey,
+        error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+        liquidityDecimals: decoded.liquidityDecimals,
+        collateralDecimals: decoded.collateralDecimals,
         availableAmountRaw: decoded.availableAmountRaw,
         borrowedAmountSfRaw: decoded.borrowedAmountSfRaw,
         cumulativeBorrowRateBsfRaw: decoded.cumulativeBorrowRateBsfRaw,
@@ -238,7 +250,7 @@ export async function loadReserves(
   );
 
   // Step 3: Decode reserves and filter by market
-  const cache = new Map<string, ReserveCacheEntry>();
+  const decodedReserves: Array<{ pubkey: PublicKey; decoded: DecodedReserve }> = [];
   let decodedCount = 0;
   let matchedCount = 0;
 
@@ -263,79 +275,9 @@ export async function loadReserves(
       }
 
       matchedCount++;
-
-      // Log the liquidity mint mapping for verification
-      logger.debug(
-        {
-          reserve: pubkey.toString(),
-          liquidityMint: decoded.liquidityMint,
-          marketPubkey: decoded.marketPubkey,
-        },
-        "Mapping reserve to liquidity mint"
-      );
-
-      // Extract oracle pubkeys
-      const oraclePubkeys = decoded.oraclePubkeys.map(
-        (pk) => new PublicKey(pk)
-      );
       
-      // If this reserve uses Scope, track the oracle→priceChain array mapping
-      if (decoded.scopePriceChain !== null && decoded.scopePriceChain.length > 0) {
-        // Find the Scope oracle pubkey (it should be in the oraclePubkeys array)
-        for (const oraclePk of oraclePubkeys) {
-          const oracleStr = oraclePk.toString();
-          // Map all oracles if scopePriceChain is set
-          // The oracle loader will determine which ones are actually Scope oracles
-          if (!scopeOracleChainMap.has(oracleStr)) {
-            scopeOracleChainMap.set(oracleStr, decoded.scopePriceChain);
-            logger.debug(
-              {
-                reserve: pubkey.toString(),
-                oracle: oracleStr,
-                priceChain: decoded.scopePriceChain,
-              },
-              "Mapped Scope oracle to price chain array"
-            );
-          }
-        }
-      }
-
-      // Create cache entry
-      const cacheEntry: ReserveCacheEntry = {
-        reservePubkey: pubkey,
-        availableAmount: BigInt(decoded.availableAmountRaw),
-        cumulativeBorrowRate: 0n, // Legacy field, not used
-        cumulativeBorrowRateBsfRaw: BigInt(decoded.cumulativeBorrowRateBsfRaw),
-        loanToValue: decoded.loanToValueRatio,
-        liquidationThreshold: decoded.liquidationThreshold,
-        liquidationBonus: decoded.liquidationBonus,
-        borrowFactor: decoded.borrowFactor,
-        oraclePubkeys,
-        liquidityDecimals: decoded.liquidityDecimals,
-        collateralDecimals: decoded.collateralDecimals,
-        scopePriceChain: decoded.scopePriceChain,
-        collateralMint: decoded.collateralMint,
-        collateralExchangeRateUi: computeExchangeRateUi(decoded),
-      };
-
-      // Store in cache keyed by BOTH liquidity and collateral mints
-      // This enables lookups by deposit.mint (collateral mint) to find the reserve and prices
-      cache.set(decoded.liquidityMint, cacheEntry);
-      cache.set(decoded.collateralMint, cacheEntry);
-
-      // Populate setReserveMintCache for obligation decoding
-      setReserveMintCache(pubkey.toString(), decoded.liquidityMint);
-
-      logger.debug(
-        {
-          reserve: pubkey.toString(),
-          liquidityMint: decoded.liquidityMint,
-          collateralMint: decoded.collateralMint,
-          availableAmount: cacheEntry.availableAmount.toString(),
-          oracleCount: oraclePubkeys.length,
-        },
-        "Cached reserve with both mints"
-      );
+      // Store decoded reserve for fallback processing
+      decodedReserves.push({ pubkey, decoded });
     } catch (err) {
       logger.error(
         { err, pubkey: pubkey.toString() },
@@ -343,12 +285,237 @@ export async function loadReserves(
       );
     }
   }
+  
+  logger.info(
+    {
+      decoded: decodedCount,
+      matchedMarket: matchedCount,
+    },
+    "Decoded reserves, starting SPL Mint fallback for missing decimals..."
+  );
+
+  // Step 4: SPL Mint fallback - collect mint pubkeys for reserves with missing decimals
+  const mintFallbackMap = new Map<string, { 
+    type: "liquidity" | "collateral"; 
+    reserves: Array<{ pubkey: PublicKey; decoded: DecodedReserve }> 
+  }>();
+  
+  for (const { pubkey, decoded } of decodedReserves) {
+    // Check if liquidity decimals are missing (-1)
+    if (decoded.liquidityDecimals === -1) {
+      const mintKey = decoded.liquidityMint;
+      if (!mintFallbackMap.has(mintKey)) {
+        mintFallbackMap.set(mintKey, { type: "liquidity", reserves: [] });
+      }
+      mintFallbackMap.get(mintKey)!.reserves.push({ pubkey, decoded });
+      
+      logger.debug(
+        { reserve: pubkey.toString(), mint: mintKey },
+        "Liquidity mint decimals missing, queuing for SPL fallback"
+      );
+    }
+    
+    // Check if collateral decimals are missing (-1)
+    if (decoded.collateralDecimals === -1) {
+      const mintKey = decoded.collateralMint;
+      if (!mintFallbackMap.has(mintKey)) {
+        mintFallbackMap.set(mintKey, { type: "collateral", reserves: [] });
+      }
+      // Check if already added for liquidity
+      const existing = mintFallbackMap.get(mintKey)!.reserves.find(
+        r => r.pubkey.equals(pubkey)
+      );
+      if (!existing) {
+        mintFallbackMap.get(mintKey)!.reserves.push({ pubkey, decoded });
+      }
+      
+      logger.debug(
+        { reserve: pubkey.toString(), mint: mintKey },
+        "Collateral mint decimals missing, queuing for SPL fallback"
+      );
+    }
+  }
+  
+  // Fetch mint accounts if there are any missing decimals
+  if (mintFallbackMap.size > 0) {
+    logger.info(
+      { uniqueMints: mintFallbackMap.size },
+      "Fetching SPL Mint accounts to resolve missing decimals..."
+    );
+    
+    const mintPubkeys = Array.from(mintFallbackMap.keys()).map(k => new PublicKey(k));
+    
+    try {
+      const mintAccounts = await connection.getMultipleAccountsInfo(mintPubkeys, "confirmed");
+      
+      let resolvedCount = 0;
+      
+      for (let i = 0; i < mintPubkeys.length; i++) {
+        const mintPubkey = mintPubkeys[i];
+        const mintAccount = mintAccounts[i];
+        const mintKey = mintPubkey.toString();
+        const fallbackInfo = mintFallbackMap.get(mintKey);
+        
+        if (!mintAccount || !mintAccount.data) {
+          logger.warn(
+            { mint: mintKey },
+            "Mint account not found during fallback, reserves will have invalid decimals"
+          );
+          continue;
+        }
+        
+        // Parse decimals from mint account data
+        const decimals = parseSplMintDecimals(mintAccount.data);
+        
+        if (decimals === null) {
+          logger.warn(
+            { mint: mintKey, dataLength: mintAccount.data.length },
+            "Failed to parse decimals from mint account data"
+          );
+          continue;
+        }
+        
+        logger.debug(
+          { mint: mintKey, decimals },
+          "Resolved decimals from SPL Mint account"
+        );
+        
+        // Apply parsed decimals to all reserves using this mint
+        if (fallbackInfo) {
+          for (const { decoded } of fallbackInfo.reserves) {
+            if (decoded.liquidityMint === mintKey && decoded.liquidityDecimals === -1) {
+              decoded.liquidityDecimals = decimals;
+              resolvedCount++;
+              logger.debug(
+                { reserve: decoded.reservePubkey, mint: mintKey, decimals },
+                "Applied liquidity decimals from SPL fallback"
+              );
+            }
+            if (decoded.collateralMint === mintKey && decoded.collateralDecimals === -1) {
+              decoded.collateralDecimals = decimals;
+              resolvedCount++;
+              logger.debug(
+                { reserve: decoded.reservePubkey, mint: mintKey, decimals },
+                "Applied collateral decimals from SPL fallback"
+              );
+            }
+          }
+        }
+      }
+      
+      logger.info(
+        { resolved: resolvedCount },
+        "SPL Mint fallback complete, resolved missing decimals"
+      );
+    } catch (err) {
+      logger.error(
+        { err },
+        "Failed to fetch mint accounts during SPL fallback"
+      );
+    }
+  }
+
+  // Step 5: Build cache and compute exchange rates
+  const cache = new Map<string, ReserveCacheEntry>();
+  let cachedCount = 0;
+  let failedDecodeCount = 0;
+
+  for (const { pubkey, decoded } of decodedReserves) {
+    // Final check: skip if decimals are still missing after fallback
+    if (decoded.liquidityDecimals < 0 || decoded.collateralDecimals < 0) {
+      logger.warn(
+        { 
+          reserve: pubkey.toString(),
+          liquidityDecimals: decoded.liquidityDecimals,
+          collateralDecimals: decoded.collateralDecimals,
+        },
+        "Reserve still has missing decimals after SPL fallback, skipping cache entry"
+      );
+      failedDecodeCount++;
+      continue;
+    }
+
+    // Log the liquidity mint mapping for verification
+    logger.debug(
+      {
+        reserve: pubkey.toString(),
+        liquidityMint: decoded.liquidityMint,
+        marketPubkey: decoded.marketPubkey,
+      },
+      "Mapping reserve to liquidity mint"
+    );
+
+    // Extract oracle pubkeys
+    const oraclePubkeys = decoded.oraclePubkeys.map(
+      (pk) => new PublicKey(pk)
+    );
+    
+    // If this reserve uses Scope, track the oracle→priceChain array mapping
+    if (decoded.scopePriceChain !== null && decoded.scopePriceChain.length > 0) {
+      // Find the Scope oracle pubkey (it should be in the oraclePubkeys array)
+      for (const oraclePk of oraclePubkeys) {
+        const oracleStr = oraclePk.toString();
+        // Map all oracles if scopePriceChain is set
+        // The oracle loader will determine which ones are actually Scope oracles
+        if (!scopeOracleChainMap.has(oracleStr)) {
+          scopeOracleChainMap.set(oracleStr, decoded.scopePriceChain);
+          logger.debug(
+            {
+              reserve: pubkey.toString(),
+              oracle: oracleStr,
+              priceChain: decoded.scopePriceChain,
+            },
+            "Mapped Scope oracle to price chain array"
+          );
+        }
+      }
+    }
+
+    // Create cache entry
+    const cacheEntry: ReserveCacheEntry = {
+      reservePubkey: pubkey,
+      availableAmount: BigInt(decoded.availableAmountRaw),
+      cumulativeBorrowRate: 0n, // Legacy field, not used
+      cumulativeBorrowRateBsfRaw: BigInt(decoded.cumulativeBorrowRateBsfRaw),
+      loanToValue: decoded.loanToValueRatio,
+      liquidationThreshold: decoded.liquidationThreshold,
+      liquidationBonus: decoded.liquidationBonus,
+      borrowFactor: decoded.borrowFactor,
+      oraclePubkeys,
+      liquidityDecimals: decoded.liquidityDecimals,
+      collateralDecimals: decoded.collateralDecimals,
+      scopePriceChain: decoded.scopePriceChain,
+      collateralMint: decoded.collateralMint,
+      collateralExchangeRateUi: computeExchangeRateUi(decoded),
+    };
+
+    // Store in cache keyed by BOTH liquidity and collateral mints
+    // This enables lookups by deposit.mint (collateral mint) to find the reserve and prices
+    cache.set(decoded.liquidityMint, cacheEntry);
+    cache.set(decoded.collateralMint, cacheEntry);
+    cachedCount++;
+
+    // Populate setReserveMintCache for obligation decoding
+    setReserveMintCache(pubkey.toString(), decoded.liquidityMint);
+
+    logger.debug(
+      {
+        reserve: pubkey.toString(),
+        liquidityMint: decoded.liquidityMint,
+        collateralMint: decoded.collateralMint,
+        availableAmount: cacheEntry.availableAmount.toString(),
+        oracleCount: oraclePubkeys.length,
+      },
+      "Cached reserve with both mints"
+    );
+  }
 
   logger.info(
     {
       decoded: decodedCount,
       matchedMarket: matchedCount,
-      cached: cache.size,
+      cached: cachedCount,
+      failedDecodeCount,
     },
     "Reserve cache loaded successfully"
   );
@@ -356,9 +523,9 @@ export async function loadReserves(
   // Validate minimum expected reserves
   // Ensure we have at least 5 reserves for a healthy market
   const MIN_EXPECTED_RESERVES = 5;
-  if (cache.size < MIN_EXPECTED_RESERVES) {
+  if (cachedCount < MIN_EXPECTED_RESERVES) {
     logger.warn(
-      { cached: cache.size, expected: MIN_EXPECTED_RESERVES },
+      { cached: cachedCount, expected: MIN_EXPECTED_RESERVES },
       "WARNING: Fewer reserves cached than expected - may indicate configuration issue, small market, or RPC problem"
     );
   }

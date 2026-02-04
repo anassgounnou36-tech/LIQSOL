@@ -359,5 +359,152 @@ describe("Reserve Cache Tests", () => {
       // Cache stores both liquidity and collateral mints: 150 reserves × 2 = 300 entries
       expect(cache.size).toBe(300);
     });
+
+    it("should handle reserves with missing decimals and fetch from SPL mint accounts", async () => {
+      const reserve1Pubkey = new PublicKey(
+        "d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q"
+      );
+      // Use valid base58 PublicKey strings
+      const liquidityMint = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+      const collateralMint = new PublicKey("So11111111111111111111111111111111111111112");
+
+      mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
+        { pubkey: reserve1Pubkey, account: {} },
+      ]);
+
+      // Mock getMultipleAccountsInfo to be called twice:
+      // 1. First for reserve accounts
+      // 2. Second for mint accounts (fallback)
+      const reserveData = Buffer.alloc(100);
+      
+      // Create mock mint account data with decimals at byte 44
+      const liquidityMintData = Buffer.alloc(82);
+      liquidityMintData[44] = 6; // USDC decimals
+      
+      const collateralMintData = Buffer.alloc(82);
+      collateralMintData[44] = 9; // SOL decimals
+
+      let callCount = 0;
+      mockConnection.getMultipleAccountsInfo = vi
+        .fn()
+        .mockImplementation(async (pubkeys: PublicKey[]) => {
+          callCount++;
+          if (callCount === 1) {
+            // First call: return reserve account data
+            return [{ data: reserveData }];
+          } else {
+            // Second call: return mint account data for fallback
+            // Need to return data for both liquidity and collateral mints
+            return pubkeys.map((pk) => {
+              if (pk.equals(liquidityMint)) {
+                return { data: liquidityMintData };
+              } else if (pk.equals(collateralMint)) {
+                return { data: collateralMintData };
+              }
+              return null;
+            });
+          }
+        });
+
+      vi.spyOn(discriminator, "anchorDiscriminator").mockReturnValue(
+        Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
+      );
+
+      // Mock decodeReserve to return reserve with missing decimals (-1)
+      vi.spyOn(decoder, "decodeReserve").mockImplementation(() => ({
+        reservePubkey: reserve1Pubkey.toString(),
+        marketPubkey: marketPubkey.toString(),
+        liquidityMint: liquidityMint.toString(),
+        collateralMint: collateralMint.toString(),
+        liquidityDecimals: -1, // Missing - should trigger fallback
+        collateralDecimals: -1, // Missing - should trigger fallback
+        oraclePubkeys: [],
+        loanToValueRatio: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        availableAmountRaw: "5000000",
+        borrowedAmountSfRaw: "1000000000000000000000000",
+        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        collateralMintTotalSupplyRaw: "1000000",
+        scopePriceChain: null,
+      }));
+
+      vi.spyOn(decoder, "setReserveMintCache");
+
+      const cache = await loadReserves(mockConnection, marketPubkey);
+
+      // Verify getMultipleAccountsInfo was called twice: 
+      // once for reserves, once for mints
+      expect(mockConnection.getMultipleAccountsInfo).toHaveBeenCalledTimes(2);
+
+      // Verify cache was populated (both liquidity and collateral mints)
+      expect(cache.size).toBe(2);
+      expect(cache.has(liquidityMint.toString())).toBe(true);
+      expect(cache.has(collateralMint.toString())).toBe(true);
+
+      // Verify decimals were resolved from mint account
+      const entry = cache.get(liquidityMint.toString());
+      expect(entry).toBeDefined();
+      expect(entry!.liquidityDecimals).toBe(6);
+      expect(entry!.collateralDecimals).toBe(9);
+    });
+
+    it("should skip caching reserves with unresolved decimals after fallback", async () => {
+      const reserve1Pubkey = new PublicKey(
+        "d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q"
+      );
+      const liquidityMint = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+      const collateralMint = new PublicKey("So11111111111111111111111111111111111111112");
+
+      mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
+        { pubkey: reserve1Pubkey, account: {} },
+      ]);
+
+      let callCount = 0;
+      mockConnection.getMultipleAccountsInfo = vi
+        .fn()
+        .mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            // First call: return reserve data
+            return [{ data: Buffer.alloc(100) }];
+          } else {
+            // Second call: return null for mint (fallback fails)
+            return [null, null];
+          }
+        });
+
+      vi.spyOn(discriminator, "anchorDiscriminator").mockReturnValue(
+        Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
+      );
+
+      // Mock decodeReserve to return reserve with missing decimals
+      vi.spyOn(decoder, "decodeReserve").mockImplementation(() => ({
+        reservePubkey: reserve1Pubkey.toString(),
+        marketPubkey: marketPubkey.toString(),
+        liquidityMint: liquidityMint.toString(),
+        collateralMint: collateralMint.toString(),
+        liquidityDecimals: -1, // Missing
+        collateralDecimals: -1, // Missing
+        oraclePubkeys: [],
+        loanToValueRatio: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        availableAmountRaw: "5000000",
+        borrowedAmountSfRaw: "1000000000000000000000000",
+        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        collateralMintTotalSupplyRaw: "1000000",
+        scopePriceChain: null,
+      }));
+
+      vi.spyOn(decoder, "setReserveMintCache");
+
+      const cache = await loadReserves(mockConnection, marketPubkey);
+
+      // Reserve should not be cached since decimals couldn't be resolved
+      expect(cache.size).toBe(0);
+    });
   });
 });
