@@ -1,6 +1,8 @@
 import type { ReserveCacheEntry } from "../cache/reserveCache.js";
 import type { OraclePriceData } from "../cache/oracleCache.js";
 import type { ObligationDeposit, ObligationBorrow } from "../kamino/types.js";
+import { divBigintToNumber } from "../utils/bn.js";
+import { logger } from "../observability/logger.js";
 
 /**
  * Known stablecoin mints for price clamping
@@ -12,6 +14,22 @@ const STABLECOIN_MINTS = new Set([
   "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", // PYUSD
   "7XS55hUuoRrw1rUixhJv8o2zdX1kH31ZQAz1r4qAS8Fh", // USDH
 ]);
+
+/**
+ * BigFractionBytes scale (18 decimals)
+ */
+const BSF_SCALE = 10n ** 18n;
+
+/**
+ * Gate spammy exchange rate warnings behind environment flag
+ * Safely check for process.env without TypeScript errors
+ */
+let VERBOSE_EXCHANGE_RATE = false;
+try {
+  VERBOSE_EXCHANGE_RATE = (globalThis as any).process?.env?.LIQSOL_VERBOSE_EXCHANGE_RATE === "1";
+} catch {
+  // Ignore - defaults to false
+}
 
 /**
  * Input for health ratio computation
@@ -56,25 +74,26 @@ function isStableMint(mint: string): boolean {
 }
 
 /**
- * Parse collateral exchange rate from BSF string to UI rate
+ * Convert collateral exchange rate BSF string to UI number using bigint-safe math
  * Returns null if missing, zero, or invalid
  */
-function parseExchangeRateUi(
-  collateralExchangeRateBsf: string | undefined | null
-): number | null {
-  if (!collateralExchangeRateBsf) return null;
+function exchangeRateUiFromBsfString(bsfStr: string | undefined | null): number | null {
+  if (!bsfStr) return null;
   
-  const scaled = Number(collateralExchangeRateBsf);
-  if (!Number.isFinite(scaled) || scaled <= 0) return null;
-  
-  // BigFraction is typically in 1e18 scale
-  // This converts deposit notes (cTokens) to underlying tokens
-  const rate = scaled / (10 ** 18);
-  return rate > 0 ? rate : null;
+  try {
+    const bsf = BigInt(bsfStr);
+    if (bsf <= 0n) return null;
+    
+    // Use bigint-safe division to preserve precision
+    const rate = divBigintToNumber(bsf, BSF_SCALE, 18);
+    return Number.isFinite(rate) && rate > 0 ? rate : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Convert borrowedAmountSf (scaled fraction) to UI units
+ * Convert borrowedAmountSf (scaled fraction) to UI units using bigint-safe math
  * Returns 0 for invalid/missing values
  */
 function convertBorrowSfToUi(
@@ -83,11 +102,17 @@ function convertBorrowSfToUi(
 ): number {
   if (!borrowedAmountSf) return 0;
   
-  const num = Number(borrowedAmountSf);
-  if (!Number.isFinite(num) || num < 0) return 0;
-  
-  // Divide by 10^decimals to convert to UI units
-  return num / (10 ** liquidityDecimals);
+  try {
+    const borrowedRaw = BigInt(borrowedAmountSf);
+    if (borrowedRaw < 0n) return 0;
+    
+    const liquidityScale = 10n ** BigInt(liquidityDecimals);
+    const borrowedUi = divBigintToNumber(borrowedRaw, liquidityScale, liquidityDecimals);
+    
+    return Number.isFinite(borrowedUi) && borrowedUi >= 0 ? borrowedUi : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -193,22 +218,44 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     }
     
     // Parse exchange rate: if missing or zero, mark unscored (not $0 collateral)
-    const exchangeRateUi = parseExchangeRateUi(
+    const exchangeRateUi = exchangeRateUiFromBsfString(
       reserve.collateralExchangeRateBsf.toString()
     );
     
     if (exchangeRateUi === null || exchangeRateUi <= 0) {
+      // Gate warning behind environment flag to avoid spam
+      if (VERBOSE_EXCHANGE_RATE) {
+        logger.warn(
+          { mint: deposit.mint, reserve: deposit.reserve },
+          "Collateral exchange rate is zero or invalid, skipping deposit"
+        );
+      }
       return { scored: false, reason: "MISSING_EXCHANGE_RATE" };
     }
     
-    // Convert deposit notes to underlying tokens
-    const depositedNotes = Number(deposit.depositedAmount);
-    if (!Number.isFinite(depositedNotes) || depositedNotes < 0) {
+    // Convert deposit notes to underlying tokens using bigint-safe math
+    let depositedNotesRaw: bigint;
+    try {
+      depositedNotesRaw = BigInt(deposit.depositedAmount);
+    } catch {
       return { scored: false, reason: "INVALID_MATH" };
     }
     
-    // Normalize to UI units using liquidity decimals
-    const depositUi = (depositedNotes / (10 ** reserve.liquidityDecimals)) * exchangeRateUi;
+    if (depositedNotesRaw < 0n) {
+      return { scored: false, reason: "INVALID_MATH" };
+    }
+    
+    // Normalize deposit notes using COLLATERAL decimals (not liquidity decimals)
+    // depositedAmount is in collateral token units
+    const collateralScale = 10n ** BigInt(reserve.collateralDecimals);
+    const depositedNotesUi = divBigintToNumber(
+      depositedNotesRaw,
+      collateralScale,
+      reserve.collateralDecimals
+    );
+    
+    // Convert to underlying liquidity units using exchange rate
+    const depositUi = depositedNotesUi * exchangeRateUi;
     
     // Apply liquidation threshold weight
     const weight = reserve.liquidationThreshold / 100;
