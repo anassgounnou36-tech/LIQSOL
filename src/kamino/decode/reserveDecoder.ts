@@ -7,6 +7,7 @@ import { Buffer } from "buffer";
 import { DecodedReserve } from "../types.js";
 import { hasDiscriminator } from "./discriminator.js";
 import { toBigIntSafe } from "../../utils/bn.js";
+import { logger } from "../../observability/logger.js";
 
 // Get the directory of the current module
 const __filename = fileURLToPath(import.meta.url);

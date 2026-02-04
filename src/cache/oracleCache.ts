@@ -375,8 +375,22 @@ export async function loadOracles(
     (pk) => new PublicKey(pk)
   );
 
+  // For Scope oracles, count unique (oracle, chain) combinations
+  const scopeOracleChainCombinations = new Set<string>();
+  for (const [oracleStr, chains] of scopeOracleChainMap.entries()) {
+    if (chains && chains.length > 0) {
+      for (const chain of chains) {
+        scopeOracleChainCombinations.add(`${oracleStr}:${chain}`);
+      }
+    }
+  }
+
   logger.info(
-    { uniqueOracles: oraclePubkeys.length },
+    { 
+      uniqueOraclePubkeys: oraclePubkeys.length,
+      scopeOracleChains: scopeOracleChainMap.size,
+      scopeUniqueCombinations: scopeOracleChainCombinations.size,
+    },
     "Fetching oracle accounts..."
   );
 
@@ -419,17 +433,25 @@ export async function loadOracles(
   // Diagnostic: Check oracle coverage
   const reserveCount = reserveCache.size;
   if (oraclePubkeys.length < 10 && reserveCount > 50) {
+    const sampleReserves = Array.from(reserveCache.entries()).slice(0, 3).map(([mint, reserve]) => {
+      const oracles = reserve.oraclePubkeys.map(pk => pk.toString());
+      const scopeChains = reserve.scopePriceChain;
+      return {
+        mint,
+        oracleCount: oracles.length,
+        oracles,
+        scopePriceChain: scopeChains,
+      };
+    });
+    
     logger.warn(
       {
-        uniqueOracles: oraclePubkeys.length,
+        uniqueOraclePubkeys: oraclePubkeys.length,
+        scopeUniqueCombinations: scopeOracleChainCombinations.size,
         reserveCount,
-        sampleReserves: Array.from(reserveCache.entries()).slice(0, 3).map(([mint, reserve]) => ({
-          mint,
-          oracleCount: reserve.oraclePubkeys.length,
-          oracles: reserve.oraclePubkeys.map(pk => pk.toString()),
-        })),
+        sampleReserves,
       },
-      "WARNING: Very few unique oracles for many reserves - possible configuration issue"
+      "WARNING: Very few unique oracle pubkeys for many reserves - this may be expected if using Scope multi-chain oracles"
     );
   }
 
