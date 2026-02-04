@@ -171,12 +171,9 @@ export function decodeReserve(
     liquidationThreshold: Number(decoded.config.liquidationThresholdPct),
     liquidationBonus: Number(decoded.config.maxLiquidationBonusBps),
     borrowFactor: Number(decoded.config.borrowFactorPct || 100), // Default to 100% if not set
-    totalBorrowed: toBigIntSafe(decoded.liquidity?.borrowedAmountSf, 0n).toString(),
-    availableLiquidity: toBigIntSafe(decoded.liquidity?.availableAmount, 0n).toString(),
-    // cumulativeBorrowRateBsf is a BigFractionBytes (4 x u64 limbs) - toBigIntSafe now handles this
-    cumulativeBorrowRate: toBigIntSafe(decoded.liquidity?.cumulativeBorrowRateBsf, 0n).toString(),
-    // collateralExchangeRateBsf is also a BigFractionBytes used to convert deposit notes to underlying
-    collateralExchangeRateBsf: toBigIntSafe(decoded.collateral?.exchangeRateBsf, 0n).toString(),
+    availableAmountRaw: toBigIntSafe(decoded.liquidity?.availableAmount, 0n).toString(),
+    borrowedAmountSf: toBigIntSafe(decoded.liquidity?.borrowedAmountSf, 0n).toString(),
+    collateralMintTotalSupply: toBigIntSafe(decoded.collateral?.mintTotalSupply, 0n).toString(),
     scopePriceChain,
   };
 

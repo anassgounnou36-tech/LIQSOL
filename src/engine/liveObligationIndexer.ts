@@ -86,6 +86,7 @@ export class LiveObligationIndexer {
   // Stats tracking
   private stats = {
     skippedOtherMarketsCount: 0,
+    emptyObligations: 0,
     unscoredCount: 0,
     unscoredReasons: {} as Record<string, number>,
   };
@@ -286,6 +287,12 @@ export class LiveObligationIndexer {
     liquidationEligible?: boolean;
     unscoredReason?: string;
   } {
+    // Skip empty obligations (no deposits AND no borrows)
+    if (decoded.deposits.length === 0 && decoded.borrows.length === 0) {
+      this.stats.emptyObligations++;
+      return { unscoredReason: "EMPTY_OBLIGATION" };
+    }
+
     // Filter by market if configured
     if (this.marketPubkey && decoded.marketPubkey !== this.marketPubkey.toString()) {
       this.stats.skippedOtherMarketsCount++;
@@ -708,6 +715,7 @@ export class LiveObligationIndexer {
     scoredCount: number;
     liquidatableCount: number;
     skippedOtherMarketsCount: number;
+    emptyObligations: number;
     unscoredCount: number;
     unscoredReasons: Record<string, number>;
   } {
@@ -732,6 +740,7 @@ export class LiveObligationIndexer {
       scoredCount,
       liquidatableCount,
       skippedOtherMarketsCount: this.stats.skippedOtherMarketsCount,
+      emptyObligations: this.stats.emptyObligations,
       unscoredCount: this.stats.unscoredCount,
       unscoredReasons: this.stats.unscoredReasons,
     };
