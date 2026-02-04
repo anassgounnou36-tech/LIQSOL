@@ -32,7 +32,7 @@ describe("Health Ratio and Liquidation", () => {
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
             collateralMint: "mock-collateral-mint",
-            collateralExchangeRateBsf: 1000000000000000000n,
+            collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
           },
         ],
@@ -50,7 +50,7 @@ describe("Health Ratio and Liquidation", () => {
             collateralDecimals: 6,
             cumulativeBorrowRate: 10000000000n,
             collateralMint: "mock-collateral-mint",
-            collateralExchangeRateBsf: 1000000000000000000n,
+            collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
           },
         ],
@@ -91,7 +91,7 @@ describe("Health Ratio and Liquidation", () => {
         {
           reserve: "reserve2",
           mint: "USDC",
-          borrowedAmount: "500000000000000000", // 50 USDC (6 decimals)
+          borrowedAmount: "50000000000000000000000000", // 50 USDC (6 decimals), SF-scaled (50 * 10^6 * 10^18)
         },
       ];
 
@@ -166,7 +166,7 @@ describe("Health Ratio and Liquidation", () => {
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
             collateralMint: "mock-collateral-mint",
-            collateralExchangeRateBsf: 1000000000000000000n,
+            collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
           },
         ],
@@ -214,7 +214,7 @@ describe("Health Ratio and Liquidation", () => {
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
             collateralMint: "mock-collateral-mint",
-            collateralExchangeRateBsf: 1000000000000000000n,
+            collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
           },
         ],
@@ -245,7 +245,7 @@ describe("Health Ratio and Liquidation", () => {
         {
           reserve: "reserve1",
           mint: "SOL",
-          borrowedAmount: "1000000000000000000", // 0.1 SOL
+          borrowedAmount: "100000000000000000000000000", // 0.1 SOL (9 decimals), SF-scaled (0.1 * 10^9 * 10^18)
         },
       ];
 
@@ -277,7 +277,7 @@ describe("Health Ratio and Liquidation", () => {
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
             collateralMint: "mock-collateral-mint",
-            collateralExchangeRateBsf: 1000000000000000000n,
+            collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
           },
         ],
@@ -295,7 +295,7 @@ describe("Health Ratio and Liquidation", () => {
             collateralDecimals: 6,
             cumulativeBorrowRate: 10000000000n,
             collateralMint: "mock-collateral-mint",
-            collateralExchangeRateBsf: 1000000000000000000n,
+            collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
           },
         ],
@@ -336,7 +336,7 @@ describe("Health Ratio and Liquidation", () => {
         {
           reserve: "reserve2",
           mint: "USDC",
-          borrowedAmount: "1000000000000000000", // 100 USDC
+          borrowedAmount: "100000000000000000000000000", // 100 USDC (6 decimals), SF-scaled (100 * 10^6 * 10^18)
         },
       ];
 

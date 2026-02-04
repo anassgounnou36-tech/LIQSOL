@@ -25,14 +25,12 @@ export interface DecodedReserve {
   liquidationBonus: number;
   /** Borrow factor as a percentage (0-100+) for risk-adjusted debt valuation */
   borrowFactor: number;
-  /** Total amount borrowed (as string to avoid precision loss) */
-  totalBorrowed: string;
-  /** Available liquidity for borrowing (as string to avoid precision loss) */
-  availableLiquidity: string;
-  /** Cumulative borrow rate BSF (big scaled fraction) for SF to token conversion */
-  cumulativeBorrowRate: string;
-  /** Collateral exchange rate BSF (big scaled fraction) for converting deposit notes to underlying */
-  collateralExchangeRateBsf: string;
+  /** Available liquidity amount (raw, not adjusted for decimals) */
+  availableAmountRaw: string;
+  /** Borrowed amount in SF (scaled fraction, 1e18-scaled) */
+  borrowedAmountSf: string;
+  /** Total supply of collateral mint tokens */
+  collateralMintTotalSupply: string;
   /** Scope price chain indices array (0-511) for multi-chain Scope oracles with fallback, null if not using Scope */
   scopePriceChain: number[] | null;
 }

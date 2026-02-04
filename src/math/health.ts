@@ -16,11 +16,6 @@ const STABLECOIN_MINTS = new Set([
 ]);
 
 /**
- * BigFractionBytes scale (18 decimals)
- */
-const BSF_SCALE = 10n ** 18n;
-
-/**
  * Gate spammy exchange rate warnings behind environment flag
  * Safely check for process.env without TypeScript errors
  */
@@ -74,26 +69,17 @@ function isStableMint(mint: string): boolean {
 }
 
 /**
- * Convert collateral exchange rate BSF string to UI number using bigint-safe math
+ * Convert collateral exchange rate from UI number directly
  * Returns null if missing, zero, or invalid
  */
-function exchangeRateUiFromBsfString(bsfStr: string | undefined | null): number | null {
-  if (!bsfStr) return null;
-  
-  try {
-    const bsf = BigInt(bsfStr);
-    if (bsf <= 0n) return null;
-    
-    // Use bigint-safe division to preserve precision
-    const rate = divBigintToNumber(bsf, BSF_SCALE, 18);
-    return Number.isFinite(rate) && rate > 0 ? rate : null;
-  } catch {
-    return null;
-  }
+function exchangeRateUiFromReserve(reserve: ReserveCacheEntry): number | null {
+  const rate = reserve.collateralExchangeRateUi;
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
 }
 
 /**
  * Convert borrowedAmountSf (scaled fraction) to UI units using bigint-safe math
+ * borrowedAmountSf is 1e18-scaled, so we divide by 1e18 first, then normalize by decimals
  * Returns 0 for invalid/missing values
  */
 function convertBorrowSfToUi(
@@ -103,9 +89,13 @@ function convertBorrowSfToUi(
   if (!borrowedAmountSf) return 0;
   
   try {
-    const borrowedRaw = BigInt(borrowedAmountSf);
-    if (borrowedRaw < 0n) return 0;
+    const borrowedSf = BigInt(borrowedAmountSf);
+    if (borrowedSf < 0n) return 0;
     
+    // Convert SF (1e18-scaled) to raw units
+    const borrowedRaw = borrowedSf / (10n ** 18n);
+    
+    // Normalize by liquidity decimals to get UI units
     const liquidityScale = 10n ** BigInt(liquidityDecimals);
     const borrowedUi = divBigintToNumber(borrowedRaw, liquidityScale, liquidityDecimals);
     
@@ -218,9 +208,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     }
     
     // Parse exchange rate: if missing or zero, mark unscored (not $0 collateral)
-    const exchangeRateUi = exchangeRateUiFromBsfString(
-      reserve.collateralExchangeRateBsf.toString()
-    );
+    const exchangeRateUi = exchangeRateUiFromReserve(reserve);
     
     if (exchangeRateUi === null || exchangeRateUi <= 0) {
       // Gate warning behind environment flag to avoid spam

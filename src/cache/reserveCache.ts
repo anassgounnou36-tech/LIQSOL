@@ -4,6 +4,7 @@ import bs58 from "bs58";
 import { logger } from "../observability/logger.js";
 import { decodeReserve, setReserveMintCache } from "../kamino/decoder.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
+import type { DecodedReserve } from "../kamino/types.js";
 
 /**
  * Kamino Lending Program ID (mainnet)
@@ -44,10 +45,10 @@ export interface ReserveCacheEntry {
   /** Collateral mint public key (for mapping deposits to reserves) */
   collateralMint: string;
   /** 
-   * Collateral exchange rate (big scaled fraction / BSF)
+   * Collateral exchange rate in UI units (computed from reserve state)
    * Used to convert deposit notes (collateral tokens) to underlying liquidity tokens
    */
-  collateralExchangeRateBsf: bigint;
+  collateralExchangeRateUi: number;
 }
 
 /**
@@ -61,6 +62,62 @@ export type ReserveCache = Map<string, ReserveCacheEntry>;
  * to select the correct price from multi-chain Scope oracles by trying fallback chains
  */
 export const scopeOracleChainMap = new Map<string, number[]>();
+
+/**
+ * Computes the collateral exchange rate in UI units from reserve state.
+ * Exchange rate = (available + borrowed) / supply, normalized by decimals.
+ * 
+ * Formula:
+ * exchangeRateUi = ((availableAmountRaw + borrowedAmountSf/1e18) * 10^collateralDecimals) / (supply * 10^liquidityDecimals)
+ * 
+ * @param decoded - Decoded reserve with raw state fields
+ * @returns Exchange rate in UI units, or 0 if supply is zero or invalid
+ */
+function computeExchangeRateUi(decoded: DecodedReserve): number {
+  try {
+    const avail = BigInt(decoded.availableAmountRaw);
+    const borrowSf = BigInt(decoded.borrowedAmountSf);
+    const supply = BigInt(decoded.collateralMintTotalSupply);
+    
+    // Guard: if supply is zero or negative, exchange rate is undefined
+    if (supply <= 0n) {
+      return 0;
+    }
+    
+    // Convert borrowed SF (1e18-scaled) to raw units
+    const borrowRaw = borrowSf / (10n ** 18n);
+    
+    // Calculate numerator: (available + borrowed) * 10^collateralDecimals
+    const totalLiquidity = avail + borrowRaw;
+    const num = totalLiquidity * (10n ** BigInt(decoded.collateralDecimals));
+    
+    // Calculate denominator: supply * 10^liquidityDecimals
+    const den = supply * (10n ** BigInt(decoded.liquidityDecimals));
+    
+    // Guard: division by zero
+    if (den === 0n) {
+      return 0;
+    }
+    
+    // Perform division using Number conversion (safe for UI values)
+    const rate = Number(num) / Number(den);
+    
+    // Validate result is finite and positive
+    return Number.isFinite(rate) && rate > 0 ? rate : 0;
+  } catch (error) {
+    logger.warn(
+      { 
+        reserve: decoded.reservePubkey, 
+        error,
+        availableAmountRaw: decoded.availableAmountRaw,
+        borrowedAmountSf: decoded.borrowedAmountSf,
+        collateralMintTotalSupply: decoded.collateralMintTotalSupply
+      },
+      "Failed to compute exchange rate, defaulting to 0"
+    );
+    return 0;
+  }
+}
 
 /**
  * Loads all reserves for a given Kamino market and builds a cache
@@ -224,8 +281,8 @@ export async function loadReserves(
       // Create cache entry
       const cacheEntry: ReserveCacheEntry = {
         reservePubkey: pubkey,
-        availableAmount: BigInt(decoded.availableLiquidity),
-        cumulativeBorrowRate: BigInt(decoded.cumulativeBorrowRate),
+        availableAmount: BigInt(decoded.availableAmountRaw),
+        cumulativeBorrowRate: 0n, // Not needed for current operations
         loanToValue: decoded.loanToValueRatio,
         liquidationThreshold: decoded.liquidationThreshold,
         liquidationBonus: decoded.liquidationBonus,
@@ -235,7 +292,7 @@ export async function loadReserves(
         collateralDecimals: decoded.collateralDecimals,
         scopePriceChain: decoded.scopePriceChain,
         collateralMint: decoded.collateralMint,
-        collateralExchangeRateBsf: BigInt(decoded.collateralExchangeRateBsf),
+        collateralExchangeRateUi: computeExchangeRateUi(decoded),
       };
 
       // Store in cache keyed by BOTH liquidity and collateral mints
