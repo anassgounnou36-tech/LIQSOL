@@ -84,6 +84,49 @@ function extractOraclePubkeys(tokenInfo: {
 }
 
 /**
+ * Safely parse a u8-like value (BN-like, bigint, or number) to a valid 0..255 integer
+ * @param v - Value to parse
+ * @param fieldName - Field name for error messages
+ * @returns Valid u8 integer (0..255)
+ * @throws Error if value is not a valid u8
+ */
+function parseU8Like(v: unknown, fieldName: string): number {
+  try {
+    let num: number;
+    
+    // Handle bigint
+    if (typeof v === "bigint") {
+      num = Number(v);
+    }
+    // Handle number
+    else if (typeof v === "number") {
+      num = v;
+    }
+    // Handle BN-like objects with toString
+    else if (v && typeof v === "object" && "toString" in v && typeof (v as { toString: () => string }).toString === "function") {
+      const str = (v as { toString: () => string }).toString();
+      if (!/^\d+$/.test(str)) {
+        throw new Error(`Invalid numeric string: ${str}`);
+      }
+      num = parseInt(str, 10);
+    }
+    // Invalid type
+    else {
+      throw new Error(`Unsupported type: ${typeof v}`);
+    }
+    
+    // Validate range [0, 255]
+    if (!Number.isInteger(num) || num < 0 || num > 255) {
+      throw new Error(`Value ${num} is out of u8 range [0, 255]`);
+    }
+    
+    return num;
+  } catch (err) {
+    throw new Error(`Failed to parse ${fieldName} as u8: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * Extracts scope price chain array from Reserve's TokenInfo configuration
  * @returns Array of all price chain indices (0-511), excluding 65535 sentinel, or null if not configured
  */
@@ -164,17 +207,17 @@ export function decodeReserve(
     marketPubkey: decoded.lendingMarket.toString(),
     liquidityMint: decoded.liquidity.mintPubkey.toString(),
     collateralMint: decoded.collateral.mintPubkey.toString(),
-    liquidityDecimals: Number(decoded.liquidity.mintDecimals),
-    collateralDecimals: Number(decoded.collateral.mintDecimals),
+    liquidityDecimals: parseU8Like(decoded.liquidity?.mintDecimals, "liquidity.mintDecimals"),
+    collateralDecimals: parseU8Like(decoded.collateral?.mintDecimals, "collateral.mintDecimals"),
     oraclePubkeys,
     loanToValueRatio: Number(decoded.config.loanToValuePct),
     liquidationThreshold: Number(decoded.config.liquidationThresholdPct),
     liquidationBonus: Number(decoded.config.maxLiquidationBonusBps),
     borrowFactor: Number(decoded.config.borrowFactorPct || 100), // Default to 100% if not set
     availableAmountRaw: toBigIntSafe(decoded.liquidity?.availableAmount, 0n).toString(),
-    borrowedAmountSf: toBigIntSafe(decoded.liquidity?.borrowedAmountSf, 0n).toString(),
+    borrowedAmountSfRaw: toBigIntSafe(decoded.liquidity?.borrowedAmountSf, 0n).toString(),
     cumulativeBorrowRateBsfRaw: toBigIntSafe(decoded.liquidity?.cumulativeBorrowRateBsf, 0n).toString(),
-    collateralMintTotalSupply: toBigIntSafe(decoded.collateral?.mintTotalSupply, 0n).toString(),
+    collateralMintTotalSupplyRaw: toBigIntSafe(decoded.collateral?.mintTotalSupply, 0n).toString(),
     scopePriceChain,
   };
 

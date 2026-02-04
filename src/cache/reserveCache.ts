@@ -84,9 +84,9 @@ export const scopeOracleChainMap = new Map<string, number[]>();
 function computeExchangeRateUi(decoded: DecodedReserve): number {
   try {
     const avail = BigInt(decoded.availableAmountRaw);
-    const borrowSf = BigInt(decoded.borrowedAmountSf);
+    const borrowSf = BigInt(decoded.borrowedAmountSfRaw);
     const cumRate = BigInt(decoded.cumulativeBorrowRateBsfRaw);
-    const supply = BigInt(decoded.collateralMintTotalSupply);
+    const supply = BigInt(decoded.collateralMintTotalSupplyRaw);
     
     // Guard: if supply is zero or negative, exchange rate is undefined
     if (supply <= 0n) {
@@ -131,9 +131,9 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
         reserve: decoded.reservePubkey, 
         error,
         availableAmountRaw: decoded.availableAmountRaw,
-        borrowedAmountSf: decoded.borrowedAmountSf,
+        borrowedAmountSfRaw: decoded.borrowedAmountSfRaw,
         cumulativeBorrowRateBsfRaw: decoded.cumulativeBorrowRateBsfRaw,
-        collateralMintTotalSupply: decoded.collateralMintTotalSupply
+        collateralMintTotalSupplyRaw: decoded.collateralMintTotalSupplyRaw
       },
       "Failed to compute exchange rate, defaulting to 0"
     );
