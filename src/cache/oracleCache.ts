@@ -2,7 +2,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { logger } from "../observability/logger.js";
 import type { ReserveCache } from "./reserveCache.js";
-import { scopeOracleChainMap } from "./reserveCache.js";
+import { scopeOracleChainMap, getMintsByOracle } from "./reserveCache.js";
 import { parsePriceData } from "@pythnetwork/client";
 import { OraclePrices } from "@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js";
 
@@ -526,21 +526,21 @@ export async function loadOracles(
       continue;
     }
 
-    // Store for each mint that uses this oracle
-    // Note: If a mint has multiple oracles, the last one wins
-    for (const mint of mints) {
-      // Apply stablecoin price clamping
+    // Store oracle price under oracle pubkey for diagnostics
+    cache.set(pubkeyStr, priceData);
+
+    // Map to all mints that reference this oracle
+    const assignedMints = getMintsByOracle(reserveCache, pubkeyStr);
+    let assigned = 0;
+    
+    for (const mint of assignedMints) {
+      // Apply stablecoin price clamping per mint
       const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
       const adjustedPriceData = { ...priceData, price: clampedPrice };
       
-      const existing = cache.get(mint);
-      if (existing) {
-        logger.debug(
-          { mint, oldType: existing.oracleType, newType: priceData.oracleType },
-          `Multiple oracles for mint, using ${priceData.oracleType}`
-        );
-      }
       cache.set(mint, adjustedPriceData);
+      assigned++;
+      
       logger.debug(
         {
           oracle: pubkeyStr,
@@ -548,7 +548,24 @@ export async function loadOracles(
           price: adjustedPriceData.price.toString(),
           type: priceData.oracleType,
         },
-        `Cached ${priceData.oracleType} oracle`
+        `Mapped ${priceData.oracleType} oracle price to mint`
+      );
+    }
+    
+    if (assigned === 0) {
+      logger.warn(
+        { oracle: pubkeyStr, type: priceData.oracleType },
+        "Decoded oracle but no reserves reference it; not counted as cached"
+      );
+      failedCount++;
+    } else {
+      // Count successful oracle decode
+      if (owner.equals(SCOPE_PROGRAM_ID)) {
+        scopeCount++;
+      }
+      logger.debug(
+        { oracle: pubkeyStr, type: priceData.oracleType, mintsAssigned: assigned },
+        `Successfully mapped oracle to ${assigned} mint(s)`
       );
     }
   }

@@ -33,6 +33,7 @@ export interface LiveObligationIndexerConfig {
   yellowstoneUrl: string;
   yellowstoneToken: string;
   programId: PublicKey;
+  marketPubkey?: PublicKey; // Optional: filter obligations by market
   rpcUrl: string; // Required for bootstrap
   obligationsFilePath?: string;
   filters?: SubscribeRequestFilterAccounts["filters"];
@@ -51,10 +52,11 @@ interface ObligationEntry {
   decoded: DecodedObligation;
   lastUpdated: number;
   slot: bigint;
-  healthRatio?: number | null;
+  healthRatio?: number;
   borrowValue?: number;
   collateralValue?: number;
   liquidationEligible?: boolean;
+  unscoredReason?: string; // Track why obligation wasn't scored
 }
 
 export class LiveObligationIndexer {
@@ -69,6 +71,7 @@ export class LiveObligationIndexer {
     bootstrapConcurrency: number;
     inactivityTimeoutSeconds: number;
   };
+  private marketPubkey?: PublicKey;
   private cache: Map<string, ObligationEntry> = new Map();
   private obligationPubkeys: Set<string> = new Set();
   private client: YellowstoneClientInstance | null = null;
@@ -79,6 +82,13 @@ export class LiveObligationIndexer {
   private reconnectCount = 0;
   private reserveCache?: ReserveCache;
   private oracleCache?: OracleCache;
+  
+  // Stats tracking
+  private stats = {
+    skippedOtherMarketsCount: 0,
+    unscoredCount: 0,
+    unscoredReasons: {} as Record<string, number>,
+  };
   
   // Circuit breaker for decode failures
   private decodeFailures: number[] = []; // timestamps of failures
@@ -98,6 +108,7 @@ export class LiveObligationIndexer {
       bootstrapConcurrency: config.bootstrapConcurrency || 1,
       inactivityTimeoutSeconds: config.inactivityTimeoutSeconds || 15,
     };
+    this.marketPubkey = config.marketPubkey;
     this.reserveCache = config.reserveCache;
     this.oracleCache = config.oracleCache;
   }
@@ -269,34 +280,48 @@ export class LiveObligationIndexer {
    * Compute health scoring for an obligation if caches are available
    */
   private computeHealthScoring(decoded: DecodedObligation): {
-    healthRatio?: number | null;
+    healthRatio?: number;
     borrowValue?: number;
     collateralValue?: number;
     liquidationEligible?: boolean;
+    unscoredReason?: string;
   } {
+    // Filter by market if configured
+    if (this.marketPubkey && decoded.marketPubkey !== this.marketPubkey.toString()) {
+      this.stats.skippedOtherMarketsCount++;
+      return { unscoredReason: "OTHER_MARKET" };
+    }
+
     // Only compute scoring if both caches are available
     if (!this.reserveCache || !this.oracleCache) {
-      return {};
+      return { unscoredReason: "NO_CACHES" };
     }
 
     try {
       // Compute health ratio
-      const { healthRatio, borrowValue, collateralValue } = computeHealthRatio({
+      const result = computeHealthRatio({
         deposits: decoded.deposits,
         borrows: decoded.borrows,
         reserves: this.reserveCache,
         prices: this.oracleCache,
       });
 
+      if (!result.scored) {
+        // Track unscored reason
+        this.stats.unscoredCount++;
+        this.stats.unscoredReasons[result.reason] = (this.stats.unscoredReasons[result.reason] || 0) + 1;
+        return { unscoredReason: result.reason };
+      }
+
       // Determine liquidation eligibility
       // Since health ratio is computed with liquidation-threshold-weighted collateral,
-      // we simply check if healthRatio < 1.0 (no need to apply threshold again)
-      const liquidationEligible = isLiquidatable(healthRatio);
+      // we simply check if healthRatio < 1.0
+      const liquidationEligible = isLiquidatable(result.healthRatio);
 
       return {
-        healthRatio,
-        borrowValue,
-        collateralValue,
+        healthRatio: result.healthRatio,
+        borrowValue: result.borrowValue,
+        collateralValue: result.collateralValue,
         liquidationEligible,
       };
     } catch (err) {
@@ -304,7 +329,9 @@ export class LiveObligationIndexer {
         { err, obligationPubkey: decoded.obligationPubkey },
         "Failed to compute health scoring for obligation"
       );
-      return {};
+      this.stats.unscoredCount++;
+      this.stats.unscoredReasons["ERROR"] = (this.stats.unscoredReasons["ERROR"] || 0) + 1;
+      return { unscoredReason: "ERROR" };
     }
   }
 
@@ -680,6 +707,9 @@ export class LiveObligationIndexer {
     reconnectCount: number;
     scoredCount: number;
     liquidatableCount: number;
+    skippedOtherMarketsCount: number;
+    unscoredCount: number;
+    unscoredReasons: Record<string, number>;
   } {
     const entries = Array.from(this.cache.values());
     const lastUpdateTimes = entries.map(e => e.lastUpdated);
@@ -701,6 +731,9 @@ export class LiveObligationIndexer {
       reconnectCount: this.reconnectCount,
       scoredCount,
       liquidatableCount,
+      skippedOtherMarketsCount: this.stats.skippedOtherMarketsCount,
+      unscoredCount: this.stats.unscoredCount,
+      unscoredReasons: this.stats.unscoredReasons,
     };
   }
 

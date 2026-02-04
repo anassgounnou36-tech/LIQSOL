@@ -285,3 +285,26 @@ export async function loadReserves(
 
   return cache;
 }
+
+/**
+ * Helper function to get all mints that reference a specific oracle pubkey
+ * Used for mapping oracle prices to all reserves that use that oracle
+ * 
+ * @param reserveCache - The reserve cache to search
+ * @param oraclePubkey - Oracle public key as string
+ * @returns Array of mint addresses (strings) that use this oracle
+ */
+export function getMintsByOracle(
+  reserveCache: ReserveCache,
+  oraclePubkey: string
+): string[] {
+  const result: string[] = [];
+  for (const [mint, reserve] of reserveCache.entries()) {
+    // Check if any oracle in the reserve matches (compare as PublicKey first for efficiency)
+    const hasOracle = reserve.oraclePubkeys.some(pk => pk.toString() === oraclePubkey);
+    if (hasOracle) {
+      result.push(mint);
+    }
+  }
+  return result;
+}

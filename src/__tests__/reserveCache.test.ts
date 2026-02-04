@@ -113,10 +113,12 @@ describe("Reserve Cache Tests", () => {
       expect(mockConnection.getMultipleAccountsInfo).toHaveBeenCalledTimes(1);
       expect(decoder.decodeReserve).toHaveBeenCalledTimes(2);
 
-      // Verify cache has 2 entries keyed by mint
-      expect(cache.size).toBe(2);
+      // Verify cache has 4 entries: 2 reserves × 2 keys each (liquidity + collateral)
+      expect(cache.size).toBe(4);
       expect(cache.has(mint1)).toBe(true);
       expect(cache.has(mint2)).toBe(true);
+      expect(cache.has("collateral1")).toBe(true);
+      expect(cache.has("collateral2")).toBe(true);
 
       // Verify reserve 1
       const entry1 = cache.get(mint1);
@@ -225,9 +227,12 @@ describe("Reserve Cache Tests", () => {
       const cache = await loadReserves(mockConnection, marketPubkey);
 
       // Only reserve 1 should be in cache (matches market)
-      expect(cache.size).toBe(1);
+      // Cache stores both liquidity and collateral mints, so 2 entries for 1 reserve
+      expect(cache.size).toBe(2);
       expect(cache.has("mint1")).toBe(true);
+      expect(cache.has("collateral1")).toBe(true);
       expect(cache.has("mint2")).toBe(false);
+      expect(cache.has("collateral2")).toBe(false);
     });
 
     it("should handle empty reserve list", async () => {
@@ -323,12 +328,13 @@ describe("Reserve Cache Tests", () => {
         const pubkeyStr = pubkey.toString();
         // Create a unique mint for each pubkey
         const mint = `mint-${pubkeyStr}`;
+        const collateralMint = `collateral-${pubkeyStr}`;
         
         return {
           reservePubkey: pubkeyStr,
           marketPubkey: marketPubkey.toString(),
           liquidityMint: mint,
-          collateralMint: "collateral",
+          collateralMint: collateralMint,
           liquidityDecimals: 6,
           collateralDecimals: 6,
           oraclePubkeys: [],
@@ -350,7 +356,8 @@ describe("Reserve Cache Tests", () => {
 
       // Should be called twice: once for first 100, once for remaining 50
       expect(mockConnection.getMultipleAccountsInfo).toHaveBeenCalledTimes(2);
-      expect(cache.size).toBe(150);
+      // Cache stores both liquidity and collateral mints: 150 reserves × 2 = 300 entries
+      expect(cache.size).toBe(300);
     });
   });
 });

@@ -69,6 +69,7 @@ async function main() {
       yellowstoneUrl: env.YELLOWSTONE_GRPC_URL || "",
       yellowstoneToken: env.YELLOWSTONE_X_TOKEN || "",
       programId,
+      marketPubkey, // Filter by configured market
       rpcUrl: env.RPC_PRIMARY,
       reserveCache,
       oracleCache,
@@ -92,6 +93,8 @@ async function main() {
         scoredObligations: stats.scoredCount,
         unscoredObligations: unscoredCount,
         liquidatableObligations: stats.liquidatableCount,
+        skippedOtherMarkets: stats.skippedOtherMarketsCount,
+        unscoredReasons: stats.unscoredReasons,
       },
       "Scoring complete"
     );
@@ -100,9 +103,10 @@ async function main() {
       logger.warn(
         { 
           unscoredCount, 
-          percentage: ((unscoredCount / stats.cacheSize) * 100).toFixed(1) + "%" 
+          percentage: ((unscoredCount / stats.cacheSize) * 100).toFixed(1) + "%",
+          reasons: stats.unscoredReasons,
         },
-        "Some obligations were not scored (likely due to missing/stale oracle prices or missing reserves). Check debug logs for details."
+        "Some obligations were not scored. See unscoredReasons for details."
       );
     }
 
