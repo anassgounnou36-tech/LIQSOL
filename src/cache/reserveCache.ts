@@ -304,7 +304,7 @@ export async function loadReserves(
       const cacheEntry: ReserveCacheEntry = {
         reservePubkey: pubkey,
         availableAmount: BigInt(decoded.availableAmountRaw),
-        cumulativeBorrowRate: 0n, // Not needed for current operations
+        cumulativeBorrowRate: 0n, // Legacy field, not used
         cumulativeBorrowRateBsfRaw: BigInt(decoded.cumulativeBorrowRateBsfRaw),
         loanToValue: decoded.loanToValueRatio,
         liquidationThreshold: decoded.liquidationThreshold,

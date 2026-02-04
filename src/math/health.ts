@@ -114,10 +114,20 @@ function convertBorrowSfToUi(
 }
 
 /**
- * Compute 10^n as a bigint
+ * Memoized powers of 10 for common exponents
+ */
+const pow10Cache = new Map<number, bigint>();
+
+/**
+ * Compute 10^n as a bigint with memoization for performance
  */
 function pow10n(exp: number): bigint {
-  return 10n ** BigInt(exp);
+  const cached = pow10Cache.get(exp);
+  if (cached !== undefined) return cached;
+  
+  const result = 10n ** BigInt(exp);
+  pow10Cache.set(exp, result);
+  return result;
 }
 
 /**
