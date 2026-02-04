@@ -75,9 +75,9 @@ describe("Reserve Cache Tests", () => {
             liquidationBonus: 500,
             borrowFactor: 100,
             availableAmountRaw: "5000000",
-            borrowedAmountSf: "1000000000000000000000000",
+            borrowedAmountSfRaw: "1000000000000000000000000",
             cumulativeBorrowRateBsfRaw: "1000000000000000000",
-            collateralMintTotalSupply: "1000000",
+            collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
           };
         } else {
@@ -94,9 +94,9 @@ describe("Reserve Cache Tests", () => {
             liquidationBonus: 450,
             borrowFactor: 100,
             availableAmountRaw: "10000000",
-            borrowedAmountSf: "2000000000000000000000000",
+            borrowedAmountSfRaw: "2000000000000000000000000",
             cumulativeBorrowRateBsfRaw: "1000000000000000000",
-            collateralMintTotalSupply: "1000000",
+            collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
           };
         }
@@ -195,9 +195,9 @@ describe("Reserve Cache Tests", () => {
             liquidationBonus: 500,
             borrowFactor: 100,
             availableAmountRaw: "5000000",
-            borrowedAmountSf: "1000000000000000000000000",
+            borrowedAmountSfRaw: "1000000000000000000000000",
             cumulativeBorrowRateBsfRaw: "1000000000000000000",
-            collateralMintTotalSupply: "1000000",
+            collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
           };
         } else {
@@ -214,9 +214,9 @@ describe("Reserve Cache Tests", () => {
             liquidationBonus: 450,
             borrowFactor: 100,
             availableAmountRaw: "10000000",
-            borrowedAmountSf: "2000000000000000000000000",
+            borrowedAmountSfRaw: "2000000000000000000000000",
             cumulativeBorrowRateBsfRaw: "1000000000000000000",
-            collateralMintTotalSupply: "1000000",
+            collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
           };
         }
@@ -343,9 +343,9 @@ describe("Reserve Cache Tests", () => {
           liquidationBonus: 500,
           borrowFactor: 100,
           availableAmountRaw: "5000000",
-          borrowedAmountSf: "1000000000000000000000000",
+          borrowedAmountSfRaw: "1000000000000000000000000",
           cumulativeBorrowRateBsfRaw: "1000000000000000000",
-          collateralMintTotalSupply: "1000000",
+          collateralMintTotalSupplyRaw: "1000000",
           scopePriceChain: null,
         };
       });
