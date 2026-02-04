@@ -37,11 +37,13 @@ describe("SPL Mint Decimals Parser", () => {
   });
 
   it("should return null for null buffer", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = parseSplMintDecimals(null as any);
     expect(result).toBeNull();
   });
 
   it("should return null for undefined buffer", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = parseSplMintDecimals(undefined as any);
     expect(result).toBeNull();
   });
