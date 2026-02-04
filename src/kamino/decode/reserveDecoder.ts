@@ -91,6 +91,11 @@ function extractOraclePubkeys(tokenInfo: {
  * @throws Error if value is not a valid u8
  */
 function parseU8Like(v: unknown, fieldName: string): number {
+  // Handle undefined/null
+  if (v === undefined || v === null) {
+    throw new Error(`Failed to parse ${fieldName} as u8: value is ${v}`);
+  }
+  
   try {
     let num: number;
     
@@ -103,7 +108,7 @@ function parseU8Like(v: unknown, fieldName: string): number {
       num = v;
     }
     // Handle BN-like objects with toString
-    else if (v && typeof v === "object" && "toString" in v && typeof (v as { toString: () => string }).toString === "function") {
+    else if (typeof v === "object" && "toString" in v) {
       const str = (v as { toString: () => string }).toString();
       if (!/^\d+$/.test(str)) {
         throw new Error(`Invalid numeric string: ${str}`);
@@ -207,8 +212,8 @@ export function decodeReserve(
     marketPubkey: decoded.lendingMarket.toString(),
     liquidityMint: decoded.liquidity.mintPubkey.toString(),
     collateralMint: decoded.collateral.mintPubkey.toString(),
-    liquidityDecimals: parseU8Like(decoded.liquidity?.mintDecimals, "liquidity.mintDecimals"),
-    collateralDecimals: parseU8Like(decoded.collateral?.mintDecimals, "collateral.mintDecimals"),
+    liquidityDecimals: parseU8Like(decoded.liquidity.mintDecimals, "liquidity.mintDecimals"),
+    collateralDecimals: parseU8Like(decoded.collateral.mintDecimals, "collateral.mintDecimals"),
     oraclePubkeys,
     loanToValueRatio: Number(decoded.config.loanToValuePct),
     liquidationThreshold: Number(decoded.config.liquidationThresholdPct),
