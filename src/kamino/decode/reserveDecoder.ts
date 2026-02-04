@@ -85,15 +85,16 @@ function extractOraclePubkeys(tokenInfo: {
 
 /**
  * Safely parse a u8-like value (BN-like, bigint, or number) to a valid 0..255 integer
+ * Returns -1 as a sentinel value when the input is undefined/null (missing field)
  * @param v - Value to parse
  * @param fieldName - Field name for error messages
- * @returns Valid u8 integer (0..255)
- * @throws Error if value is not a valid u8
+ * @returns Valid u8 integer (0..255), or -1 if value is undefined/null (missing)
+ * @throws Error if value exists but is not a valid u8
  */
 function parseU8Like(v: unknown, fieldName: string): number {
-  // Handle undefined/null
+  // Handle undefined/null - return sentinel value -1 instead of throwing
   if (v === undefined || v === null) {
-    throw new Error(`Failed to parse ${fieldName} as u8: value is ${v}`);
+    return -1;
   }
   
   try {
