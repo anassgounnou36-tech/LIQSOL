@@ -173,6 +173,7 @@ export function decodeReserve(
     borrowFactor: Number(decoded.config.borrowFactorPct || 100), // Default to 100% if not set
     availableAmountRaw: toBigIntSafe(decoded.liquidity?.availableAmount, 0n).toString(),
     borrowedAmountSf: toBigIntSafe(decoded.liquidity?.borrowedAmountSf, 0n).toString(),
+    cumulativeBorrowRateBsfRaw: toBigIntSafe(decoded.liquidity?.cumulativeBorrowRateBsf, 0n).toString(),
     collateralMintTotalSupply: toBigIntSafe(decoded.collateral?.mintTotalSupply, 0n).toString(),
     scopePriceChain,
   };

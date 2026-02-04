@@ -58,7 +58,7 @@ export type HealthRatioResult =
       /** Obligation could not be scored */
       scored: false;
       /** Reason why the obligation was not scored */
-      reason: "MISSING_RESERVE" | "MISSING_ORACLE_PRICE" | "MISSING_EXCHANGE_RATE" | "INVALID_MATH" | "OTHER_MARKET";
+      reason: "MISSING_RESERVE" | "MISSING_ORACLE_PRICE" | "MISSING_EXCHANGE_RATE" | "MISSING_DEBT_RATE" | "INVALID_MATH" | "OTHER_MARKET";
     };
 
 /**
@@ -79,11 +79,16 @@ function exchangeRateUiFromReserve(reserve: ReserveCacheEntry): number | null {
 
 /**
  * Convert borrowedAmountSf (scaled fraction) to UI units using bigint-safe math
- * borrowedAmountSf is 1e18-scaled, so we divide by 1e18 first, then normalize by decimals
- * Returns 0 for invalid/missing values
+ * and the cumulative borrow rate from the reserve
+ * 
+ * borrowedAmountSf and cumulativeBorrowRateBsf are both 1e18-scaled (BigFractionBytes)
+ * borrowTokens = borrowedAmountSf / cumulativeBorrowRateBsf (both bigints)
+ * 
+ * Returns 0 for invalid/missing values or if cumulative rate is invalid
  */
 function convertBorrowSfToUi(
   borrowedAmountSf: string | undefined | null,
+  cumulativeBorrowRateBsf: bigint,
   liquidityDecimals: number
 ): number {
   if (!borrowedAmountSf) return 0;
@@ -92,12 +97,15 @@ function convertBorrowSfToUi(
     const borrowedSf = BigInt(borrowedAmountSf);
     if (borrowedSf < 0n) return 0;
     
-    // Convert SF (1e18-scaled) to raw units
-    const borrowedRaw = borrowedSf / (10n ** 18n);
+    // Guard: if cumulative rate is zero or negative, can't compute
+    if (cumulativeBorrowRateBsf <= 0n) return 0;
+    
+    // Convert SF to raw tokens: borrowedTokensRaw = borrowedSf / cumRate
+    const borrowedTokensRaw = borrowedSf / cumulativeBorrowRateBsf;
     
     // Normalize by liquidity decimals to get UI units
     const liquidityScale = 10n ** BigInt(liquidityDecimals);
-    const borrowedUi = divBigintToNumber(borrowedRaw, liquidityScale, liquidityDecimals);
+    const borrowedUi = divBigintToNumber(borrowedTokensRaw, liquidityScale, liquidityDecimals);
     
     return Number.isFinite(borrowedUi) && borrowedUi >= 0 ? borrowedUi : 0;
   } catch {
@@ -106,15 +114,36 @@ function convertBorrowSfToUi(
 }
 
 /**
- * Convert mantissa to UI price using exponent
- * Returns null if result is NaN or Infinity
+ * Compute 10^n as a bigint
  */
-function uiFromMantissa(price: bigint, exponent: number): number | null {
-  const result = Number(price) * Math.pow(10, exponent);
-  if (!isFinite(result)) {
+function pow10n(exp: number): bigint {
+  return 10n ** BigInt(exp);
+}
+
+/**
+ * Convert mantissa to UI price using exponent with bigint-safe arithmetic
+ * Returns null if result is NaN or Infinity
+ * 
+ * Uses bigint arithmetic until final conversion to avoid Number(bigint) overflow
+ */
+function uiFromMantissaSafe(mantissa: bigint, exponent: number): number | null {
+  if (mantissa === 0n) return 0;
+  
+  try {
+    if (exponent < 0) {
+      // Divide by 10^(-exponent)
+      const denom = pow10n(-exponent);
+      const v = divBigintToNumber(mantissa, denom, 18);
+      return Number.isFinite(v) ? v : null;
+    } else {
+      // Multiply by 10^exponent
+      const scaled = mantissa * pow10n(exponent);
+      const v = divBigintToNumber(scaled, 1n, 18);
+      return Number.isFinite(v) ? v : null;
+    }
+  } catch {
     return null;
   }
-  return result;
 }
 
 /**
@@ -193,8 +222,8 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     }
     
     // Convert price and confidence to UI units
-    const baseUi = uiFromMantissa(oraclePrice.price, oraclePrice.exponent);
-    const confUi = uiFromMantissa(oraclePrice.confidence, oraclePrice.exponent);
+    const baseUi = uiFromMantissaSafe(oraclePrice.price, oraclePrice.exponent);
+    const confUi = uiFromMantissaSafe(oraclePrice.confidence, oraclePrice.exponent);
     
     if (baseUi === null || confUi === null) {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
@@ -274,8 +303,8 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     }
     
     // Convert price and confidence to UI units
-    const baseUi = uiFromMantissa(oraclePrice.price, oraclePrice.exponent);
-    const confUi = uiFromMantissa(oraclePrice.confidence, oraclePrice.exponent);
+    const baseUi = uiFromMantissaSafe(oraclePrice.price, oraclePrice.exponent);
+    const confUi = uiFromMantissaSafe(oraclePrice.confidence, oraclePrice.exponent);
     
     if (baseUi === null || confUi === null) {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
@@ -288,8 +317,17 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Convert SF to UI units using safe helper
-    const borrowUi = convertBorrowSfToUi(borrow.borrowedAmount, reserve.liquidityDecimals);
+    // Check for valid cumulative borrow rate
+    if (!reserve.cumulativeBorrowRateBsfRaw || reserve.cumulativeBorrowRateBsfRaw <= 0n) {
+      return { scored: false, reason: "MISSING_DEBT_RATE" };
+    }
+    
+    // Convert SF to UI units using safe helper with cumulative borrow rate
+    const borrowUi = convertBorrowSfToUi(
+      borrow.borrowedAmount,
+      reserve.cumulativeBorrowRateBsfRaw,
+      reserve.liquidityDecimals
+    );
     
     if (!Number.isFinite(borrowUi)) {
       return { scored: false, reason: "INVALID_MATH" };
