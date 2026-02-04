@@ -211,20 +211,36 @@ function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
  * These are commonly used chain indices observed across Kamino markets
  */
 const FALLBACK_CHAIN_CANDIDATES = [
-  0, 1, 2, 3, 10, 13, 18, 20, 22, 25, 50, 108, 112, 118, 119, 146, 148, 150, 175,
+  0, 1, 2, 10, 13, 18, 20, 22, 25, 50, 108, 112, 118, 119, 146, 148, 150, 175,
   202, 208, 210, 211, 212, 213, 214, 215, 216, 217, 219, 220, 221, 222, 223, 224,
   235, 246, 267, 311, 377, 426, 500, 507,
 ];
 
 /**
- * Helper function to check if a price entry is usable (non-zero, finite exponent)
+ * Helper function to check if a price entry is usable (non-zero, finite exponent, magnitude sanity checks)
  * Note: Does not check for freshness - that is validated separately in tryChain
  * @param priceData - Price data to validate
  * @returns true if the price is usable, false otherwise
  */
 function isPriceUsable(priceData: OraclePriceData | null): boolean {
   if (!priceData) return false;
-  return priceData.price !== 0n && Number.isFinite(priceData.exponent);
+  if (priceData.price === 0n) return false;
+  if (!Number.isFinite(priceData.exponent)) return false;
+
+  // Reject absurd exponent ranges
+  if (priceData.exponent < -30 || priceData.exponent > 10) return false;
+
+  // Magnitude check without floats: log10(uiPrice) ≈ (digits - 1) + exponent
+  const digits = priceData.price.toString().length;
+  const approxLog10 = (digits - 1) + priceData.exponent;
+
+  // Reject extremely tiny prices (e.g., ~1e-6 USD)
+  if (approxLog10 < -4) return false; // uiPrice < 1e-4
+
+  // Reject extremely huge prices (protect against overflow nonsense)
+  if (approxLog10 > 7) return false; // uiPrice > 1e7
+
+  return true;
 }
 
 /**
@@ -359,9 +375,9 @@ function decodeScopePrice(
       return { priceData: null, triedFallbackScan: false };
     }
     
-    // Step 3: Try primary fallback chains [0, 3]
-    logger.debug({ configuredChains: chains }, "Trying primary fallback chains for Scope price");
-    for (const chain of [0, 3]) {
+    // Step 3: Try primary fallback chain [0]
+    logger.debug({ configuredChains: chains }, "Trying primary fallback chain for Scope price");
+    for (const chain of [0]) {
       // Skip if already tried in configured chains
       if (chains.includes(chain)) continue;
       
@@ -381,8 +397,8 @@ function decodeScopePrice(
       "Scanning curated fallback chain candidates for Scope price"
     );
     for (const chain of FALLBACK_CHAIN_CANDIDATES) {
-      // Skip if already tried in configured chains or primary fallbacks
-      if (chains.includes(chain) || chain === 0 || chain === 3) continue;
+      // Skip if already tried in configured chains or primary fallback
+      if (chains.includes(chain) || chain === 0) continue;
       
       const priceData = tryChain(chain);
       if (isPriceUsable(priceData)) {

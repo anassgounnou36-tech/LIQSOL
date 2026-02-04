@@ -114,7 +114,7 @@ describe("Scope Fallback Chain Search Tests", () => {
       expect(price!.oracleType).toBe("scope");
     });
 
-    it("should use primary fallback chain 3 when chain 0 also fails", async () => {
+    it("should not use fallback chain 3; no price cached when configured chains and chain 0 fail", async () => {
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
       
@@ -140,7 +140,7 @@ describe("Scope Fallback Chain Search Tests", () => {
         ],
       ]);
 
-      // Mock Scope data with price only at chain 3
+      // Mock Scope data with price only at chain 3 (which is now excluded)
       const currentTimestamp = Math.floor(Date.now() / 1000);
       const mockPrices = createMockScopePriceArray(
         new Map([
@@ -159,11 +159,8 @@ describe("Scope Fallback Chain Search Tests", () => {
 
       const cache = await loadOracles(mockConnection, reserveCache);
 
-      // Should have found price via fallback chain 3
-      expect(cache.has(mint1)).toBe(true);
-      const price = cache.get(mint1);
-      expect(price).toBeDefined();
-      expect(price!.price).toBe(200000000n);
+      // Should NOT have price for mint since chain 3 is excluded from fallback
+      expect(cache.has(mint1)).toBe(false);
     });
 
     it("should scan curated fallback candidates when primary fallbacks fail", async () => {
@@ -346,13 +343,13 @@ describe("Scope Fallback Chain Search Tests", () => {
         ],
       ]);
 
-      // Mock Scope data with stale price at chain 0 and fresh price at chain 3
+      // Mock Scope data with stale price at chain 0 and fresh price at chain 1 (curated fallback)
       const currentTimestamp = Math.floor(Date.now() / 1000);
       const staleTimestamp = currentTimestamp - 60; // 60 seconds old (stale)
       const mockPrices = createMockScopePriceArray(
         new Map([
           [0, { price: "100000000", exp: 8, timestamp: staleTimestamp }],
-          [3, { price: "200000000", exp: 8, timestamp: currentTimestamp }],
+          [1, { price: "200000000", exp: 8, timestamp: currentTimestamp }],
         ])
       );
 
@@ -367,7 +364,7 @@ describe("Scope Fallback Chain Search Tests", () => {
 
       const cache = await loadOracles(mockConnection, reserveCache);
 
-      // Should skip stale chain 0 and use fresh chain 3
+      // Should skip stale chain 0 and use fresh chain 1 (curated fallback)
       expect(cache.has(mint1)).toBe(true);
       const price = cache.get(mint1);
       expect(price).toBeDefined();
