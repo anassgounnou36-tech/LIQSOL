@@ -5,6 +5,7 @@ import { logger } from "../observability/logger.js";
 import { decodeReserve, setReserveMintCache } from "../kamino/decoder.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 import type { DecodedReserve } from "../kamino/types.js";
+import { divBigintToNumber } from "../utils/bn.js";
 
 /**
  * Kamino Lending Program ID (mainnet)
@@ -94,13 +95,13 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
     // Calculate denominator: supply * 10^liquidityDecimals
     const den = supply * (10n ** BigInt(decoded.liquidityDecimals));
     
-    // Guard: division by zero
-    if (den === 0n) {
+    // Guard: division by zero or negative numerator
+    if (den === 0n || num <= 0n) {
       return 0;
     }
     
-    // Perform division using Number conversion (safe for UI values)
-    const rate = Number(num) / Number(den);
+    // Perform bigint-safe division using helper with precision 18
+    const rate = divBigintToNumber(num, den, 18);
     
     // Validate result is finite and positive
     return Number.isFinite(rate) && rate > 0 ? rate : 0;
