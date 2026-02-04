@@ -2,7 +2,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { logger } from "../observability/logger.js";
 import type { ReserveCache } from "./reserveCache.js";
-import { scopeOracleChainMap, getMintsByOracle } from "./reserveCache.js";
+import { scopeMintChainMap, getMintsByOracle } from "./reserveCache.js";
 import { parsePriceData } from "@pythnetwork/client";
 import { OraclePrices } from "@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js";
 
@@ -483,23 +483,70 @@ export async function loadOracles(
         switchboardCount++;
       }
     } else if (owner.equals(SCOPE_PROGRAM_ID)) {
-      // Use Scope decoder with the configured price chain array (with fallback support)
-      // Merge override chains with reserve-configured chains
-      const fallbackChains = scopeChainOverrides[pubkeyStr] || [];
-      const configChains = scopeOracleChainMap.get(pubkeyStr) || [];
-      // Merge and de-duplicate, preserve order (overrides first, then config)
-      const chains = Array.from(new Set([...fallbackChains, ...configChains]));
-      // If empty after merge, use default [0]
-      const finalChains = chains.length > 0 ? chains : [0];
+      // Scope oracles need mint-aware chain selection
+      // Decode separately for each mint that uses this oracle
+      const assignedMints = getMintsByOracle(reserveCache, pubkeyStr);
       
-      priceData = decodeScopePrice(data, finalChains);
-      if (priceData) {
+      if (assignedMints.length === 0) {
+        logger.debug({ oracle: pubkeyStr }, "Scope oracle has no assigned mints, skipping");
+        continue;
+      }
+      
+      // Store diagnostic entry under oracle pubkey (will be overwritten by first mint's price)
+      let diagnosticPriceData: OraclePriceData | null = null;
+      
+      // Decode price for each mint using its specific chain configuration
+      for (const mint of assignedMints) {
+        // Get chains for this mint: config first, then fallback override
+        const configChains = scopeMintChainMap.get(mint) || [];
+        const fallbackChains = scopeChainOverrides[pubkeyStr] || [];
+        
+        // Merge: config first (takes precedence), then fallback
+        const chains = Array.from(new Set([...configChains, ...fallbackChains]));
+        // If empty after merge, use default [0]
+        const finalChains = chains.length > 0 ? chains : [0];
+        
+        const mintPriceData = decodeScopePrice(data, finalChains);
+        
+        if (!mintPriceData) {
+          logger.warn(
+            { oracle: pubkeyStr, mint, chains: finalChains },
+            "Failed to decode Scope price for mint"
+          );
+          continue;
+        }
+        
+        // Apply stablecoin price clamping per mint
+        const clampedPrice = applyStablecoinClamp(mintPriceData.price, mintPriceData.exponent, mint);
+        const adjustedPriceData = { ...mintPriceData, price: clampedPrice };
+        
+        // Store price under mint
+        cache.set(mint, adjustedPriceData);
         scopeCount++;
+        
+        // Store first successful decode as diagnostic entry
+        if (!diagnosticPriceData) {
+          diagnosticPriceData = adjustedPriceData;
+        }
+        
         logger.debug(
-          { oracle: pubkeyStr, chains: finalChains },
-          `Decoded Scope oracle using price chain array with fallback`
+          {
+            oracle: pubkeyStr,
+            mint,
+            chains: finalChains,
+            price: adjustedPriceData.price.toString(),
+          },
+          "Mapped Scope oracle price to mint with chain-aware decoding"
         );
       }
+      
+      // Store diagnostic entry under oracle pubkey
+      if (diagnosticPriceData) {
+        cache.set(pubkeyStr, diagnosticPriceData);
+      }
+      
+      // Skip the generic price mapping below since we handled it per-mint above
+      continue;
     } else {
       // Unknown oracle program
       logger.debug(

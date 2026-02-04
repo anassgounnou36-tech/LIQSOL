@@ -64,11 +64,12 @@ export interface ReserveCacheEntry {
 export type ReserveCache = Map<string, ReserveCacheEntry>;
 
 /**
- * Scope oracle chain map - maps Scope oracle pubkey to priceChain indices array
+ * Scope mint chain map - maps liquidity mint to priceChain indices array
  * This is populated during reserve loading and used during oracle decoding
- * to select the correct price from multi-chain Scope oracles by trying fallback chains
+ * to select the correct price from multi-chain Scope oracles by trying fallback chains.
+ * Different reserves (mints) can share the same Scope oracle but use different chain indices.
  */
-export const scopeOracleChainMap = new Map<string, number[]>();
+export const scopeMintChainMap = new Map<string, number[]>();
 
 /**
  * Computes the collateral exchange rate in UI units from reserve state.
@@ -458,25 +459,19 @@ export async function loadReserves(
       (pk) => new PublicKey(pk)
     );
     
-    // If this reserve uses Scope, track the oracle→priceChain array mapping
+    // If this reserve uses Scope, track the mint→priceChain array mapping
+    // This allows different reserves (mints) to use the same Scope oracle with different chain indices
     if (decoded.scopePriceChain !== null && decoded.scopePriceChain.length > 0) {
-      // Find the Scope oracle pubkey (it should be in the oraclePubkeys array)
-      for (const oraclePk of oraclePubkeys) {
-        const oracleStr = oraclePk.toString();
-        // Map all oracles if scopePriceChain is set
-        // The oracle loader will determine which ones are actually Scope oracles
-        if (!scopeOracleChainMap.has(oracleStr)) {
-          scopeOracleChainMap.set(oracleStr, decoded.scopePriceChain);
-          logger.debug(
-            {
-              reserve: pubkey.toString(),
-              oracle: oracleStr,
-              priceChain: decoded.scopePriceChain,
-            },
-            "Mapped Scope oracle to price chain array"
-          );
-        }
-      }
+      const liquidityMint = decoded.liquidityMint;
+      scopeMintChainMap.set(liquidityMint, decoded.scopePriceChain);
+      logger.debug(
+        {
+          reserve: pubkey.toString(),
+          liquidityMint: liquidityMint,
+          priceChain: decoded.scopePriceChain,
+        },
+        "Mapped Scope liquidity mint to price chain array"
+      );
     }
 
     // Create cache entry
