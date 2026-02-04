@@ -34,6 +34,11 @@ const idlJson = JSON.parse(readFileSync(idlPath, "utf-8"));
 const accountsCoder = new BorshAccountsCoder(idlJson);
 
 /**
+ * Counter for rate-limited introspection logging
+ */
+let extractionLogCount = 0;
+
+/**
  * Extracts non-null oracle public keys from Reserve's TokenInfo configuration
  */
 function extractOraclePubkeys(tokenInfo: {
@@ -204,6 +209,32 @@ export function decodeReserve(
   
   // Extract scope price chain if configured
   const scopePriceChain = extractScopePriceChain(decoded.config?.tokenInfo);
+
+  // Introspection logging (first 5 reserves) - rate-limited to avoid spam
+  // This helps diagnose oracle extraction issues
+  if (!extractionLogCount) {
+    extractionLogCount = 0;
+  }
+  if (extractionLogCount < 5) {
+    extractionLogCount++;
+    const tokenInfo = decoded.config?.tokenInfo;
+    logger.info(
+      {
+        reserve: reservePubkey.toString(),
+        liquidityMint: decoded.liquidity.mintPubkey.toString(),
+        oracleCount: oraclePubkeys.length,
+        oracles: oraclePubkeys,
+        hasScope: !!tokenInfo?.scopeConfiguration?.priceFeed && 
+                  tokenInfo.scopeConfiguration.priceFeed.toString() !== "11111111111111111111111111111111",
+        hasPyth: !!tokenInfo?.pythConfiguration?.price && 
+                 tokenInfo.pythConfiguration.price.toString() !== "11111111111111111111111111111111",
+        hasSwitchboard: !!tokenInfo?.switchboardConfiguration?.priceAggregator && 
+                        tokenInfo.switchboardConfiguration.priceAggregator.toString() !== "11111111111111111111111111111111",
+        scopePriceChain,
+      },
+      "Oracle extraction introspection (first 5 reserves)"
+    );
+  }
 
   // Map to DecodedReserve type with BN-safe conversion
   // Use toBigIntSafe to handle potentially missing/undefined fields gracefully

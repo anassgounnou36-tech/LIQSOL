@@ -440,6 +440,9 @@ export async function loadOracles(
   let scopeCount = 0;
   let unknownCount = 0;
   let failedCount = 0;
+  
+  // Rate-limited introspection logging counter
+  let oracleMappingLogCount = 0;
 
   for (const { pubkey, data, owner } of allOracleAccounts) {
     if (!data) {
@@ -541,15 +544,34 @@ export async function loadOracles(
       cache.set(mint, adjustedPriceData);
       assigned++;
       
-      logger.debug(
-        {
-          oracle: pubkeyStr,
-          mint,
-          price: adjustedPriceData.price.toString(),
-          type: priceData.oracleType,
-        },
-        `Mapped ${priceData.oracleType} oracle price to mint`
-      );
+      // Introspection logging (first 5 oracle → mint mappings)
+      if (oracleMappingLogCount < 5) {
+        oracleMappingLogCount++;
+        const chains = priceData.oracleType === "scope" 
+          ? (scopeOracleChainMap.get(pubkeyStr) || [])
+          : [];
+        logger.info(
+          {
+            oracle: pubkeyStr,
+            mint,
+            price: adjustedPriceData.price.toString(),
+            exponent: adjustedPriceData.exponent,
+            type: priceData.oracleType,
+            scopeChains: chains.length > 0 ? chains : undefined,
+          },
+          `Oracle → mint mapping introspection (first 5)`
+        );
+      } else {
+        logger.debug(
+          {
+            oracle: pubkeyStr,
+            mint,
+            price: adjustedPriceData.price.toString(),
+            type: priceData.oracleType,
+          },
+          `Mapped ${priceData.oracleType} oracle price to mint`
+        );
+      }
     }
     
     if (assigned === 0) {

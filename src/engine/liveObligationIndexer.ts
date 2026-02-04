@@ -290,17 +290,26 @@ export class LiveObligationIndexer {
     // Skip empty obligations (no deposits AND no borrows)
     if (decoded.deposits.length === 0 && decoded.borrows.length === 0) {
       this.stats.emptyObligations++;
+      this.stats.unscoredCount++;
+      this.stats.unscoredReasons["EMPTY_OBLIGATION"] = 
+        (this.stats.unscoredReasons["EMPTY_OBLIGATION"] || 0) + 1;
       return { unscoredReason: "EMPTY_OBLIGATION" };
     }
 
     // Filter by market if configured
     if (this.marketPubkey && decoded.marketPubkey !== this.marketPubkey.toString()) {
       this.stats.skippedOtherMarketsCount++;
+      this.stats.unscoredCount++;
+      this.stats.unscoredReasons["OTHER_MARKET"] = 
+        (this.stats.unscoredReasons["OTHER_MARKET"] || 0) + 1;
       return { unscoredReason: "OTHER_MARKET" };
     }
 
     // Only compute scoring if both caches are available
     if (!this.reserveCache || !this.oracleCache) {
+      this.stats.unscoredCount++;
+      this.stats.unscoredReasons["NO_CACHES"] = 
+        (this.stats.unscoredReasons["NO_CACHES"] || 0) + 1;
       return { unscoredReason: "NO_CACHES" };
     }
 
