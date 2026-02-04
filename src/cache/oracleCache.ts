@@ -77,6 +77,25 @@ export interface OraclePriceData {
 export type OracleCache = Map<string, OraclePriceData>;
 
 /**
+ * Result from decoding a Scope price with fallback metadata
+ */
+interface ScopePriceResult {
+  /** Decoded price data, or null if no valid price found */
+  priceData: OraclePriceData | null;
+  /** The chain index that yielded a usable price, if any */
+  winningChain?: number;
+  /** Whether fallback chain scanning was attempted */
+  triedFallbackScan: boolean;
+}
+
+/**
+ * Cache of resolved chain indices per mint for Scope oracles
+ * Maps mint address → successfully resolved chain index
+ * Used to avoid repeated fallback scanning for the same mint
+ */
+const resolvedScopeChainByMint = new Map<string, number>();
+
+/**
  * Decodes a Pyth price account using the official Pyth SDK
  *
  * @param data - Raw account data
@@ -188,34 +207,67 @@ function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
 }
 
 /**
- * Decodes a Scope price feed account using the Kamino Scope SDK with fallback support
+ * Curated list of common Scope price chain candidates for fallback scanning
+ * These are commonly used chain indices observed across Kamino markets
+ */
+const FALLBACK_CHAIN_CANDIDATES = [
+  0, 1, 2, 3, 10, 13, 18, 20, 22, 25, 50, 108, 112, 118, 119, 146, 148, 150, 175,
+  202, 208, 210, 211, 212, 213, 214, 215, 216, 217, 219, 220, 221, 222, 223, 224,
+  235, 246, 267, 311, 377, 426, 500, 507,
+];
+
+/**
+ * Helper function to check if a price entry is usable (non-zero, finite exponent)
+ * Note: Does not check for freshness - that is validated separately in tryChain
+ * @param priceData - Price data to validate
+ * @returns true if the price is usable, false otherwise
+ */
+function isPriceUsable(priceData: OraclePriceData | null): boolean {
+  if (!priceData) return false;
+  return priceData.price !== 0n && Number.isFinite(priceData.exponent);
+}
+
+/**
+ * Decodes a Scope price feed account using the Kamino Scope SDK with resilient fallback support
+ *
+ * Behavior:
+ * 1. Try configured chains in order
+ * 2. If none found and fallback enabled, try primary fallback chains [0, 3]
+ * 3. If still none found, scan curated list of common chain indices
+ * 4. Return null if no valid price found
  *
  * @param data - Raw account data
  * @param chains - Array of price chain indices (0-511) to try in order until a valid price is found
- * @returns Decoded price data or null if no valid price found in any chain
+ * @param options - Optional configuration
+ * @param options.enableFallback - Enable automatic fallback chain search (default: true)
+ * @returns Result object with price data, winning chain, and fallback metadata
  */
-function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData | null {
+function decodeScopePrice(
+  data: Buffer, 
+  chains: number[] = [0],
+  options?: { enableFallback?: boolean }
+): ScopePriceResult {
   try {
     // Use Scope SDK to decode the OraclePrices account
     const oraclePrices = OraclePrices.decode(data);
     
     if (!oraclePrices || !oraclePrices.prices || oraclePrices.prices.length === 0) {
       logger.warn("Scope decode failed: prices array missing");
-      return null;
+      return { priceData: null, triedFallbackScan: false };
     }
     
-    // Try each chain index in order until we find a valid, fresh price
-    for (const chain of chains) {
+    // Helper function to try decoding a specific chain
+    const tryChain = (chain: number): OraclePriceData | null => {
       // Skip sentinel value
       if (chain === SCOPE_CHAIN_SENTINEL_VALUE) {
         logger.debug({ chain }, "Skipping Scope chain index (sentinel value)");
-        continue;
+        return null;
       }
       
       // Validate chain index
       if (chain < 0 || chain >= 512) {
-        logger.warn({ chain }, "Invalid Scope price chain index (must be 0-511), skipping");
-        continue;
+        logger.debug({ chain }, "Invalid Scope price chain index (must be 0-511), skipping");
+        return null;
       }
       
       // Check if chain index is out of bounds for this oracle
@@ -224,13 +276,13 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
           { chain, total: oraclePrices.prices.length },
           "Scope chain index out of bounds"
         );
-        continue;
+        return null;
       }
       
       const datedPrice = oraclePrices.prices[chain];
       if (!datedPrice || !datedPrice.price) {
         logger.debug({ chain }, "Scope DatedPrice or Price is null at chain index, trying next chain");
-        continue;
+        return null;
       }
       
       // Extract price components from the Price struct
@@ -242,7 +294,7 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
       const priceBigInt = BigInt(value.toString());
       if (priceBigInt <= 0n) {
         logger.debug({ chain, value: priceBigInt.toString() }, "Scope price value invalid (<=0) at chain index");
-        continue;
+        return null;
       }
       
       // Guard against invalid exponent (but 0 is valid)
@@ -251,14 +303,14 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
       const exponent = -Number(exp.toString());
       if (!isFinite(exponent)) {
         logger.debug({ chain, exponent }, "Scope price exponent is invalid at chain index");
-        continue;
+        return null;
       }
       
       // Guard against zero/invalid timestamp
       const timestamp = BigInt(unixTimestamp?.toString() || "0");
       if (timestamp === 0n) {
         logger.debug({ chain, timestamp: timestamp.toString() }, "Scope price entry invalid/stale (no timestamp)");
-        continue;
+        return null;
       }
       
       // Staleness check - use unix timestamp
@@ -270,11 +322,8 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
           { chain, ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
           "Scope price entry invalid/stale"
         );
-        continue;
+        return null;
       }
-      
-      // Found a valid, fresh price!
-      logger.info({ chain, value: priceBigInt.toString(), exponent }, "Scope price selected");
       
       // Extract confidence if available from the feed
       const confidence = BigInt((datedPrice as any).confidence?.toString() || "0");
@@ -286,20 +335,84 @@ function decodeScopePrice(data: Buffer, chains: number[] = [0]): OraclePriceData
         slot: timestamp,
         oracleType: "scope",
       };
+    };
+    
+    // Step 1: Try configured chains in order
+    for (const chain of chains) {
+      const priceData = tryChain(chain);
+      if (isPriceUsable(priceData)) {
+        logger.info({ chain, value: priceData!.price.toString(), exponent: priceData!.exponent }, "Scope price selected from configured chains");
+        return { priceData, winningChain: chain, triedFallbackScan: false };
+      }
     }
     
-    // No valid price found in any chain
+    // Step 2: Check if fallback is enabled
+    const enableFallback = options?.enableFallback ?? true;
+    if (!enableFallback) {
+      logger.warn(
+        { 
+          chains, 
+          availablePrices: oraclePrices.prices.length 
+        },
+        "No usable Scope price found in configured chains and fallback disabled"
+      );
+      return { priceData: null, triedFallbackScan: false };
+    }
+    
+    // Step 3: Try primary fallback chains [0, 3]
+    logger.debug({ configuredChains: chains }, "Trying primary fallback chains for Scope price");
+    for (const chain of [0, 3]) {
+      // Skip if already tried in configured chains
+      if (chains.includes(chain)) continue;
+      
+      const priceData = tryChain(chain);
+      if (isPriceUsable(priceData)) {
+        logger.info(
+          { chain, value: priceData!.price.toString(), exponent: priceData!.exponent, configuredChains: chains },
+          "Scope price selected from primary fallback chain"
+        );
+        return { priceData, winningChain: chain, triedFallbackScan: true };
+      }
+    }
+    
+    // Step 4: Scan curated list of common chain candidates
+    logger.debug(
+      { configuredChains: chains, candidateCount: FALLBACK_CHAIN_CANDIDATES.length },
+      "Scanning curated fallback chain candidates for Scope price"
+    );
+    for (const chain of FALLBACK_CHAIN_CANDIDATES) {
+      // Skip if already tried in configured chains or primary fallbacks
+      if (chains.includes(chain) || chain === 0 || chain === 3) continue;
+      
+      const priceData = tryChain(chain);
+      if (isPriceUsable(priceData)) {
+        logger.info(
+          { 
+            chain, 
+            value: priceData!.price.toString(), 
+            exponent: priceData!.exponent, 
+            configuredChains: chains,
+            scannedCandidates: FALLBACK_CHAIN_CANDIDATES.length
+          },
+          "Scope price selected from curated fallback candidate scan"
+        );
+        return { priceData, winningChain: chain, triedFallbackScan: true };
+      }
+    }
+    
+    // No valid price found after exhaustive search
     logger.warn(
       { 
-        chains, 
-        availablePrices: oraclePrices.prices.length 
+        configuredChains: chains,
+        availablePrices: oraclePrices.prices.length,
+        scannedCandidates: FALLBACK_CHAIN_CANDIDATES.length
       },
-      "No usable Scope price found after trying all configured chain indices"
+      "No usable Scope price found after trying configured chains and fallback scanning"
     );
-    return null;
+    return { priceData: null, triedFallbackScan: true };
   } catch (err) {
     logger.error({ err, chains }, "Failed to decode Scope price with SDK");
-    return null;
+    return { priceData: null, triedFallbackScan: false };
   }
 }
 
@@ -497,28 +610,57 @@ export async function loadOracles(
       
       // Decode price for each mint using its specific chain configuration
       for (const mint of assignedMints) {
-        // Get chains for this mint: config first, then fallback override
+        // Build chain precedence: resolved → configured → overrides
+        const resolvedChain = resolvedScopeChainByMint.get(mint);
         const configChains = scopeMintChainMap.get(mint) || [];
-        const fallbackChains = scopeChainOverrides[pubkeyStr] || [];
+        const overrideChains = scopeChainOverrides[pubkeyStr] || [];
         
-        // Merge: config first (takes precedence), then fallback
-        const chains = Array.from(new Set([...configChains, ...fallbackChains]));
+        // Merge chains with correct precedence
+        const chainsToTry: number[] = [];
+        if (resolvedChain !== undefined) {
+          chainsToTry.push(resolvedChain);
+        }
+        for (const c of configChains) {
+          if (!chainsToTry.includes(c)) chainsToTry.push(c);
+        }
+        for (const c of overrideChains) {
+          if (!chainsToTry.includes(c)) chainsToTry.push(c);
+        }
+        
         // If empty after merge, use default [0]
-        const finalChains = chains.length > 0 ? chains : [0];
+        const finalChains = chainsToTry.length > 0 ? chainsToTry : [0];
         
-        const mintPriceData = decodeScopePrice(data, finalChains);
+        const result = decodeScopePrice(data, finalChains);
         
-        if (!mintPriceData) {
+        if (!result.priceData) {
           logger.warn(
-            { oracle: pubkeyStr, mint, chains: finalChains },
-            "Failed to decode Scope price for mint"
+            { 
+              oracle: pubkeyStr, 
+              mint, 
+              chains: finalChains,
+              triedFallbackScan: result.triedFallbackScan
+            },
+            "Failed to decode Scope price for mint after fallback search"
           );
           continue;
         }
         
+        // Cache the winning chain for this mint to avoid future fallback scans
+        if (result.winningChain !== undefined && result.triedFallbackScan) {
+          resolvedScopeChainByMint.set(mint, result.winningChain);
+          logger.info(
+            { 
+              mint, 
+              resolvedChain: result.winningChain,
+              originalChains: finalChains
+            },
+            "Cached resolved Scope chain for mint (found via fallback)"
+          );
+        }
+        
         // Apply stablecoin price clamping per mint
-        const clampedPrice = applyStablecoinClamp(mintPriceData.price, mintPriceData.exponent, mint);
-        const adjustedPriceData = { ...mintPriceData, price: clampedPrice };
+        const clampedPrice = applyStablecoinClamp(result.priceData.price, result.priceData.exponent, mint);
+        const adjustedPriceData = { ...result.priceData, price: clampedPrice };
         
         // Store price under mint
         cache.set(mint, adjustedPriceData);
@@ -534,6 +676,8 @@ export async function loadOracles(
             oracle: pubkeyStr,
             mint,
             chains: finalChains,
+            winningChain: result.winningChain,
+            usedFallback: result.triedFallbackScan,
             price: adjustedPriceData.price.toString(),
           },
           "Mapped Scope oracle price to mint with chain-aware decoding"
