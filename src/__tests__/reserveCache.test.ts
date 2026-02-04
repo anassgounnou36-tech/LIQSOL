@@ -76,6 +76,7 @@ describe("Reserve Cache Tests", () => {
             borrowFactor: 100,
             availableAmountRaw: "5000000",
             borrowedAmountSf: "1000000000000000000000000",
+            cumulativeBorrowRateBsfRaw: "1000000000000000000",
             collateralMintTotalSupply: "1000000",
             scopePriceChain: null,
           };
@@ -94,6 +95,7 @@ describe("Reserve Cache Tests", () => {
             borrowFactor: 100,
             availableAmountRaw: "10000000",
             borrowedAmountSf: "2000000000000000000000000",
+            cumulativeBorrowRateBsfRaw: "1000000000000000000",
             collateralMintTotalSupply: "1000000",
             scopePriceChain: null,
           };
@@ -194,6 +196,7 @@ describe("Reserve Cache Tests", () => {
             borrowFactor: 100,
             availableAmountRaw: "5000000",
             borrowedAmountSf: "1000000000000000000000000",
+            cumulativeBorrowRateBsfRaw: "1000000000000000000",
             collateralMintTotalSupply: "1000000",
             scopePriceChain: null,
           };
@@ -212,6 +215,7 @@ describe("Reserve Cache Tests", () => {
             borrowFactor: 100,
             availableAmountRaw: "10000000",
             borrowedAmountSf: "2000000000000000000000000",
+            cumulativeBorrowRateBsfRaw: "1000000000000000000",
             collateralMintTotalSupply: "1000000",
             scopePriceChain: null,
           };
@@ -340,6 +344,7 @@ describe("Reserve Cache Tests", () => {
           borrowFactor: 100,
           availableAmountRaw: "5000000",
           borrowedAmountSf: "1000000000000000000000000",
+          cumulativeBorrowRateBsfRaw: "1000000000000000000",
           collateralMintTotalSupply: "1000000",
           scopePriceChain: null,
         };
