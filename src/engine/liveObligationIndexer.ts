@@ -278,6 +278,14 @@ export class LiveObligationIndexer {
   }
 
   /**
+   * Helper method to increment unscored reason counter
+   */
+  private incrementUnscoredReason(reason: string): void {
+    this.stats.unscoredCount++;
+    this.stats.unscoredReasons[reason] = (this.stats.unscoredReasons[reason] || 0) + 1;
+  }
+
+  /**
    * Compute health scoring for an obligation if caches are available
    */
   private computeHealthScoring(decoded: DecodedObligation): {
@@ -290,26 +298,20 @@ export class LiveObligationIndexer {
     // Skip empty obligations (no deposits AND no borrows)
     if (decoded.deposits.length === 0 && decoded.borrows.length === 0) {
       this.stats.emptyObligations++;
-      this.stats.unscoredCount++;
-      this.stats.unscoredReasons["EMPTY_OBLIGATION"] = 
-        (this.stats.unscoredReasons["EMPTY_OBLIGATION"] || 0) + 1;
+      this.incrementUnscoredReason("EMPTY_OBLIGATION");
       return { unscoredReason: "EMPTY_OBLIGATION" };
     }
 
     // Filter by market if configured
     if (this.marketPubkey && decoded.marketPubkey !== this.marketPubkey.toString()) {
       this.stats.skippedOtherMarketsCount++;
-      this.stats.unscoredCount++;
-      this.stats.unscoredReasons["OTHER_MARKET"] = 
-        (this.stats.unscoredReasons["OTHER_MARKET"] || 0) + 1;
+      this.incrementUnscoredReason("OTHER_MARKET");
       return { unscoredReason: "OTHER_MARKET" };
     }
 
     // Only compute scoring if both caches are available
     if (!this.reserveCache || !this.oracleCache) {
-      this.stats.unscoredCount++;
-      this.stats.unscoredReasons["NO_CACHES"] = 
-        (this.stats.unscoredReasons["NO_CACHES"] || 0) + 1;
+      this.incrementUnscoredReason("NO_CACHES");
       return { unscoredReason: "NO_CACHES" };
     }
 
@@ -324,8 +326,7 @@ export class LiveObligationIndexer {
 
       if (!result.scored) {
         // Track unscored reason
-        this.stats.unscoredCount++;
-        this.stats.unscoredReasons[result.reason] = (this.stats.unscoredReasons[result.reason] || 0) + 1;
+        this.incrementUnscoredReason(result.reason);
         return { unscoredReason: result.reason };
       }
 
@@ -345,8 +346,7 @@ export class LiveObligationIndexer {
         { err, obligationPubkey: decoded.obligationPubkey },
         "Failed to compute health scoring for obligation"
       );
-      this.stats.unscoredCount++;
-      this.stats.unscoredReasons["ERROR"] = (this.stats.unscoredReasons["ERROR"] || 0) + 1;
+      this.incrementUnscoredReason("ERROR");
       return { unscoredReason: "ERROR" };
     }
   }

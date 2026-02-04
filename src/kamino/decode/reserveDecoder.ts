@@ -213,9 +213,6 @@ export function decodeReserve(
 
   // Introspection logging (first 5 reserves) - rate-limited to avoid spam
   // This helps diagnose oracle extraction issues
-  if (!extractionLogCount) {
-    extractionLogCount = 0;
-  }
   if (extractionLogCount < 5) {
     extractionLogCount++;
     const tokenInfo = decoded.config?.tokenInfo;
