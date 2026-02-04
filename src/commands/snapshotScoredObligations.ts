@@ -85,7 +85,9 @@ async function main() {
 
     // Get stats
     const stats = indexer.getStats();
-    const unscoredCount = stats.cacheSize - stats.scoredCount;
+    // Use the indexer's actual unscoredCount which tracks only true scoring failures
+    // (excludes empty obligations and other-market obligations which are filtered earlier)
+    const unscoredCount = stats.unscoredCount;
     
     logger.info(
       {
@@ -93,6 +95,7 @@ async function main() {
         scoredObligations: stats.scoredCount,
         unscoredObligations: unscoredCount,
         liquidatableObligations: stats.liquidatableCount,
+        emptyObligations: stats.emptyObligations,
         skippedOtherMarkets: stats.skippedOtherMarketsCount,
         unscoredReasons: stats.unscoredReasons,
       },
