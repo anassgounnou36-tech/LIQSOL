@@ -42,7 +42,7 @@ describe("Cache Index Integration Tests", () => {
             liquidityDecimals: 6,
             collateralDecimals: 6,
             collateralMint: "collateral-mint1",
-            collateralExchangeRateBsf: 1000000000000000000n,
+            collateralExchangeRateUi: 1.0,
           },
         ],
       ]);

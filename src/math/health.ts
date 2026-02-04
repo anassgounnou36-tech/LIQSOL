@@ -16,11 +16,6 @@ const STABLECOIN_MINTS = new Set([
 ]);
 
 /**
- * BigFractionBytes scale (18 decimals)
- */
-const BSF_SCALE = 10n ** 18n;
-
-/**
  * Gate spammy exchange rate warnings behind environment flag
  * Safely check for process.env without TypeScript errors
  */
