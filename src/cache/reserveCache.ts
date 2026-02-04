@@ -300,17 +300,27 @@ export async function loadReserves(
     reserves: Array<{ pubkey: PublicKey; decoded: DecodedReserve }> 
   }>();
   
+  // Track which reserves have been added to each mint to avoid O(n²) lookups
+  const reservesAddedToMint = new Map<string, Set<string>>();
+  
   for (const { pubkey, decoded } of decodedReserves) {
+    const pubkeyStr = pubkey.toString();
+    
     // Check if liquidity decimals are missing (-1)
     if (decoded.liquidityDecimals === -1) {
       const mintKey = decoded.liquidityMint;
       if (!mintFallbackMap.has(mintKey)) {
         mintFallbackMap.set(mintKey, { type: "liquidity", reserves: [] });
+        reservesAddedToMint.set(mintKey, new Set());
       }
-      mintFallbackMap.get(mintKey)!.reserves.push({ pubkey, decoded });
+      
+      if (!reservesAddedToMint.get(mintKey)!.has(pubkeyStr)) {
+        mintFallbackMap.get(mintKey)!.reserves.push({ pubkey, decoded });
+        reservesAddedToMint.get(mintKey)!.add(pubkeyStr);
+      }
       
       logger.debug(
-        { reserve: pubkey.toString(), mint: mintKey },
+        { reserve: pubkeyStr, mint: mintKey },
         "Liquidity mint decimals missing, queuing for SPL fallback"
       );
     }
@@ -320,17 +330,16 @@ export async function loadReserves(
       const mintKey = decoded.collateralMint;
       if (!mintFallbackMap.has(mintKey)) {
         mintFallbackMap.set(mintKey, { type: "collateral", reserves: [] });
+        reservesAddedToMint.set(mintKey, new Set());
       }
-      // Check if already added for liquidity
-      const existing = mintFallbackMap.get(mintKey)!.reserves.find(
-        r => r.pubkey.equals(pubkey)
-      );
-      if (!existing) {
+      
+      if (!reservesAddedToMint.get(mintKey)!.has(pubkeyStr)) {
         mintFallbackMap.get(mintKey)!.reserves.push({ pubkey, decoded });
+        reservesAddedToMint.get(mintKey)!.add(pubkeyStr);
       }
       
       logger.debug(
-        { reserve: pubkey.toString(), mint: mintKey },
+        { reserve: pubkeyStr, mint: mintKey },
         "Collateral mint decimals missing, queuing for SPL fallback"
       );
     }
@@ -381,24 +390,23 @@ export async function loadReserves(
         );
         
         // Apply parsed decimals to all reserves using this mint
-        if (fallbackInfo) {
-          for (const { decoded } of fallbackInfo.reserves) {
-            if (decoded.liquidityMint === mintKey && decoded.liquidityDecimals === -1) {
-              decoded.liquidityDecimals = decimals;
-              resolvedCount++;
-              logger.debug(
-                { reserve: decoded.reservePubkey, mint: mintKey, decimals },
-                "Applied liquidity decimals from SPL fallback"
-              );
-            }
-            if (decoded.collateralMint === mintKey && decoded.collateralDecimals === -1) {
-              decoded.collateralDecimals = decimals;
-              resolvedCount++;
-              logger.debug(
-                { reserve: decoded.reservePubkey, mint: mintKey, decimals },
-                "Applied collateral decimals from SPL fallback"
-              );
-            }
+        // fallbackInfo is guaranteed to exist since we got mintKey from the map
+        for (const { decoded } of fallbackInfo!.reserves) {
+          if (decoded.liquidityMint === mintKey && decoded.liquidityDecimals === -1) {
+            decoded.liquidityDecimals = decimals;
+            resolvedCount++;
+            logger.debug(
+              { reserve: decoded.reservePubkey, mint: mintKey, decimals },
+              "Applied liquidity decimals from SPL fallback"
+            );
+          }
+          if (decoded.collateralMint === mintKey && decoded.collateralDecimals === -1) {
+            decoded.collateralDecimals = decimals;
+            resolvedCount++;
+            logger.debug(
+              { reserve: decoded.reservePubkey, mint: mintKey, decimals },
+              "Applied collateral decimals from SPL fallback"
+            );
           }
         }
       }
