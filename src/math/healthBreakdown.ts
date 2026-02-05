@@ -94,28 +94,38 @@ export function explainHealth(
   }
 
   // Map breakdown to legacy format for compatibility
-  const deposits: HealthBreakdownLeg[] = (result.breakdown?.deposits ?? []).map((d) => ({
-    mint: d.collateralMint,
-    underlyingMint: d.liquidityMint,
-    amountRaw: "", // Not exposed in new format
-    decimals: 0, // Not exposed in new format
-    amountUi: d.underlyingUi,
-    priceUsd: d.priceUsd,
-    usdValue: d.usdRaw,
-    threshold: d.usdWeighted / d.usdRaw, // Reverse-calculate threshold ratio
-    weightedValue: d.usdWeighted,
-  }));
+  const deposits: HealthBreakdownLeg[] = (result.breakdown?.deposits ?? []).map((d) => {
+    // Avoid division by zero when calculating threshold ratio
+    const threshold = d.usdRaw > 0 ? d.usdWeighted / d.usdRaw : 0;
+    
+    return {
+      mint: d.collateralMint,
+      underlyingMint: d.liquidityMint,
+      amountRaw: "0", // Not exposed in new format
+      decimals: 0, // Not exposed in new format
+      amountUi: d.underlyingUi,
+      priceUsd: d.priceUsd,
+      usdValue: d.usdRaw,
+      threshold,
+      weightedValue: d.usdWeighted,
+    };
+  });
 
-  const borrows: HealthBreakdownLeg[] = (result.breakdown?.borrows ?? []).map((b) => ({
-    mint: b.liquidityMint,
-    amountRaw: "", // Not exposed in new format
-    decimals: 0, // Not exposed in new format
-    amountUi: b.borrowUi,
-    priceUsd: b.priceUsd,
-    usdValue: b.usdRaw,
-    factor: b.usdWeighted / b.usdRaw, // Reverse-calculate factor ratio
-    weightedValue: b.usdWeighted,
-  }));
+  const borrows: HealthBreakdownLeg[] = (result.breakdown?.borrows ?? []).map((b) => {
+    // Avoid division by zero when calculating factor ratio
+    const factor = b.usdRaw > 0 ? b.usdWeighted / b.usdRaw : 0;
+    
+    return {
+      mint: b.liquidityMint,
+      amountRaw: "0", // Not exposed in new format
+      decimals: 0, // Not exposed in new format
+      amountUi: b.borrowUi,
+      priceUsd: b.priceUsd,
+      usdValue: b.usdRaw,
+      factor,
+      weightedValue: b.usdWeighted,
+    };
+  });
 
   // Check if allowlist is enabled (safely access process.env)
   let allowlist = false;
