@@ -95,6 +95,7 @@ export class LiveObligationIndexer {
     unscoredReasons: {} as Record<string, number>,
     skippedAllowlistCount: 0, // Track obligations skipped due to allowlist filtering
     touchesKnownReserveCount: 0, // Track obligations that reference loaded reserves (PR7 gate)
+    skippedMixedOutOfScopeCount: 0, // Track mixed obligations (touch SOL/USDC + other reserves) skipped in PR7 gate
   };
   
   // Circuit breaker for decode failures
@@ -362,6 +363,21 @@ export class LiveObligationIndexer {
         this.stats.skippedAllowlistCount++;
         // Do not increment unscoredCount; treat as skipped for PR7 gate
         return { unscoredReason: "NOT_IN_ALLOWLIST" };
+      }
+
+      // PR7 gate: Skip mixed obligations (touch allowlisted + non-allowlisted reserves)
+      // In SOL/USDC mode, we only load allowlisted reserves. Mixed obligations cannot be
+      // correctly scored without their full reserve data; partial scoring would be misleading.
+      // Note: reserveCache is guaranteed to exist here since allowedLiquidityMints check above
+      // returns early if reserveCache is not present.
+      const hasOutOfScopeReserve =
+        (decoded.deposits ?? []).some((d) => !this.reserveCache!.byReserve.has(d.reserve)) ||
+        (decoded.borrows ?? []).some((b) => !this.reserveCache!.byReserve.has(b.reserve));
+
+      if (hasOutOfScopeReserve) {
+        this.stats.skippedMixedOutOfScopeCount++;
+        // Treat as skipped (not unscored) in PR7 gate mode
+        return { unscoredReason: "MIXED_OUT_OF_SCOPE_RESERVE" };
       }
     }
     // Fallback: Filter by allowlist mints if configured (legacy - direct mint check)
@@ -805,6 +821,7 @@ export class LiveObligationIndexer {
     unscoredReasons: Record<string, number>;
     skippedAllowlistCount: number;
     touchesKnownReserveCount: number;
+    skippedMixedOutOfScopeCount: number;
   } {
     const entries = Array.from(this.cache.values());
     const lastUpdateTimes = entries.map(e => e.lastUpdated);
@@ -832,6 +849,7 @@ export class LiveObligationIndexer {
       unscoredReasons: this.stats.unscoredReasons,
       skippedAllowlistCount: this.stats.skippedAllowlistCount,
       touchesKnownReserveCount: this.stats.touchesKnownReserveCount,
+      skippedMixedOutOfScopeCount: this.stats.skippedMixedOutOfScopeCount,
     };
   }
 

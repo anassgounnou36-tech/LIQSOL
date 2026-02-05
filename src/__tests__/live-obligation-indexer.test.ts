@@ -237,6 +237,182 @@ describe("LiveObligationIndexer", () => {
     });
   });
 
+  describe("Mixed Obligation Filtering", () => {
+    it("should skip mixed obligations that touch allowlisted and non-allowlisted reserves", () => {
+      // Create a mock reserve cache with only SOL reserve
+      const solReservePubkey = "11111111111111111111111111111112";
+      const solMint = "So11111111111111111111111111111111111111112";
+      // USDC reserve pubkey - intentionally NOT loaded in cache to test mixed obligation filtering
+      const usdcReservePubkey = "2FVLAhS2rFpPzTGxdFtGxw8M8ufQB2SX9eP39NsHLLUy";
+      
+      const mockReserve = {
+        reservePubkey: new PublicKey(solReservePubkey),
+        liquidityMint: solMint,
+        collateralMint: "cSOL111111111111111111111111111111111111",
+        availableAmount: 1000000n,
+        cumulativeBorrowRate: 1000000000000000000n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        oraclePubkeys: [new PublicKey("11111111111111111111111111111111")],
+        liquidityDecimals: 9,
+        collateralDecimals: 9,
+        scopePriceChain: null,
+        collateralExchangeRateUi: 1.0,
+      };
+
+      const reserveCache = {
+        byReserve: new Map([[solReservePubkey, mockReserve]]),
+        byMint: new Map([[solMint, mockReserve]]),
+      };
+
+      const allowedLiquidityMints = new Set([solMint]);
+
+      const indexer = new LiveObligationIndexer({
+        yellowstoneUrl: "https://test.example.com",
+        yellowstoneToken: "test-token",
+        programId: testProgramId,
+        rpcUrl: testRpcUrl,
+        reserveCache,
+        allowedLiquidityMints,
+      });
+
+      // Create a mixed obligation with one deposit in SOL reserve and one borrow in a non-loaded reserve
+      const mixedObligation = {
+        obligationPubkey: "H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo",
+        ownerPubkey: "OwnerPubkey1111111111111111111111111111",
+        marketPubkey: "MarketPubkey111111111111111111111111111",
+        lastUpdateSlot: "12345",
+        deposits: [
+          {
+            reserve: solReservePubkey, // This reserve IS loaded
+            mint: solMint,
+            depositedAmount: "1000000000",
+          },
+        ],
+        borrows: [
+          {
+            reserve: usdcReservePubkey, // This reserve is NOT loaded
+            mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            borrowedAmount: "500000000",
+          },
+        ],
+      };
+
+      // Access private method through type assertion
+      const scoring = (indexer as any).computeHealthScoring(mixedObligation);
+
+      // Verify the result
+      expect(scoring.unscoredReason).toBe("MIXED_OUT_OF_SCOPE_RESERVE");
+      
+      // Verify stats were updated correctly
+      const stats = indexer.getStats();
+      expect(stats.skippedMixedOutOfScopeCount).toBe(1);
+      expect(stats.unscoredCount).toBe(0); // Should NOT increment unscoredCount
+    });
+
+    it("should NOT skip obligations with all reserves loaded", () => {
+      // Create a mock reserve cache with both SOL and USDC reserves
+      const solReservePubkey = "11111111111111111111111111111112";
+      const solMint = "So11111111111111111111111111111111111111112";
+      // USDC reserve pubkey - will be loaded in cache to test complete (non-mixed) obligation
+      const usdcReservePubkey = "2FVLAhS2rFpPzTGxdFtGxw8M8ufQB2SX9eP39NsHLLUy";
+      const usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+      
+      const solReserve = {
+        reservePubkey: new PublicKey(solReservePubkey),
+        liquidityMint: solMint,
+        collateralMint: "cSOL111111111111111111111111111111111111",
+        availableAmount: 1000000n,
+        cumulativeBorrowRate: 1000000000000000000n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        oraclePubkeys: [new PublicKey("11111111111111111111111111111111")],
+        liquidityDecimals: 9,
+        collateralDecimals: 9,
+        scopePriceChain: null,
+        collateralExchangeRateUi: 1.0,
+      };
+
+      const usdcReserve = {
+        reservePubkey: new PublicKey(usdcReservePubkey),
+        liquidityMint: usdcMint,
+        collateralMint: "cUSDC11111111111111111111111111111111111",
+        availableAmount: 1000000n,
+        cumulativeBorrowRate: 1000000000000000000n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        oraclePubkeys: [new PublicKey("2FVLAhS2rFpPzTGxdFtGxw8M8ufQB2SX9eP39NsHLLUy")],
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        scopePriceChain: null,
+        collateralExchangeRateUi: 1.0,
+      };
+
+      const reserveCache = {
+        byReserve: new Map([
+          [solReservePubkey, solReserve],
+          [usdcReservePubkey, usdcReserve],
+        ]),
+        byMint: new Map([
+          [solMint, solReserve],
+          [usdcMint, usdcReserve],
+        ]),
+      };
+
+      const allowedLiquidityMints = new Set([solMint, usdcMint]);
+
+      const indexer = new LiveObligationIndexer({
+        yellowstoneUrl: "https://test.example.com",
+        yellowstoneToken: "test-token",
+        programId: testProgramId,
+        rpcUrl: testRpcUrl,
+        reserveCache,
+        allowedLiquidityMints,
+      });
+
+      // Create an obligation with both reserves loaded
+      const completeObligation = {
+        obligationPubkey: "H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo",
+        ownerPubkey: "OwnerPubkey1111111111111111111111111111",
+        marketPubkey: "MarketPubkey111111111111111111111111111",
+        lastUpdateSlot: "12345",
+        deposits: [
+          {
+            reserve: solReservePubkey, // This reserve IS loaded
+            mint: solMint,
+            depositedAmount: "1000000000",
+          },
+        ],
+        borrows: [
+          {
+            reserve: usdcReservePubkey, // This reserve IS loaded
+            mint: usdcMint,
+            borrowedAmount: "500000000",
+          },
+        ],
+      };
+
+      // Access private method through type assertion
+      const scoring = (indexer as any).computeHealthScoring(completeObligation);
+
+      // Verify the result - should not be skipped for mixed, but may fail for other reasons (no oracle cache)
+      expect(scoring.unscoredReason).not.toBe("MIXED_OUT_OF_SCOPE_RESERVE");
+      
+      // Verify stats were NOT incremented
+      const stats = indexer.getStats();
+      expect(stats.skippedMixedOutOfScopeCount).toBe(0);
+    });
+  });
+
   describe("Snapshot Reload", () => {
     it("should allow reloading snapshot", () => {
       const testPubkeys = ["H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo"];

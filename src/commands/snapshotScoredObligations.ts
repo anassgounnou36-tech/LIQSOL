@@ -131,6 +131,7 @@ async function main() {
         emptyObligations: stats.emptyObligations,
         skippedOtherMarkets: stats.skippedOtherMarketsCount,
         skippedAllowlist: stats.skippedAllowlistCount,
+        skippedMixedOutOfScope: stats.skippedMixedOutOfScopeCount,
         touchesKnownReserveCount: stats.touchesKnownReserveCount,
         unscoredReasons: stats.unscoredReasons,
       },
@@ -138,11 +139,17 @@ async function main() {
     );
     
     // Print unscored summary to console for visibility
-    if (unscoredCount > 0 || stats.skippedAllowlistCount > 0) {
+    if (unscoredCount > 0 || stats.skippedAllowlistCount > 0 || stats.skippedMixedOutOfScopeCount > 0) {
       console.log("\n=== SCORING SUMMARY ===\n");
       
       if (stats.skippedAllowlistCount > 0) {
         console.log(`Allowlist filtering enabled: ${stats.skippedAllowlistCount} obligations skipped (not touching allowlisted mints)`);
+      }
+      
+      if (stats.skippedMixedOutOfScopeCount > 0) {
+        console.log(
+          `Skipped mixed obligations (touch SOL/USDC + other reserves): ${stats.skippedMixedOutOfScopeCount}`
+        );
       }
       
       if (unscoredCount > 0) {
