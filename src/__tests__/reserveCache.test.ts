@@ -4,6 +4,7 @@ import { Buffer } from "buffer";
 import { loadReserves } from "../cache/reserveCache.js";
 import * as decoder from "../kamino/decoder.js";
 import * as discriminator from "../kamino/decode/discriminator.js";
+import { SOL_MINT, USDC_MINT, BTC_MINT } from "../constants/mints.js";
 
 // Mock the dependencies
 vi.mock("../observability/logger.js", () => ({
@@ -632,10 +633,6 @@ describe("Reserve Cache Tests", () => {
       const reserve2Pubkey = new PublicKey("FRYBbRFXJ2fKJZ6q5jCQvK5c7cRZNP1jVcSPP6NEupXo");
       const reserve3Pubkey = new PublicKey("5sXbXn4dFHqCxLKj5ZPyEXV2C8VdBLqhVJjqDy2X4DnD");
       
-      const SOL_MINT = "So11111111111111111111111111111111111111112";
-      const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-      const OTHER_MINT = "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E"; // BTC mint
-      
       mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
         { pubkey: reserve1Pubkey, account: {} },
         { pubkey: reserve2Pubkey, account: {} },
@@ -662,7 +659,7 @@ describe("Reserve Cache Tests", () => {
           mint = USDC_MINT;
           collateral = "collateral_usdc";
         } else {
-          mint = OTHER_MINT;
+          mint = BTC_MINT;
           collateral = "collateral_btc";
         }
         
@@ -697,7 +694,7 @@ describe("Reserve Cache Tests", () => {
       expect(cache.size).toBe(4);
       expect(cache.has(SOL_MINT)).toBe(true);
       expect(cache.has(USDC_MINT)).toBe(true);
-      expect(cache.has(OTHER_MINT)).toBe(false); // BTC should be filtered out
+      expect(cache.has(BTC_MINT)).toBe(false); // BTC should be filtered out
       
       // Verify setReserveMintCache was only called for SOL and USDC
       expect(decoder.setReserveMintCache).toHaveBeenCalledTimes(2);

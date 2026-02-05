@@ -5,6 +5,7 @@ import { logger } from "../observability/logger.js";
 import { loadReserves } from "../cache/reserveCache.js";
 import { loadOracles } from "../cache/oracleCache.js";
 import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
+import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
 
 /**
  * CLI tool for scoring obligations from snapshot with health ratios and liquidation eligibility
@@ -23,10 +24,6 @@ import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
  * Loads reserves and oracles, then computes health scores for obligations from snapshot,
  * and prints top-N riskiest accounts sorted by health ratio.
  */
-
-// Well-known mint addresses for convenience
-const SOL_MINT = "So11111111111111111111111111111111111111112"; // Native SOL (wrapped SOL)
-const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC
 
 async function main() {
   logger.info("Starting scored obligations snapshot...");
@@ -64,14 +61,13 @@ async function main() {
 
     // Parse allowlist mints from environment if configured
     // Default to SOL+USDC for PR7 gate behavior
-    const allowlistEnv = (globalThis as any).process?.env?.LIQSOL_LIQ_MINT_ALLOWLIST;
     let allowlistMints: string[] = [SOL_MINT, USDC_MINT];
 
-    if (allowlistEnv !== undefined) {
-      if (allowlistEnv.length > 0) {
-        allowlistMints = allowlistEnv
+    if (env.LIQSOL_LIQ_MINT_ALLOWLIST !== undefined) {
+      if (env.LIQSOL_LIQ_MINT_ALLOWLIST.length > 0) {
+        allowlistMints = env.LIQSOL_LIQ_MINT_ALLOWLIST
           .split(",")
-          .map((m: string) => m.trim())
+          .map((m) => m.trim())
           .filter(Boolean);
       } else {
         // Empty string disables allowlist
