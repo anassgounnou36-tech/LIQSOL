@@ -242,7 +242,7 @@ describe("LiveObligationIndexer", () => {
       // Create a mock reserve cache with only SOL reserve
       const solReservePubkey = "11111111111111111111111111111112";
       const solMint = "So11111111111111111111111111111111111111112";
-      const usdcReservePubkey = "22222222222222222222222222222222";
+      const usdcReservePubkey = "2FVLAhS2rFpPzTGxdFtGxw8M8ufQB2SX9eP39NsHLLUy"; // Valid base58 pubkey
       
       const mockReserve = {
         reservePubkey: new PublicKey(solReservePubkey),
@@ -316,7 +316,7 @@ describe("LiveObligationIndexer", () => {
       // Create a mock reserve cache with both SOL and USDC reserves
       const solReservePubkey = "11111111111111111111111111111112";
       const solMint = "So11111111111111111111111111111111111111112";
-      const usdcReservePubkey = "22222222222222222222222222222222";
+      const usdcReservePubkey = "2FVLAhS2rFpPzTGxdFtGxw8M8ufQB2SX9eP39NsHLLUy"; // Valid base58 pubkey
       const usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       
       const solReserve = {
@@ -348,7 +348,7 @@ describe("LiveObligationIndexer", () => {
         liquidationThreshold: 80,
         liquidationBonus: 500,
         borrowFactor: 100,
-        oraclePubkeys: [new PublicKey("22222222222222222222222222222222")],
+        oraclePubkeys: [new PublicKey("2FVLAhS2rFpPzTGxdFtGxw8M8ufQB2SX9eP39NsHLLUy")],
         liquidityDecimals: 6,
         collateralDecimals: 6,
         scopePriceChain: null,
