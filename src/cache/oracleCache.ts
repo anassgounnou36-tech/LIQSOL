@@ -398,7 +398,9 @@ function decodeScopePrice(
     }
     
     // Step 4: Check if curated chain scanning is enabled
-    if (!ENABLE_SCOPE_SCAN) {
+    // Check dynamically to support test environment flag changes
+    const enableScopeScan = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN === "1";
+    if (!enableScopeScan) {
       logger.warn(
         { 
           chains, 
