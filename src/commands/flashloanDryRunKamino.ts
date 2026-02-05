@@ -5,6 +5,7 @@ import { loadEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { buildKaminoFlashloanIxs, type FlashloanMint } from "../flashloan/kaminoFlashloan.js";
 import { buildComputeBudgetIxs } from "../execution/computeBudget.js";
+import { MEMO_PROGRAM_ID } from "../constants/programs.js";
 
 function loadKeypair(filePath: string): Keypair {
   const raw = fs.readFileSync(filePath, "utf8");
@@ -16,12 +17,11 @@ function loadKeypair(filePath: string): Keypair {
 function createPlaceholderInstruction(signer: PublicKey): TransactionInstruction {
   // Create a simple memo instruction as placeholder
   // This simulates where liquidation + swap instructions would go
-  const programId = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
   const message = "PR9 flashloan placeholder";
   
   return new TransactionInstruction({
     keys: [{ pubkey: signer, isSigner: true, isWritable: false }],
-    programId,
+    programId: MEMO_PROGRAM_ID,
     data: Buffer.from(message, "utf8"),
   });
 }

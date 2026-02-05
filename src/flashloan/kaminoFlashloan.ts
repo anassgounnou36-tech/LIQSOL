@@ -4,6 +4,11 @@ import { getAssociatedTokenAddress } from "@kamino-finance/klend-sdk";
 import { getFlashLoanInstructions } from "@kamino-finance/klend-sdk";
 import { Decimal } from "decimal.js";
 
+// @solana/kit account role constants for instruction conversion
+const ACCOUNT_ROLE_WRITABLE = 1;
+const ACCOUNT_ROLE_SIGNER = 2;
+const ACCOUNT_ROLE_WRITABLE_SIGNER = 3;
+
 export type FlashloanMint = "USDC" | "SOL";
 
 export interface BuildKaminoFlashloanParams {
@@ -22,6 +27,18 @@ export interface KaminoFlashloanIxs {
   destinationAta: PublicKey;
   flashBorrowIx: TransactionInstruction;
   flashRepayIx: TransactionInstruction;
+}
+
+/**
+ * Convert SDK instruction account to web3.js AccountMeta
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function convertSdkAccount(a: any) {
+  return {
+    pubkey: new PublicKey(a.address),
+    isSigner: a.role === ACCOUNT_ROLE_SIGNER || a.role === ACCOUNT_ROLE_WRITABLE_SIGNER,
+    isWritable: a.role === ACCOUNT_ROLE_WRITABLE || a.role === ACCOUNT_ROLE_WRITABLE_SIGNER,
+  };
 }
 
 /**
@@ -103,24 +120,14 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   });
 
   // Convert SDK instructions to web3.js TransactionInstruction
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const borrowIx = new TransactionInstruction({
-    keys: (flashBorrowIx.accounts || []).map((a: any) => ({
-      pubkey: new PublicKey(a.address),
-      isSigner: a.role === 2, // 2 = signer role in @solana/kit
-      isWritable: a.role === 1 || a.role === 3, // 1 = writable, 3 = writable signer
-    })),
+    keys: (flashBorrowIx.accounts || []).map(convertSdkAccount),
     programId: new PublicKey(flashBorrowIx.programAddress),
     data: Buffer.from(flashBorrowIx.data || []),
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const repayIx = new TransactionInstruction({
-    keys: (flashRepayIx.accounts || []).map((a: any) => ({
-      pubkey: new PublicKey(a.address),
-      isSigner: a.role === 2,
-      isWritable: a.role === 1 || a.role === 3,
-    })),
+    keys: (flashRepayIx.accounts || []).map(convertSdkAccount),
     programId: new PublicKey(flashRepayIx.programAddress),
     data: Buffer.from(flashRepayIx.data || []),
   });

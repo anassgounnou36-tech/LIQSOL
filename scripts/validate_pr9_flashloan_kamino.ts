@@ -10,9 +10,11 @@
 
 import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import fs from "node:fs";
+import { Buffer } from "node:buffer";
 import { loadEnv } from "../src/config/env.js";
 import { buildKaminoFlashloanIxs, type FlashloanMint } from "../src/flashloan/kaminoFlashloan.js";
 import { buildComputeBudgetIxs } from "../src/execution/computeBudget.js";
+import { MEMO_PROGRAM_ID } from "../src/constants/programs.js";
 
 function loadKeypair(filePath: string): Keypair {
   const raw = fs.readFileSync(filePath, "utf8");
@@ -22,12 +24,11 @@ function loadKeypair(filePath: string): Keypair {
 }
 
 function createPlaceholderInstruction(signer: PublicKey): TransactionInstruction {
-  const programId = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
   const message = "PR9 flashloan placeholder";
   
   return new TransactionInstruction({
     keys: [{ pubkey: signer, isSigner: true, isWritable: false }],
-    programId,
+    programId: MEMO_PROGRAM_ID,
     data: Buffer.from(message, "utf8"),
   });
 }
