@@ -323,7 +323,7 @@ export class LiveObligationIndexer {
       }
 
       // track for visibility
-      this.stats.touchesKnownReserveCount = (this.stats.touchesKnownReserveCount ?? 0) + 1;
+      this.stats.touchesKnownReserveCount++;
     }
 
     // Skip empty obligations (no deposits AND no borrows)
