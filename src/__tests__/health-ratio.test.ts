@@ -361,6 +361,71 @@ describe("Health Ratio and Liquidation", () => {
       expect(scored.borrowValue).toBeCloseTo(100.01, 1);
       expect(scored.healthRatio).toBeCloseTo(0.30, 1);
     });
+
+    it("should correctly convert deposits using inverted exchange rate formula", () => {
+      // Test the corrected deposit conversion: depositUi = depositedNotesUi / exchangeRateUi
+      // Scenario: Exchange rate > 1 (collateral tokens worth more than liquidity tokens due to accrued interest)
+      const reserves: ReserveCache = new Map([
+        [
+          "USDC",
+          {
+            reservePubkey: PublicKey.unique(),
+            availableAmount: 1000000n,
+            loanToValue: 90,
+            liquidationThreshold: 95,
+            liquidationBonus: 500,
+            borrowFactor: 100,
+            oraclePubkeys: [PublicKey.unique()],
+            liquidityDecimals: 6,
+            collateralDecimals: 6,
+            cumulativeBorrowRate: 10000000000n,
+            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            collateralMint: "mock-collateral-mint",
+            // Exchange rate = 1.1 means 1.1 collateral tokens = 1 liquidity token
+            // So 100 collateral tokens = 100 / 1.1 = ~90.91 liquidity tokens
+            collateralExchangeRateUi: 1.1,
+            scopePriceChain: null,
+          },
+        ],
+      ]);
+
+      const prices: OracleCache = new Map([
+        [
+          "USDC",
+          {
+            price: 100000000n, // $1 with exponent -8
+            confidence: 10000n,
+            slot: 1000000n,
+            exponent: -8,
+            oracleType: "pyth",
+          },
+        ],
+      ]);
+
+      const deposits: ObligationDeposit[] = [
+        {
+          reserve: "reserve1",
+          mint: "USDC",
+          depositedAmount: "100000000", // 100 collateral tokens (6 decimals)
+        },
+      ];
+
+      const borrows: ObligationBorrow[] = [];
+
+      const result = computeHealthRatio({
+        deposits,
+        borrows,
+        reserves,
+        prices,
+      });
+
+      // With corrected formula: depositUi = 100 / 1.1 = 90.909... liquidity tokens
+      // collateralValue = 90.909 * $1 * 0.95 (liquidation threshold) = $86.36
+      const scored = expectScored(result);
+      expect(scored.collateralValue).toBeCloseTo(86.36, 1);
+      expect(scored.borrowValue).toBe(0);
+      expect(scored.healthRatio).toBe(2.0); // No debt = max health
+    });
   });
 
   describe("isLiquidatable", () => {
