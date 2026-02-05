@@ -507,4 +507,119 @@ describe("Reserve Cache Tests", () => {
       expect(cache.size).toBe(0);
     });
   });
+
+  describe("Exchange Rate Calculation", () => {
+    it("should compute exchange rate correctly: collateralSupply / totalLiquidity", async () => {
+      // Setup: Mock a reserve with known values to test exchange rate calculation
+      const reservePubkey = new PublicKey(
+        "d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q"
+      );
+      
+      mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
+        { pubkey: reservePubkey, account: {} },
+      ]);
+
+      const mockAccountData = Buffer.alloc(100);
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: mockAccountData },
+      ]);
+
+      vi.spyOn(discriminator, "anchorDiscriminator").mockReturnValue(
+        Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
+      );
+
+      // Test scenario:
+      // availableAmount = 1000 tokens (raw: 1000e6 = 1000000000)
+      // borrowedAmountSf = 500 tokens (scaled: 500e6 * 1e18 = 500000000000000000000000000)
+      // totalLiquidity = 1000 + 500 = 1500 tokens
+      // collateralSupply = 1500 tokens (raw: 1500e6 = 1500000000)
+      // exchangeRate = 1500 / 1500 = 1.0
+      vi.spyOn(decoder, "decodeReserve").mockReturnValue({
+        reservePubkey: reservePubkey.toString(),
+        marketPubkey: marketPubkey.toString(),
+        liquidityMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        collateralMint: "collateral1",
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [],
+        loanToValueRatio: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        availableAmountRaw: "1000000000", // 1000 USDC
+        borrowedAmountSfRaw: "500000000000000000000000000", // 500 USDC * 1e18
+        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        collateralMintTotalSupplyRaw: "1500000000", // 1500 collateral tokens
+        scopePriceChain: null,
+      });
+
+      vi.spyOn(decoder, "setReserveMintCache");
+
+      const cache = await loadReserves(mockConnection, marketPubkey);
+
+      // Verify cache entry
+      const entry = cache.get("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+      expect(entry).toBeDefined();
+      
+      // With the corrected formula: exchangeRate = collateralSupply / totalLiquidity
+      // totalLiquidity = 1000 + (500e18 / 1e18) = 1000 + 500 = 1500
+      // collateralSupply = 1500
+      // exchangeRate = 1500 / 1500 = 1.0
+      expect(entry!.collateralExchangeRateUi).toBeCloseTo(1.0, 6);
+    });
+
+    it("should compute exchange rate > 1 when collateral exceeds liquidity", async () => {
+      // Test scenario with more collateral than liquidity (typical for accrued interest)
+      const reservePubkey = new PublicKey(
+        "d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q"
+      );
+      
+      mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
+        { pubkey: reservePubkey, account: {} },
+      ]);
+
+      const mockAccountData = Buffer.alloc(100);
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: mockAccountData },
+      ]);
+
+      vi.spyOn(discriminator, "anchorDiscriminator").mockReturnValue(
+        Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
+      );
+
+      // availableAmount = 1000 tokens
+      // borrowedAmountSf = 100 tokens (scaled by 1e18)
+      // totalLiquidity = 1100 tokens
+      // collateralSupply = 1200 tokens (more than liquidity due to accrued interest)
+      // exchangeRate = 1200 / 1100 = ~1.091
+      vi.spyOn(decoder, "decodeReserve").mockReturnValue({
+        reservePubkey: reservePubkey.toString(),
+        marketPubkey: marketPubkey.toString(),
+        liquidityMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        collateralMint: "collateral1",
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [],
+        loanToValueRatio: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        availableAmountRaw: "1000000000", // 1000 tokens
+        borrowedAmountSfRaw: "100000000000000000000000000", // 100 tokens * 1e18
+        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        collateralMintTotalSupplyRaw: "1200000000", // 1200 collateral tokens
+        scopePriceChain: null,
+      });
+
+      vi.spyOn(decoder, "setReserveMintCache");
+
+      const cache = await loadReserves(mockConnection, marketPubkey);
+
+      const entry = cache.get("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+      expect(entry).toBeDefined();
+      
+      // exchangeRate = 1200 / 1100 = 1.0909...
+      expect(entry!.collateralExchangeRateUi).toBeCloseTo(1.0909, 4);
+    });
+  });
 });

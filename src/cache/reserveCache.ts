@@ -73,15 +73,23 @@ export const scopeMintChainMap = new Map<string, number[]>();
 
 /**
  * Computes the collateral exchange rate in UI units from reserve state.
- * Exchange rate = (available + borrowed) / supply, normalized by decimals.
  * 
- * Formula:
- * exchangeRateUi = ((availableAmountRaw + borrowTokensRaw) * 10^collateralDecimals) / (supply * 10^liquidityDecimals)
+ * KLend exchange rate formula (from Certora audit):
+ * exchangeRateUi = collateralSupplyUi / totalLiquidityUi
  * 
- * Where borrowTokensRaw = borrowedAmountSf / cumulativeBorrowRateBsf (both are bigints)
+ * This is the inverse of the previous implementation. The rate represents how many
+ * collateral tokens are needed to back one unit of underlying liquidity.
+ * 
+ * To convert deposits (collateral tokens) to underlying liquidity:
+ * underlyingLiquidityUi = (depositedNotesUi * totalLiquidityUi) / collateralSupplyUi
+ * 
+ * Formula details:
+ * - borrowedAmountSf is already scaled by 1e18 (WAD), so divide by 1e18 to get raw tokens
+ * - totalLiquidityRaw = availableAmountRaw + (borrowedAmountSfRaw / 1e18)
+ * - Use bigint mul-div to avoid precision collapse
  * 
  * @param decoded - Decoded reserve with raw state fields
- * @returns Exchange rate in UI units, or 0 if supply is zero or invalid
+ * @returns Exchange rate in UI units, or 0 if invalid
  */
 function computeExchangeRateUi(decoded: DecodedReserve): number {
   // Guard: check for missing decimals (sentinel value -1)
@@ -94,9 +102,8 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
   }
   
   try {
-    const avail = BigInt(decoded.availableAmountRaw);
-    const borrowSf = BigInt(decoded.borrowedAmountSfRaw);
-    const cumRate = BigInt(decoded.cumulativeBorrowRateBsfRaw);
+    const availRaw = BigInt(decoded.availableAmountRaw);
+    const borrowSfRaw = BigInt(decoded.borrowedAmountSfRaw);
     const supply = BigInt(decoded.collateralMintTotalSupplyRaw);
     
     // Guard: if supply is zero or negative, exchange rate is undefined
@@ -104,35 +111,41 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
       return 0;
     }
     
-    // Guard: if cumulative rate is zero or negative, can't compute borrowed tokens
-    if (cumRate <= 0n) {
+    // Convert borrowedAmountSf to raw tokens
+    // borrowedAmountSf is already scaled by 1e18, so divide by 1e18
+    const borrowRaw = borrowSfRaw / (10n ** 18n);
+    
+    // Calculate total liquidity in raw units
+    const totalLiquidityRaw = availRaw + borrowRaw;
+    
+    // Guard: negative liquidity is invalid
+    if (totalLiquidityRaw < 0n) {
       logger.warn(
         { 
           reserve: decoded.reservePubkey,
-          cumulativeBorrowRateBsfRaw: decoded.cumulativeBorrowRateBsfRaw
+          availableAmountRaw: decoded.availableAmountRaw,
+          borrowedAmountSfRaw: decoded.borrowedAmountSfRaw,
+          totalLiquidityRaw: totalLiquidityRaw.toString(),
         },
-        "Invalid cumulative borrow rate, defaulting exchange rate to 0"
+        "Negative total liquidity, defaulting exchange rate to 0"
       );
       return 0;
     }
     
-    // Convert borrowed SF to raw tokens: borrowTokensRaw = borrowSf / cumRate
-    const borrowTokensRaw = borrowSf / cumRate;
+    // Convert to UI units
+    const liquidityScale = 10n ** BigInt(decoded.liquidityDecimals);
+    const collateralScale = 10n ** BigInt(decoded.collateralDecimals);
     
-    // Calculate numerator: (available + borrowed) * 10^collateralDecimals
-    const totalLiquidity = avail + borrowTokensRaw;
-    const num = totalLiquidity * (10n ** BigInt(decoded.collateralDecimals));
+    const totalLiquidityUi = divBigintToNumber(totalLiquidityRaw, liquidityScale, decoded.liquidityDecimals);
+    const collateralSupplyUi = divBigintToNumber(supply, collateralScale, decoded.collateralDecimals);
     
-    // Calculate denominator: supply * 10^liquidityDecimals
-    const den = supply * (10n ** BigInt(decoded.liquidityDecimals));
-    
-    // Guard: division by zero or negative numerator
-    if (den === 0n || num <= 0n) {
+    // Guard: if liquidity is zero, rate is undefined
+    if (totalLiquidityUi <= 0) {
       return 0;
     }
     
-    // Perform bigint-safe division using helper with precision 18
-    const rate = divBigintToNumber(num, den, 18);
+    // Compute exchange rate: collateralSupplyUi / totalLiquidityUi
+    const rate = collateralSupplyUi / totalLiquidityUi;
     
     // Validate result is finite and positive
     return Number.isFinite(rate) && rate > 0 ? rate : 0;
@@ -145,7 +158,6 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
         collateralDecimals: decoded.collateralDecimals,
         availableAmountRaw: decoded.availableAmountRaw,
         borrowedAmountSfRaw: decoded.borrowedAmountSfRaw,
-        cumulativeBorrowRateBsfRaw: decoded.cumulativeBorrowRateBsfRaw,
         collateralMintTotalSupplyRaw: decoded.collateralMintTotalSupplyRaw
       },
       "Failed to compute exchange rate, defaulting to 0"

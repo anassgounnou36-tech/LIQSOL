@@ -29,7 +29,7 @@ export interface DecodedReserve {
   availableAmountRaw: string;
   /** Borrowed amount in SF (scaled fraction, 1e18-scaled) */
   borrowedAmountSfRaw: string;
-  /** Cumulative borrow rate BSF (BigFractionBytes as bigint string) */
+  /** Cumulative borrow rate BSF (BigFractionBytes as bigint string) - used for individual borrow conversion only */
   cumulativeBorrowRateBsfRaw: string;
   /** Total supply of collateral mint tokens */
   collateralMintTotalSupplyRaw: string;

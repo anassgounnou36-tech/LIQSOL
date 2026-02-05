@@ -79,16 +79,15 @@ function exchangeRateUiFromReserve(reserve: ReserveCacheEntry): number | null {
 
 /**
  * Convert borrowedAmountSf (scaled fraction) to UI units using bigint-safe math
- * and the cumulative borrow rate from the reserve
  * 
- * borrowedAmountSf and cumulativeBorrowRateBsf are both 1e18-scaled (BigFractionBytes)
- * borrowTokens = borrowedAmountSf / cumulativeBorrowRateBsf (both bigints)
+ * borrowedAmountSf is already scaled by 1e18 (WAD). To convert to tokens:
+ * 1. Divide by 1e18 to get raw token amount
+ * 2. Normalize by liquidity decimals to get UI units
  * 
- * Returns 0 for invalid/missing values or if cumulative rate is invalid
+ * Returns 0 for invalid/missing values
  */
 function convertBorrowSfToUi(
   borrowedAmountSf: string | undefined | null,
-  cumulativeBorrowRateBsf: bigint,
   liquidityDecimals: number
 ): number {
   if (!borrowedAmountSf) return 0;
@@ -97,11 +96,8 @@ function convertBorrowSfToUi(
     const borrowedSf = BigInt(borrowedAmountSf);
     if (borrowedSf < 0n) return 0;
     
-    // Guard: if cumulative rate is zero or negative, can't compute
-    if (cumulativeBorrowRateBsf <= 0n) return 0;
-    
-    // Convert SF to raw tokens: borrowedTokensRaw = borrowedSf / cumRate
-    const borrowedTokensRaw = borrowedSf / cumulativeBorrowRateBsf;
+    // Convert SF to raw tokens: divide by 1e18
+    const borrowedTokensRaw = borrowedSf / (10n ** 18n);
     
     // Normalize by liquidity decimals to get UI units
     const liquidityScale = 10n ** BigInt(liquidityDecimals);
@@ -282,7 +278,10 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     );
     
     // Convert to underlying liquidity units using exchange rate
-    const depositUi = depositedNotesUi * exchangeRateUi;
+    // With the corrected exchange rate formula (collateralSupply / totalLiquidity),
+    // we divide depositedNotesUi by exchangeRateUi to get underlying liquidity
+    // This is equivalent to: (depositedNotesUi * totalLiquidityUi) / collateralSupplyUi
+    const depositUi = depositedNotesUi / exchangeRateUi;
     
     // Apply liquidation threshold weight
     const weight = reserve.liquidationThreshold / 100;
@@ -327,15 +326,9 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Check for valid cumulative borrow rate
-    if (!reserve.cumulativeBorrowRateBsfRaw || reserve.cumulativeBorrowRateBsfRaw <= 0n) {
-      return { scored: false, reason: "MISSING_DEBT_RATE" };
-    }
-    
-    // Convert SF to UI units using safe helper with cumulative borrow rate
+    // Convert SF to UI units using safe helper
     const borrowUi = convertBorrowSfToUi(
       borrow.borrowedAmount,
-      reserve.cumulativeBorrowRateBsfRaw,
       reserve.liquidityDecimals
     );
     

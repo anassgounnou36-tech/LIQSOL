@@ -102,7 +102,20 @@ async function main() {
       "Scoring complete"
     );
     
+    // Print unscored summary to console for visibility
     if (unscoredCount > 0) {
+      console.log("\n=== UNSCORED OBLIGATIONS SUMMARY ===\n");
+      console.log(`Total unscored: ${unscoredCount} (${((unscoredCount / stats.cacheSize) * 100).toFixed(1)}%)`);
+      console.log("\nBreakdown by reason:");
+      
+      for (const [reason, count] of Object.entries(stats.unscoredReasons)) {
+        const percentage = ((count / unscoredCount) * 100).toFixed(1);
+        console.log(`  ${reason.padEnd(25)} : ${count.toString().padStart(5)} (${percentage}%)`);
+      }
+      
+      console.log("\nNote: Unscored obligations are excluded from the Top Risky list below.");
+      console.log("Values would show as N/A if they were included.\n");
+      
       logger.warn(
         { 
           unscoredCount, 
@@ -140,8 +153,15 @@ async function main() {
       const rank = index + 1;
       const healthRatioStr = obligation.healthRatio.toFixed(4).padStart(12);
       const liquidatableStr = (obligation.liquidationEligible ? "YES" : "NO").padEnd(12);
-      const borrowValueStr = `$${obligation.borrowValue.toFixed(2)}`.padStart(12);
-      const collateralValueStr = `$${obligation.collateralValue.toFixed(2)}`.padStart(16);
+      
+      // Display N/A for zero values which indicate missing data
+      const borrowValueStr = obligation.borrowValue > 0 
+        ? `$${obligation.borrowValue.toFixed(2)}`.padStart(12)
+        : "N/A".padStart(12);
+      const collateralValueStr = obligation.collateralValue > 0
+        ? `$${obligation.collateralValue.toFixed(2)}`.padStart(16)
+        : "N/A".padStart(16);
+        
       const depositsStr = obligation.depositsCount.toString().padStart(8);
       const borrowsStr = obligation.borrowsCount.toString().padStart(7);
       const obligationStr = obligation.obligationPubkey;
