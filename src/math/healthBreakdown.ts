@@ -180,7 +180,17 @@ export function explainHealth(
   }
 
   // Calculate health ratio
-  const healthRatio = borrowUsdAdj > 0 ? collateralUsdAdj / borrowUsdAdj : 2.0;
+  let healthRatio = borrowUsdAdj > 0 ? collateralUsdAdj / borrowUsdAdj : 2.0;
+  
+  // Clamp to [0, 2] to match PR7 health computation behavior
+  // Values outside this range are logged for visibility
+  if (healthRatio > 2.0) {
+    approximations.push(`Health ratio ${healthRatio.toFixed(4)} clamped to 2.0 (well-collateralized)`);
+    healthRatio = 2.0;
+  } else if (healthRatio < 0) {
+    approximations.push(`Health ratio ${healthRatio.toFixed(4)} clamped to 0.0 (invalid)`);
+    healthRatio = 0.0;
+  }
 
   // Check if allowlist is enabled (safely access process.env)
   let allowlist = false;
@@ -198,7 +208,7 @@ export function explainHealth(
       collateralUsdAdj,
       borrowUsdRaw,
       borrowUsdAdj,
-      healthRatio: Math.max(0, Math.min(2, healthRatio)), // Clamp to [0, 2]
+      healthRatio, // Already clamped above with approximation note if needed
     },
     flags: {
       allowlist,

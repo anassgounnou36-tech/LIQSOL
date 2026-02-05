@@ -50,7 +50,7 @@ export interface LiveObligationIndexerConfig {
   allowedLiquidityMints?: Set<string>; // Optional: Set of liquidity mints to filter obligations by reserve lookup
 }
 
-interface ObligationEntry {
+export interface ObligationEntry {
   decoded: DecodedObligation;
   lastUpdated: number;
   slot: bigint;
@@ -902,5 +902,16 @@ export class LiveObligationIndexer {
     }
 
     return scored;
+  }
+
+  /**
+   * Get a specific obligation entry from cache by pubkey
+   * Used for validation and detailed breakdowns
+   * 
+   * @param obligationPubkey The public key of the obligation
+   * @returns The obligation entry or undefined if not found
+   */
+  public getObligationEntry(obligationPubkey: string): ObligationEntry | undefined {
+    return this.cache.get(obligationPubkey);
   }
 }

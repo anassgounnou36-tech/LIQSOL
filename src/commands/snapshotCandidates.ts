@@ -208,9 +208,8 @@ async function main() {
         const c = topN[i];
         console.log(`\n--- Candidate ${i + 1}: ${c.obligationPubkey} ---`);
         
-        // Get the full obligation entry from cache to get decoded data
-        const allEntries = Array.from((indexer as any).cache.values());
-        const entry = allEntries.find((e: any) => e.decoded.obligationPubkey === c.obligationPubkey);
+        // Get the full obligation entry from cache using public accessor
+        const entry = indexer.getObligationEntry(c.obligationPubkey);
         
         if (entry) {
           const breakdown = explainHealth(entry.decoded, reserveCache, oracleCache);
