@@ -30,10 +30,10 @@ export interface CandidateSelectorConfig {
  * Select and rank candidates from scored obligations.
  * 
  * Priority scoring logic:
- * - Liquidatable accounts get massive priority boost (10,000)
- * - Higher priority for accounts closer to liquidation threshold (1 / (distance + 0.001))
- * - Size bonus based on borrow value (log10 of USD value)
- * - Results sorted descending by priority score
+ * - Liquidatable accounts get massive urgency boost (1e6)
+ * - Higher urgency for accounts closer to liquidation threshold (1 / (distance + 0.001))
+ * - Size based on borrow value (log10 of USD value, stabilized at $10 minimum)
+ * - Results sorted descending by priorityScore = urgency * size
  * 
  * @param scored Array of scored obligations
  * @param config Configuration options
@@ -49,9 +49,9 @@ export function selectCandidates(
     .filter((o) => Number.isFinite(o.healthRatio) && Number.isFinite(o.borrowValueUsd))
     .map((o) => {
       const distance = Math.max(0, o.healthRatio - 1);
-      const base = (o.liquidationEligible ? 10_000 : 0) + 1 / (distance + 0.001);
-      const size = Math.log10(Math.max(1, o.borrowValueUsd));
-      const priorityScore = base + size;
+      const urgency = o.liquidationEligible ? 1e6 : 1 / (distance + 0.001); // large for liquidatable
+      const size = Math.log10(Math.max(10, o.borrowValueUsd));              // stabilize very small values
+      const priorityScore = urgency * size;
       const predictedLiquidatableSoon = !o.liquidationEligible && o.healthRatio <= near;
 
       return {

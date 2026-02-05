@@ -164,6 +164,10 @@ async function main() {
     const candidates = selectCandidates(scoredForSelection, { nearThreshold: nearArg });
     const topN = candidates.slice(0, topArg);
 
+    // Report candidate counts after selection
+    const candLiquidatable = candidates.filter(c => c.liquidationEligible).length;
+    const candNear = candidates.filter(c => c.predictedLiquidatableSoon).length;
+
     logger.info(
       { scoredCount: scoredObligations.length, topCount: topN.length },
       "PR8 candidates selected"
@@ -171,6 +175,8 @@ async function main() {
 
     // Print summary
     console.log("\n=== PR8 CANDIDATE SELECTION ===\n");
+    console.log(`\nCandidates liquidatable: ${candLiquidatable}`);
+    console.log(`Candidates near-threshold (<= ${nearArg}): ${candNear}\n`);
     console.log(
       "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow Value | Collateral Value | Health Ratio | Obligation"
     );
@@ -216,6 +222,9 @@ async function main() {
           console.log("\nDeposits (Collateral):");
           breakdown.deposits.forEach((d) => {
             console.log(`  Mint: ${d.mint}`);
+            if (d.underlyingMint) {
+              console.log(`    Underlying Mint: ${d.underlyingMint}`);
+            }
             console.log(`    Amount UI: ${d.amountUi.toFixed(6)}`);
             console.log(`    Price USD: $${d.priceUsd.toFixed(6)}`);
             console.log(`    USD Value: $${d.usdValue.toFixed(2)}`);
