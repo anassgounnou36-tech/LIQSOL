@@ -46,6 +46,7 @@ export interface LiveObligationIndexerConfig {
   inactivityTimeoutSeconds?: number; // Default 15
   reserveCache?: ReserveCache; // Optional: reserve cache for health scoring
   oracleCache?: OracleCache; // Optional: oracle cache for health scoring
+  allowlistMints?: string[]; // Optional: only score obligations that touch these mints (SOL, USDC, etc.)
 }
 
 interface ObligationEntry {
@@ -82,6 +83,7 @@ export class LiveObligationIndexer {
   private reconnectCount = 0;
   private reserveCache?: ReserveCache;
   private oracleCache?: OracleCache;
+  private allowlistMints?: Set<string>; // Set of mints to filter obligations (SOL, USDC, etc.)
   
   // Stats tracking
   private stats = {
@@ -89,6 +91,7 @@ export class LiveObligationIndexer {
     emptyObligations: 0,
     unscoredCount: 0,
     unscoredReasons: {} as Record<string, number>,
+    skippedAllowlistCount: 0, // Track obligations skipped due to allowlist filtering
   };
   
   // Circuit breaker for decode failures
@@ -112,6 +115,15 @@ export class LiveObligationIndexer {
     this.marketPubkey = config.marketPubkey;
     this.reserveCache = config.reserveCache;
     this.oracleCache = config.oracleCache;
+    
+    // Initialize allowlist mints if provided
+    if (config.allowlistMints && config.allowlistMints.length > 0) {
+      this.allowlistMints = new Set(config.allowlistMints);
+      logger.info(
+        { allowlistMints: config.allowlistMints },
+        "Allowlist mode enabled - will only score obligations touching these mints"
+      );
+    }
   }
 
   /**
@@ -297,6 +309,26 @@ export class LiveObligationIndexer {
     if (this.marketPubkey && decoded.marketPubkey !== this.marketPubkey.toString()) {
       this.stats.skippedOtherMarketsCount++;
       return { unscoredReason: "OTHER_MARKET" };
+    }
+
+    // Filter by allowlist mints if configured
+    // Only score obligations that touch at least one allowlisted mint
+    if (this.allowlistMints && this.allowlistMints.size > 0) {
+      const obligationMints = new Set<string>();
+      
+      // Collect all mints from deposits and borrows
+      decoded.deposits.forEach(d => obligationMints.add(d.mint));
+      decoded.borrows.forEach(b => obligationMints.add(b.mint));
+      
+      // Check if any obligation mint is in the allowlist
+      const touchesAllowlistedMint = Array.from(obligationMints).some(
+        mint => this.allowlistMints!.has(mint)
+      );
+      
+      if (!touchesAllowlistedMint) {
+        this.stats.skippedAllowlistCount++;
+        return { unscoredReason: "NOT_IN_ALLOWLIST" };
+      }
     }
 
     // Only compute scoring if both caches are available
@@ -718,6 +750,7 @@ export class LiveObligationIndexer {
     emptyObligations: number;
     unscoredCount: number;
     unscoredReasons: Record<string, number>;
+    skippedAllowlistCount: number;
   } {
     const entries = Array.from(this.cache.values());
     const lastUpdateTimes = entries.map(e => e.lastUpdated);
@@ -743,6 +776,7 @@ export class LiveObligationIndexer {
       emptyObligations: this.stats.emptyObligations,
       unscoredCount: this.stats.unscoredCount,
       unscoredReasons: this.stats.unscoredReasons,
+      skippedAllowlistCount: this.stats.skippedAllowlistCount,
     };
   }
 

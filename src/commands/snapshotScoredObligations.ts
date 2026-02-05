@@ -15,10 +15,17 @@ import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
  *   - KAMINO_MARKET_PUBKEY: The market pubkey to filter obligations
  *   - KAMINO_KLEND_PROGRAM_ID: The Kamino Lending program ID
  *   - RPC_PRIMARY: Solana RPC endpoint URL
+ *   - ALLOWLIST_MINTS (optional): Comma-separated list of mint addresses to filter obligations
+ *     Example: ALLOWLIST_MINTS="So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+ *     This enables allowlist mode - only obligations touching these mints will be scored.
  * 
  * Loads reserves and oracles, then computes health scores for obligations from snapshot,
  * and prints top-N riskiest accounts sorted by health ratio.
  */
+
+// Well-known mint addresses for convenience
+const SOL_MINT = "So11111111111111111111111111111111111111112"; // Native SOL (wrapped SOL)
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC
 
 async function main() {
   logger.info("Starting scored obligations snapshot...");
@@ -54,6 +61,16 @@ async function main() {
     const connection = new Connection(env.RPC_PRIMARY, "confirmed");
     logger.info({ rpcUrl: env.RPC_PRIMARY }, "Connected to Solana RPC");
 
+    // Parse allowlist mints from environment if configured
+    let allowlistMints: string[] | undefined;
+    if (env.ALLOWLIST_MINTS) {
+      allowlistMints = env.ALLOWLIST_MINTS.split(",").map(m => m.trim()).filter(m => m.length > 0);
+      logger.info(
+        { allowlistMints },
+        "Allowlist mode enabled - only scoring obligations touching these mints"
+      );
+    }
+
     // Load reserves
     logger.info("Loading reserves for market...");
     const reserveCache = await loadReserves(connection, marketPubkey);
@@ -73,6 +90,7 @@ async function main() {
       rpcUrl: env.RPC_PRIMARY,
       reserveCache,
       oracleCache,
+      allowlistMints, // Pass allowlist mints for filtering
       bootstrapBatchSize: 100,
       bootstrapConcurrency: 5, // Higher concurrency for batch scoring
     });
@@ -97,33 +115,45 @@ async function main() {
         liquidatableObligations: stats.liquidatableCount,
         emptyObligations: stats.emptyObligations,
         skippedOtherMarkets: stats.skippedOtherMarketsCount,
+        skippedAllowlist: stats.skippedAllowlistCount,
         unscoredReasons: stats.unscoredReasons,
       },
       "Scoring complete"
     );
     
     // Print unscored summary to console for visibility
-    if (unscoredCount > 0) {
-      console.log("\n=== UNSCORED OBLIGATIONS SUMMARY ===\n");
-      console.log(`Total unscored: ${unscoredCount} (${((unscoredCount / stats.cacheSize) * 100).toFixed(1)}%)`);
-      console.log("\nBreakdown by reason:");
+    if (unscoredCount > 0 || stats.skippedAllowlistCount > 0) {
+      console.log("\n=== SCORING SUMMARY ===\n");
       
-      for (const [reason, count] of Object.entries(stats.unscoredReasons)) {
-        const percentage = ((count / unscoredCount) * 100).toFixed(1);
-        console.log(`  ${reason.padEnd(25)} : ${count.toString().padStart(5)} (${percentage}%)`);
+      if (stats.skippedAllowlistCount > 0) {
+        console.log(`Allowlist filtering enabled: ${stats.skippedAllowlistCount} obligations skipped (not touching allowlisted mints)`);
       }
       
-      console.log("\nNote: Unscored obligations are excluded from the Top Risky list below.");
-      console.log("Values would show as N/A if they were included.\n");
+      if (unscoredCount > 0) {
+        console.log(`Total unscored: ${unscoredCount} (${((unscoredCount / stats.cacheSize) * 100).toFixed(1)}%)`);
+        console.log("\nBreakdown by reason:");
+        
+        for (const [reason, count] of Object.entries(stats.unscoredReasons)) {
+          const percentage = ((count / unscoredCount) * 100).toFixed(1);
+          console.log(`  ${reason.padEnd(25)} : ${count.toString().padStart(5)} (${percentage}%)`);
+        }
+        
+        console.log("\nNote: Unscored obligations are excluded from the Top Risky list below.");
+        console.log("Values would show as N/A if they were included.");
+      }
       
-      logger.warn(
-        { 
-          unscoredCount, 
-          percentage: ((unscoredCount / stats.cacheSize) * 100).toFixed(1) + "%",
-          reasons: stats.unscoredReasons,
-        },
-        "Some obligations were not scored. See unscoredReasons for details."
-      );
+      console.log("");
+      
+      if (unscoredCount > 0) {
+        logger.warn(
+          { 
+            unscoredCount, 
+            percentage: ((unscoredCount / stats.cacheSize) * 100).toFixed(1) + "%",
+            reasons: stats.unscoredReasons,
+          },
+          "Some obligations were not scored. See unscoredReasons for details."
+        );
+      }
     }
 
     // Get top-N riskiest obligations

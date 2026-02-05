@@ -23,6 +23,10 @@ export const EnvSchema = z.object({
 
   LOG_LEVEL: z.enum(["fatal","error","warn","info","debug","trace"]).default("info"),
   NODE_ENV: z.enum(["development","production","test"]).default("development"),
+  
+  // Optional: comma-separated list of mint addresses for allowlist filtering
+  // Example: "So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+  ALLOWLIST_MINTS: z.string().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
