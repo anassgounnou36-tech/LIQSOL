@@ -35,8 +35,8 @@ const accountsCoder = new BorshAccountsCoder(idlJson);
 const UNKNOWN_MINT_PLACEHOLDER = "unknown-mint-fetch-required";
 
 /**
- * Cache mapping reserve pubkeys to their associated token mints.
- * This is used by decodeObligation() to populate mint fields in deposits and borrows.
+ * Cache mapping reserve pubkeys to their associated liquidity token mints.
+ * Used for borrows - borrows must reference the liquidity mint for pricing and decimals.
  * 
  * Note: Obligation accounts store reserve pubkeys but not the token mints.
  * To get the mint, you need to either:
@@ -46,23 +46,36 @@ const UNKNOWN_MINT_PLACEHOLDER = "unknown-mint-fetch-required";
  * Usage:
  *   // After decoding a Reserve
  *   const reserve = decodeReserve(reserveData, reservePubkey);
- *   setReserveMintCache(reserve.reservePubkey, reserve.liquidityMint);
+ *   setReserveMintCache(reserve.reservePubkey, reserve.liquidityMint, reserve.collateralMint);
  *   
  *   // Later when decoding Obligation
  *   const obligation = decodeObligation(obligationData, obligationPubkey);
- *   // obligation.deposits[].mint will use cached values
+ *   // obligation.deposits[].mint will use collateral mint
+ *   // obligation.borrows[].mint will use liquidity mint
  */
-const reserveMintCache = new Map<string, string>();
+const reserveLiquidityMintCache = new Map<string, string>();
 
 /**
- * Sets the token mint for a given reserve in the cache.
+ * Cache mapping reserve pubkeys to their associated collateral token mints (cTokens).
+ * Used for deposits - deposits must reference the collateral mint for exchange rate and decimals.
+ */
+const reserveCollateralMintCache = new Map<string, string>();
+
+/**
+ * Sets both liquidity and collateral mints for a given reserve in the caches.
  * Used to populate mint fields when decoding Obligation accounts.
  * 
  * @param reservePubkey - Public key of the reserve (as string)
- * @param mint - Token mint public key (as string)
+ * @param liquidityMint - Liquidity token mint public key (as string) - used for borrows
+ * @param collateralMint - Collateral token mint public key (as string) - used for deposits
  */
-export function setReserveMintCache(reservePubkey: string, mint: string): void {
-  reserveMintCache.set(reservePubkey, mint);
+export function setReserveMintCache(
+  reservePubkey: string,
+  liquidityMint: string,
+  collateralMint: string
+): void {
+  reserveLiquidityMintCache.set(reservePubkey, liquidityMint);
+  reserveCollateralMintCache.set(reservePubkey, collateralMint);
 }
 
 /**
@@ -88,6 +101,7 @@ export function decodeObligation(
   const decoded = accountsCoder.decode("Obligation", dataBuffer);
 
   // Map deposits (collateral) - filter using gtZero
+  // CRITICAL: deposits must use collateral mint (cToken), not liquidity mint
   const deposits = (
     decoded.deposits as Array<{
       depositReserve: { toString: () => string };
@@ -98,12 +112,13 @@ export function decodeObligation(
     .map((d) => ({
       reserve: d.depositReserve.toString(),
       mint:
-        reserveMintCache.get(d.depositReserve.toString()) ||
+        reserveCollateralMintCache.get(d.depositReserve.toString()) ||
         UNKNOWN_MINT_PLACEHOLDER,
       depositedAmount: toBigInt(d.depositedAmount).toString(),
     }));
 
   // Map borrows - filter using gtZero
+  // Borrows must use liquidity mint for pricing and decimals
   const borrows = (
     decoded.borrows as Array<{
       borrowReserve: { toString: () => string };
@@ -114,7 +129,7 @@ export function decodeObligation(
     .map((b) => ({
       reserve: b.borrowReserve.toString(),
       mint:
-        reserveMintCache.get(b.borrowReserve.toString()) ||
+        reserveLiquidityMintCache.get(b.borrowReserve.toString()) ||
         UNKNOWN_MINT_PLACEHOLDER,
       borrowedAmount: toBigInt(b.borrowedAmountSf).toString(),
     }));

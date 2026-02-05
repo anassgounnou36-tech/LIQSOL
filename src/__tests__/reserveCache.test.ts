@@ -142,15 +142,17 @@ describe("Reserve Cache Tests", () => {
       expect(entry2!.oraclePubkeys.length).toBe(1);
       expect(entry2!.oraclePubkeys[0].toString()).toBe(oracle2);
 
-      // Verify setReserveMintCache was called for both reserves
+      // Verify setReserveMintCache was called for both reserves with both mints
       expect(setReserveMintCacheSpy).toHaveBeenCalledTimes(2);
       expect(setReserveMintCacheSpy).toHaveBeenCalledWith(
         reserve1Pubkey.toString(),
-        mint1
+        mint1,
+        "collateral1"
       );
       expect(setReserveMintCacheSpy).toHaveBeenCalledWith(
         reserve2Pubkey.toString(),
-        mint2
+        mint2,
+        "collateral2"
       );
     });
 

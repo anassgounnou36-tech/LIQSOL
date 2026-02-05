@@ -21,14 +21,19 @@ export function decodeReserve(
 }
 
 /**
- * Sets the token mint for a given reserve in the cache.
+ * Sets both liquidity and collateral mints for a given reserve in the caches.
  * Used to populate mint fields when decoding Obligation accounts.
  * 
  * @param reservePubkey - Public key of the reserve (as string)
- * @param mint - Token mint public key (as string)
+ * @param liquidityMint - Liquidity token mint public key (as string) - used for borrows
+ * @param collateralMint - Collateral token mint public key (as string) - used for deposits
  */
-export function setReserveMintCache(reservePubkey: string, mint: string): void {
-  setReserveMintCacheImpl(reservePubkey, mint);
+export function setReserveMintCache(
+  reservePubkey: string,
+  liquidityMint: string,
+  collateralMint: string
+): void {
+  setReserveMintCacheImpl(reservePubkey, liquidityMint, collateralMint);
 }
 
 /**

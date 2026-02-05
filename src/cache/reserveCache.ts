@@ -529,7 +529,10 @@ export async function loadReserves(
     cachedCount++;
 
     // Populate setReserveMintCache for obligation decoding
-    setReserveMintCache(pubkey.toString(), decoded.liquidityMint);
+    // CRITICAL: Must pass BOTH liquidity and collateral mints
+    // - liquidityMint: used for borrows (pricing, decimals)
+    // - collateralMint: used for deposits (exchange rate, decimals)
+    setReserveMintCache(pubkey.toString(), decoded.liquidityMint, decoded.collateralMint);
 
     logger.debug(
       {
