@@ -46,14 +46,14 @@ async function main() {
     // Load reserves
     const reserves = await loadReserves(connection, marketPubkey);
 
-    logger.info({ count: reserves.size }, "Reserves loaded successfully");
+    logger.info({ count: reserves.byReserve.size }, "Reserves loaded successfully");
 
     // Display reserve details
     logger.info("=".repeat(80));
     logger.info("RESERVE DETAILS");
     logger.info("=".repeat(80));
 
-    for (const [mint, reserve] of reserves.entries()) {
+    for (const [mint, reserve] of reserves.byMint.entries()) {
       logger.info("");
       logger.info(`Liquidity Mint: ${mint}`);
       logger.info(`  Reserve Pubkey: ${reserve.reservePubkey.toString()}`);
@@ -83,7 +83,7 @@ async function main() {
     logger.info(
       {
         market: marketPubkey.toString(),
-        totalReserves: reserves.size,
+        totalReserves: reserves.byReserve.size,
       },
       "Reserve verification complete"
     );

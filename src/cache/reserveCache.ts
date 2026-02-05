@@ -245,7 +245,7 @@ export async function loadReserves(
 
   if (accountInfos.length === 0) {
     logger.warn("No reserves found for market");
-    return new Map();
+    return { byMint: new Map(), byReserve: new Map() };
   }
 
   // Extract pubkeys for batch fetching
@@ -622,7 +622,7 @@ export function getMintsByOracle(
   const result: string[] = [];
   const seen = new Set<string>(); // Track which reserves we've processed
   
-  for (const [mint, reserve] of reserveCache.byMint.entries()) {
+  for (const [, reserve] of reserveCache.byMint.entries()) {
     // Skip if we've already seen this reserve (avoids processing same reserve twice)
     const reserveKey = reserve.reservePubkey.toString();
     if (seen.has(reserveKey)) {

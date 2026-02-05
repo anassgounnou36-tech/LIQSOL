@@ -26,28 +26,29 @@ describe("Cache Index Integration Tests", () => {
 
   describe("loadMarketCaches", () => {
     it("should load both reserves and oracles", async () => {
-      const mockReserveCache = new Map([
-        [
-          "mint1",
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: "mint1",
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            scopePriceChain: null,
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            oraclePubkeys: [PublicKey.unique()],
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            collateralMint: "collateral-mint1",
-            collateralExchangeRateUi: 1.0,
-          },
-        ],
-      ]);
+      const reservePubkey = PublicKey.unique();
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: "mint1",
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        scopePriceChain: null,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        oraclePubkeys: [PublicKey.unique()],
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        collateralMint: "collateral-mint1",
+        collateralExchangeRateUi: 1.0,
+      };
+      
+      const mockReserveCache = {
+        byMint: new Map([["mint1", reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       const mockOracleCache = new Map([
         [
@@ -93,7 +94,7 @@ describe("Cache Index Integration Tests", () => {
 
       vi.spyOn(reserveCache, "loadReserves").mockImplementation(async () => {
         callOrder.push("reserves");
-        return new Map();
+        return { byMint: new Map(), byReserve: new Map() };
       });
 
       vi.spyOn(oracleCache, "loadOracles").mockImplementation(async () => {
@@ -107,12 +108,13 @@ describe("Cache Index Integration Tests", () => {
     });
 
     it("should handle empty caches", async () => {
-      vi.spyOn(reserveCache, "loadReserves").mockResolvedValue(new Map());
+      vi.spyOn(reserveCache, "loadReserves").mockResolvedValue({ byMint: new Map(), byReserve: new Map() });
       vi.spyOn(oracleCache, "loadOracles").mockResolvedValue(new Map());
 
       const result = await loadMarketCaches(mockConnection, marketPubkey);
 
-      expect(result.reserves.size).toBe(0);
+      expect(result.reserves.byMint.size).toBe(0);
+      expect(result.reserves.byReserve.size).toBe(0);
       expect(result.oracles.size).toBe(0);
     });
 
@@ -126,7 +128,7 @@ describe("Cache Index Integration Tests", () => {
     });
 
     it("should propagate errors from loadOracles", async () => {
-      vi.spyOn(reserveCache, "loadReserves").mockResolvedValue(new Map());
+      vi.spyOn(reserveCache, "loadReserves").mockResolvedValue({ byMint: new Map(), byReserve: new Map() });
 
       const error = new Error("Failed to load oracles");
       vi.spyOn(oracleCache, "loadOracles").mockRejectedValue(error);
