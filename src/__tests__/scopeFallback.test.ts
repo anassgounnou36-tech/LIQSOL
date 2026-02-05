@@ -70,6 +70,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -123,6 +124,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -178,6 +180,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -239,6 +242,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -283,6 +287,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -347,6 +352,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -412,6 +418,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -461,6 +468,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -510,6 +518,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,

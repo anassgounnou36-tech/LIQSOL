@@ -217,12 +217,6 @@ const FALLBACK_CHAIN_CANDIDATES = [
 ];
 
 /**
- * Environment flag to enable curated Scope chain scanning (disabled by default for safety)
- * Set LIQSOL_ENABLE_SCOPE_SCAN=1 to enable scanning when configured chains fail
- */
-const ENABLE_SCOPE_SCAN = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN === "1";
-
-/**
  * Helper function to check if a price entry is usable (non-zero, finite exponent, magnitude sanity checks)
  * Note: Does not check for freshness - that is validated separately in tryChain
  * @param priceData - Price data to validate
