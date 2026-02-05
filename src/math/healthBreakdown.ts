@@ -28,7 +28,8 @@ function uiFromMantissa(mantissa: bigint, exponent: number): number {
 }
 
 export interface HealthBreakdownLeg {
-  mint: string;
+  mint: string;               // collateral mint for deposits, liquidity mint for borrows
+  underlyingMint?: string;    // for deposits only
   amountRaw: string;
   decimals: number;
   amountUi: number;
@@ -87,10 +88,12 @@ export function explainHealth(
       continue;
     }
 
-    const oracle = oracleCache.get(deposit.mint);
+    // Price collateral using underlying liquidity mint
+    const priceMint = reserve.liquidityMint;
+    const oracle = oracleCache.get(priceMint);
     if (!oracle) {
       missingLegs++;
-      approximations.push(`Missing oracle for deposit mint ${deposit.mint}`);
+      approximations.push(`Missing oracle for underlying mint ${priceMint} (deposit collateral mint ${deposit.mint})`);
       continue;
     }
 
@@ -120,6 +123,7 @@ export function explainHealth(
 
     deposits.push({
       mint: deposit.mint,
+      underlyingMint: reserve.liquidityMint,
       amountRaw: deposit.depositedAmount,
       decimals: reserve.collateralDecimals,
       amountUi: liquidityUi,
