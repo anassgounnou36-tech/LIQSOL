@@ -27,6 +27,16 @@ try {
 }
 
 /**
+ * Options for health ratio computation
+ */
+export interface HealthRatioOptions {
+  /** Include detailed per-leg breakdown in result */
+  includeBreakdown?: boolean;
+  /** Expose raw unclamped health ratio alongside clamped value */
+  exposeRawHr?: boolean;
+}
+
+/**
  * Input for health ratio computation
  */
 export interface HealthRatioInput {
@@ -38,6 +48,48 @@ export interface HealthRatioInput {
   reserves: Map<string, ReserveCacheEntry>;
   /** Oracle price cache keyed by mint */
   prices: Map<string, OraclePriceData>;
+  /** Optional configuration for computation */
+  options?: HealthRatioOptions;
+}
+
+/**
+ * Detailed deposit leg breakdown for health computation
+ */
+export interface HealthLegDeposit {
+  /** Reserve public key */
+  reservePubkey: string;
+  /** Collateral mint (cToken) */
+  collateralMint: string;
+  /** Underlying liquidity mint */
+  liquidityMint: string;
+  /** Collateral shares in UI units */
+  collateralSharesUi: number;
+  /** Underlying liquidity tokens in UI units (after exchange rate conversion) */
+  underlyingUi: number;
+  /** Price of underlying liquidity mint in USD */
+  priceUsd: number;
+  /** Raw USD value (underlyingUi * priceUsd) */
+  usdRaw: number;
+  /** Weighted USD value (after liquidation threshold multiplier) */
+  usdWeighted: number;
+}
+
+/**
+ * Detailed borrow leg breakdown for health computation
+ */
+export interface HealthLegBorrow {
+  /** Reserve public key */
+  reservePubkey: string;
+  /** Liquidity mint */
+  liquidityMint: string;
+  /** Borrowed amount in UI units */
+  borrowUi: number;
+  /** Price of liquidity mint in USD */
+  priceUsd: number;
+  /** Raw USD value (borrowUi * priceUsd) */
+  usdRaw: number;
+  /** Weighted USD value (after borrow factor multiplier) */
+  usdWeighted: number;
 }
 
 /**
@@ -49,10 +101,25 @@ export type HealthRatioResult =
       scored: true;
       /** Health ratio (collateralValueWeighted / borrowValue), clamped to [0, 2] */
       healthRatio: number;
+      /** Raw unclamped health ratio (for debugging) */
+      healthRatioRaw?: number;
       /** Total borrow value in USD */
       borrowValue: number;
       /** Total collateral value in USD (weighted by liquidationThreshold) */
       collateralValue: number;
+      /** Total borrow value in USD (unweighted) */
+      totalBorrowUsd: number;
+      /** Total collateral value in USD (unweighted) */
+      totalCollateralUsd: number;
+      /** Total borrow value in USD (weighted by borrow factor) */
+      totalBorrowUsdAdj: number;
+      /** Total collateral value in USD (weighted by liquidation threshold) */
+      totalCollateralUsdAdj: number;
+      /** Detailed per-leg breakdown (optional) */
+      breakdown?: {
+        deposits: HealthLegDeposit[];
+        borrows: HealthLegBorrow[];
+      };
     }
   | {
       /** Obligation could not be scored */
@@ -207,7 +274,7 @@ function adjustedUiPrice(
  * Computes health ratio and position values for a Kamino obligation
  * 
  * Returns a discriminated union:
- * - { scored: true, healthRatio, borrowValue, collateralValue } on success
+ * - { scored: true, healthRatio, borrowValue, collateralValue, ... } on success
  * - { scored: false, reason } when data is missing or invalid
  * 
  * This prevents treating missing data as "$0 collateral" and enables
@@ -217,10 +284,18 @@ function adjustedUiPrice(
  * @returns Health ratio result or unscored with reason
  */
 export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
-  const { deposits, borrows, reserves, prices } = input;
+  const { deposits, borrows, reserves, prices, options } = input;
+  
+  const includeBreakdown = options?.includeBreakdown ?? false;
+  const exposeRawHr = options?.exposeRawHr ?? false;
   
   let collateralUSD = 0;
+  let collateralUSDRaw = 0;
   let borrowUSD = 0;
+  let borrowUSDRaw = 0;
+  
+  const depositLegs: HealthLegDeposit[] = [];
+  const borrowLegs: HealthLegBorrow[] = [];
   
   // Process deposits (collateral)
   for (const deposit of deposits) {
@@ -299,15 +374,33 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     // This is equivalent to: (depositedNotesUi * totalLiquidityUi) / collateralSupplyUi
     const depositUi = depositedNotesUi / exchangeRateUi;
     
+    // Calculate raw USD value (unweighted)
+    const valueUSDRaw = depositUi * priceUi;
+    
     // Apply liquidation threshold weight
     const weight = reserve.liquidationThreshold / 100;
-    const valueUSD = depositUi * priceUi * weight;
+    const valueUSD = valueUSDRaw * weight;
     
-    if (!Number.isFinite(valueUSD)) {
+    if (!Number.isFinite(valueUSD) || !Number.isFinite(valueUSDRaw)) {
       return { scored: false, reason: "INVALID_MATH" };
     }
     
     collateralUSD += Math.max(0, valueUSD);
+    collateralUSDRaw += Math.max(0, valueUSDRaw);
+    
+    // Collect breakdown if requested
+    if (includeBreakdown) {
+      depositLegs.push({
+        reservePubkey: deposit.reserve,
+        collateralMint: deposit.mint,
+        liquidityMint: priceMint,
+        collateralSharesUi: depositedNotesUi,
+        underlyingUi: depositUi,
+        priceUsd: priceUi,
+        usdRaw: valueUSDRaw,
+        usdWeighted: valueUSD,
+      });
+    }
   }
   
   // Process borrows
@@ -352,45 +445,78 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       return { scored: false, reason: "INVALID_MATH" };
     }
     
+    // Calculate raw USD value (unweighted)
+    const valueUSDRaw = borrowUi * priceUi;
+    
     // Apply borrow factor (defaults to 100 = 1.0x)
     const borrowFactor = (reserve.borrowFactor ?? 100) / 100;
-    const valueUSD = borrowUi * priceUi * borrowFactor;
+    const valueUSD = valueUSDRaw * borrowFactor;
     
-    if (!Number.isFinite(valueUSD)) {
+    if (!Number.isFinite(valueUSD) || !Number.isFinite(valueUSDRaw)) {
       return { scored: false, reason: "INVALID_MATH" };
     }
     
     borrowUSD += Math.max(0, valueUSD);
+    borrowUSDRaw += Math.max(0, valueUSDRaw);
+    
+    // Collect breakdown if requested
+    if (includeBreakdown) {
+      borrowLegs.push({
+        reservePubkey: borrow.reserve,
+        liquidityMint: borrow.mint,
+        borrowUi,
+        priceUsd: priceUi,
+        usdRaw: valueUSDRaw,
+        usdWeighted: valueUSD,
+      });
+    }
   }
   
   // Calculate health ratio
-  let ratio: number;
+  let ratioRaw: number;
   if (borrowUSD <= 0 && collateralUSD <= 0) {
     // Empty position
-    ratio = 2.0;
+    ratioRaw = 2.0;
   } else if (borrowUSD <= 0) {
     // No debt, maximum health
-    ratio = 2.0;
+    ratioRaw = 2.0;
   } else if (collateralUSD <= 0) {
     // No collateral, unhealthy
-    ratio = 0.0;
+    ratioRaw = 0.0;
   } else {
     // Normal calculation
-    ratio = collateralUSD / borrowUSD;
+    ratioRaw = collateralUSD / borrowUSD;
   }
   
-  // Clamp to [0, 2]
-  ratio = Math.max(0, Math.min(2, ratio));
+  // Clamp to [0, 2] for ranking
+  const ratio = Math.max(0, Math.min(2, ratioRaw));
   
   // Final sanity check
   if (!Number.isFinite(ratio)) {
     return { scored: false, reason: "INVALID_MATH" };
   }
   
-  return {
+  const result: Extract<HealthRatioResult, { scored: true }> = {
     scored: true,
     healthRatio: ratio,
     borrowValue: borrowUSD,
     collateralValue: collateralUSD,
+    totalBorrowUsd: borrowUSDRaw,
+    totalCollateralUsd: collateralUSDRaw,
+    totalBorrowUsdAdj: borrowUSD,
+    totalCollateralUsdAdj: collateralUSD,
   };
+  
+  if (exposeRawHr) {
+    result.healthRatioRaw = ratioRaw;
+  }
+  
+  if (includeBreakdown) {
+    result.breakdown = {
+      deposits: depositLegs,
+      borrows: borrowLegs,
+    };
+  }
+  
+  return result;
 }
