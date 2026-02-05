@@ -28,8 +28,8 @@ function createPlaceholderInstruction(signer: PublicKey): TransactionInstruction
 async function main() {
   // Parse command line args
   const args = process.argv.slice(2);
-  const mintArg = args.find((arg, i) => args[i - 1] === "--mint")?.toUpperCase();
-  const amountArg = args.find((arg, i) => args[i - 1] === "--amount");
+  const mintArg = args.find((_arg, i) => args[i - 1] === "--mint")?.toUpperCase();
+  const amountArg = args.find((_arg, i) => args[i - 1] === "--amount");
 
   const mint = (mintArg || "USDC") as FlashloanMint;
   const amount = amountArg || "1000";

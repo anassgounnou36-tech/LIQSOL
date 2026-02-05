@@ -1,8 +1,8 @@
-import type { Connection, PublicKey, TransactionInstruction, Keypair } from "@solana/web3.js";
+import { Connection, PublicKey, TransactionInstruction, Keypair } from "@solana/web3.js";
 import { KaminoMarket } from "@kamino-finance/klend-sdk";
 import { getAssociatedTokenAddress } from "@kamino-finance/klend-sdk";
 import { getFlashLoanInstructions } from "@kamino-finance/klend-sdk";
-import Decimal from "decimal.js";
+import { Decimal } from "decimal.js";
 
 export type FlashloanMint = "USDC" | "SOL";
 
@@ -41,9 +41,9 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   // Note: SDK v7.3.9 requires recentSlotDurationMs parameter
   const market = await KaminoMarket.load(
     p.connection as any, // Cast to handle web3.js v1 vs @solana/kit compatibility
-    p.marketPubkey.toBase58(), // SDK uses Address (string) type
+    p.marketPubkey.toBase58() as any, // SDK uses Address (branded string) type
     1000, // recentSlotDurationMs - default value
-    p.programId.toBase58() // SDK uses Address (string) type
+    p.programId.toBase58() as any // SDK uses Address (branded string) type
   );
 
   if (!market) {
@@ -76,7 +76,7 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   // SDK's getAssociatedTokenAddress handles token program automatically
   const destinationAtaStr = await getAssociatedTokenAddress(
     reserveMint,
-    p.signer.publicKey.toBase58()
+    p.signer.publicKey.toBase58() as any
   );
   const destinationAta = new PublicKey(destinationAtaStr);
 
@@ -91,31 +91,31 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
     lendingMarketAddress: market.getAddress(),
     reserve,
     amountLamports: lamportsDecimal,
-    destinationAta: destinationAtaStr,
-    referrerAccount: null, // No referrer for flashloans
-    referrerTokenState: null,
-    programId: p.programId.toBase58(),
+    destinationAta: destinationAtaStr as any,
+    referrerAccount: null as any, // No referrer for flashloans
+    referrerTokenState: null as any,
+    programId: p.programId.toBase58() as any,
   });
 
   // Convert SDK instructions to web3.js TransactionInstruction
   const borrowIx = new TransactionInstruction({
-    keys: flashBorrowIx.accounts.map((a: any) => ({
+    keys: (flashBorrowIx.accounts || []).map((a: any) => ({
       pubkey: new PublicKey(a.address),
       isSigner: a.role === 2, // 2 = signer role in @solana/kit
       isWritable: a.role === 1 || a.role === 3, // 1 = writable, 3 = writable signer
     })),
     programId: new PublicKey(flashBorrowIx.programAddress),
-    data: Buffer.from(flashBorrowIx.data),
+    data: Buffer.from(flashBorrowIx.data || []),
   });
 
   const repayIx = new TransactionInstruction({
-    keys: flashRepayIx.accounts.map((a: any) => ({
+    keys: (flashRepayIx.accounts || []).map((a: any) => ({
       pubkey: new PublicKey(a.address),
       isSigner: a.role === 2,
       isWritable: a.role === 1 || a.role === 3,
     })),
     programId: new PublicKey(flashRepayIx.programAddress),
-    data: Buffer.from(flashRepayIx.data),
+    data: Buffer.from(flashRepayIx.data || []),
   });
 
   return {
