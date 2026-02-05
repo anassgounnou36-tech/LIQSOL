@@ -49,8 +49,8 @@ export function selectCandidates(
     .filter((o) => Number.isFinite(o.healthRatio) && Number.isFinite(o.borrowValueUsd))
     .map((o) => {
       const distance = Math.max(0, o.healthRatio - 1);
-      const urgency = o.liquidationEligible ? 1e6 : 1 / (distance + 0.001); // large for liquidatable
-      const size = Math.log10(Math.max(10, o.borrowValueUsd));              // stabilize very small values
+      const urgency = o.liquidationEligible ? 1e6 : 1 / (distance + 0.001); // 1e6 ensures liquidatable accounts dominate ranking regardless of size
+      const size = Math.log10(Math.max(10, o.borrowValueUsd));              // min $10 avoids extreme negative log values for sub-$10 positions
       const priorityScore = urgency * size;
       const predictedLiquidatableSoon = !o.liquidationEligible && o.healthRatio <= near;
 
