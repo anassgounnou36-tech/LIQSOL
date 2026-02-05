@@ -64,29 +64,30 @@ describe("Scope Fallback Chain Search Tests", () => {
     it("should use primary fallback chain 0 when configured chain fails", async () => {
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
+      const reservePubkey = PublicKey.unique();
       
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: [100], // Invalid chain that doesn't exist in oracle
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oraclePubkey],
-          },
-        ],
-      ]);
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: [100], // Invalid chain that doesn't exist in oracle
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oraclePubkey],
+      };
+      
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Mock Scope data with price at chain 0 (fallback) but not at chain 100
       const currentTimestamp = Math.floor(Date.now() / 1000);
@@ -118,29 +119,30 @@ describe("Scope Fallback Chain Search Tests", () => {
     it("should not use fallback chain 3; no price cached when configured chains and chain 0 fail", async () => {
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
+      const reservePubkey = PublicKey.unique();
       
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: [100], // Invalid chain
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oraclePubkey],
-          },
-        ],
-      ]);
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: [100], // Invalid chain
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oraclePubkey],
+      };
+      
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Mock Scope data with price only at chain 3 (which is now excluded)
       const currentTimestamp = Math.floor(Date.now() / 1000);
@@ -174,29 +176,30 @@ describe("Scope Fallback Chain Search Tests", () => {
       
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
+      const reservePubkey = PublicKey.unique();
       
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: [100], // Invalid chain
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oraclePubkey],
-          },
-        ],
-      ]);
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: [100], // Invalid chain
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oraclePubkey],
+      };
+      
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Mock Scope data with price only at chain 118 (in curated candidates list)
       const currentTimestamp = Math.floor(Date.now() / 1000);
@@ -236,29 +239,30 @@ describe("Scope Fallback Chain Search Tests", () => {
     it("should return null when no valid price found after exhaustive search", async () => {
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
+      const reservePubkey = PublicKey.unique();
       
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: [100], // Invalid chain
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oraclePubkey],
-          },
-        ],
-      ]);
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: [100], // Invalid chain
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oraclePubkey],
+      };
+      
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Mock Scope data with no valid prices anywhere
       vi.mocked(OraclePrices.decode).mockReturnValue({
@@ -281,29 +285,30 @@ describe("Scope Fallback Chain Search Tests", () => {
     it("should use configured chain when it has valid price", async () => {
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
+      const reservePubkey = PublicKey.unique();
       
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: [50], // Valid configured chain
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oraclePubkey],
-          },
-        ],
-      ]);
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: [50], // Valid configured chain
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oraclePubkey],
+      };
+      
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
       
       // Populate the scopeMintChainMap with the configured chain
       scopeMintChainMap.set(mint1, [50]);
@@ -346,29 +351,30 @@ describe("Scope Fallback Chain Search Tests", () => {
       
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
+      const reservePubkey = PublicKey.unique();
       
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: [100], // Invalid chain
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oraclePubkey],
-          },
-        ],
-      ]);
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: [100], // Invalid chain
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oraclePubkey],
+      };
+      
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Mock Scope data with stale price at chain 0 and fresh price at chain 1 (curated fallback)
       const currentTimestamp = Math.floor(Date.now() / 1000);
@@ -412,29 +418,30 @@ describe("Scope Fallback Chain Search Tests", () => {
     it("should reject extremely tiny prices (e.g., ~1e-6 USD)", async () => {
       const mint1 = "So11111111111111111111111111111111111111112";
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
+      const reservePubkey = PublicKey.unique();
       
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: [0],
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oraclePubkey],
-          },
-        ],
-      ]);
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: [0],
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oraclePubkey],
+      };
+      
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Mock Scope data with placeholder-like price: value = 1e12 with exp = -18 → ~1e-6 USD
       const currentTimestamp = Math.floor(Date.now() / 1000);
@@ -462,29 +469,30 @@ describe("Scope Fallback Chain Search Tests", () => {
     it("should reject extremely huge prices (e.g., > 1e7 USD)", async () => {
       const mint1 = "So11111111111111111111111111111111111111112";
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
+      const reservePubkey = PublicKey.unique();
       
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: [0],
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oraclePubkey],
-          },
-        ],
-      ]);
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: [0],
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oraclePubkey],
+      };
+      
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Mock Scope data with absurdly huge price: value = 1e20 with exp = -8 → 1e12 USD
       const currentTimestamp = Math.floor(Date.now() / 1000);
@@ -512,29 +520,30 @@ describe("Scope Fallback Chain Search Tests", () => {
     it("should accept reasonable prices (e.g., typical crypto prices)", async () => {
       const mint1 = "So11111111111111111111111111111111111111112";
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
+      const reservePubkey = PublicKey.unique();
       
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: [0],
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oraclePubkey],
-          },
-        ],
-      ]);
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: [0],
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oraclePubkey],
+      };
+      
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Mock Scope data with reasonable price: value = 100e8 with exp = -8 → $100 USD
       const currentTimestamp = Math.floor(Date.now() / 1000);
