@@ -1,5 +1,6 @@
 import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import fs from "node:fs";
+import { Buffer } from "node:buffer";
 import { loadEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { buildKaminoFlashloanIxs, type FlashloanMint } from "../flashloan/kaminoFlashloan.js";

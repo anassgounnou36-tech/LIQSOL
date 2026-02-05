@@ -40,9 +40,12 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   // Load market from Kamino SDK
   // Note: SDK v7.3.9 requires recentSlotDurationMs parameter
   const market = await KaminoMarket.load(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     p.connection as any, // Cast to handle web3.js v1 vs @solana/kit compatibility
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     p.marketPubkey.toBase58() as any, // SDK uses Address (branded string) type
     1000, // recentSlotDurationMs - default value
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     p.programId.toBase58() as any // SDK uses Address (branded string) type
   );
 
@@ -74,6 +77,7 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
 
   // Derive user ATA for the reserve
   // SDK's getAssociatedTokenAddress handles token program automatically
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const destinationAtaStr = await getAssociatedTokenAddress(
     reserveMint,
     p.signer.publicKey.toBase58() as any
@@ -84,6 +88,7 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   const lendingMarketAuthority = await market.getLendingMarketAuthority();
 
   // Build flashloan instructions using SDK helper
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { flashBorrowIx, flashRepayIx } = getFlashLoanInstructions({
     borrowIxIndex: p.borrowIxIndex,
     userTransferAuthority: p.signer.publicKey.toBase58() as any, // SDK expects TransactionSigner
@@ -98,6 +103,7 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   });
 
   // Convert SDK instructions to web3.js TransactionInstruction
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const borrowIx = new TransactionInstruction({
     keys: (flashBorrowIx.accounts || []).map((a: any) => ({
       pubkey: new PublicKey(a.address),
@@ -108,6 +114,7 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
     data: Buffer.from(flashBorrowIx.data || []),
   });
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const repayIx = new TransactionInstruction({
     keys: (flashRepayIx.accounts || []).map((a: any) => ({
       pubkey: new PublicKey(a.address),
