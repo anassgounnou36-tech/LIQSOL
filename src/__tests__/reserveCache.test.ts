@@ -624,4 +624,130 @@ describe("Reserve Cache Tests", () => {
       expect(entry!.collateralExchangeRateUi).toBeCloseTo(1.0909, 4);
     });
   });
+
+  describe("Allowlist Filtering", () => {
+    it("should filter reserves by allowlisted liquidity mints", async () => {
+      // Setup: Mock 3 reserves with different liquidity mints
+      const reserve1Pubkey = new PublicKey("d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q");
+      const reserve2Pubkey = new PublicKey("FRYBbRFXJ2fKJZ6q5jCQvK5c7cRZNP1jVcSPP6NEupXo");
+      const reserve3Pubkey = new PublicKey("5sXbXn4dFHqCxLKj5ZPyEXV2C8VdBLqhVJjqDy2X4DnD");
+      
+      const SOL_MINT = "So11111111111111111111111111111111111111112";
+      const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+      const OTHER_MINT = "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E"; // BTC mint
+      
+      mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
+        { pubkey: reserve1Pubkey, account: {} },
+        { pubkey: reserve2Pubkey, account: {} },
+        { pubkey: reserve3Pubkey, account: {} },
+      ]);
+
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: Buffer.alloc(100) },
+        { data: Buffer.alloc(100) },
+        { data: Buffer.alloc(100) },
+      ]);
+
+      vi.spyOn(discriminator, "anchorDiscriminator").mockReturnValue(
+        Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
+      );
+
+      // Mock decodeReserve to return SOL, USDC, and BTC reserves
+      vi.spyOn(decoder, "decodeReserve").mockImplementation((_data, pubkey) => {
+        let mint, collateral;
+        if (pubkey.equals(reserve1Pubkey)) {
+          mint = SOL_MINT;
+          collateral = "collateral_sol";
+        } else if (pubkey.equals(reserve2Pubkey)) {
+          mint = USDC_MINT;
+          collateral = "collateral_usdc";
+        } else {
+          mint = OTHER_MINT;
+          collateral = "collateral_btc";
+        }
+        
+        return {
+          reservePubkey: pubkey.toString(),
+          marketPubkey: marketPubkey.toString(),
+          liquidityMint: mint,
+          collateralMint: collateral,
+          liquidityDecimals: 6,
+          collateralDecimals: 6,
+          oraclePubkeys: [],
+          loanToValueRatio: 75,
+          liquidationThreshold: 80,
+          liquidationBonus: 500,
+          borrowFactor: 100,
+          availableAmountRaw: "1000000000",
+          borrowedAmountSfRaw: "100000000000000000000000000",
+          cumulativeBorrowRateBsfRaw: "1000000000000000000",
+          collateralMintTotalSupplyRaw: "1000000000",
+          scopePriceChain: null,
+        };
+      });
+
+      vi.spyOn(decoder, "setReserveMintCache");
+
+      // Execute with SOL+USDC allowlist
+      const allowlist = new Set([SOL_MINT, USDC_MINT]);
+      const cache = await loadReserves(mockConnection, marketPubkey, allowlist);
+
+      // Verify only SOL and USDC reserves are cached
+      // Each reserve creates 2 entries (liquidity + collateral), so 2 reserves × 2 = 4 entries
+      expect(cache.size).toBe(4);
+      expect(cache.has(SOL_MINT)).toBe(true);
+      expect(cache.has(USDC_MINT)).toBe(true);
+      expect(cache.has(OTHER_MINT)).toBe(false); // BTC should be filtered out
+      
+      // Verify setReserveMintCache was only called for SOL and USDC
+      expect(decoder.setReserveMintCache).toHaveBeenCalledTimes(2);
+    });
+
+    it("should load all reserves when no allowlist is provided", async () => {
+      const reserve1Pubkey = new PublicKey("d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q");
+      const reserve2Pubkey = new PublicKey("FRYBbRFXJ2fKJZ6q5jCQvK5c7cRZNP1jVcSPP6NEupXo");
+      
+      mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
+        { pubkey: reserve1Pubkey, account: {} },
+        { pubkey: reserve2Pubkey, account: {} },
+      ]);
+
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: Buffer.alloc(100) },
+        { data: Buffer.alloc(100) },
+      ]);
+
+      vi.spyOn(discriminator, "anchorDiscriminator").mockReturnValue(
+        Buffer.from([1, 2, 3, 4, 5, 6, 7, 8])
+      );
+
+      vi.spyOn(decoder, "decodeReserve").mockImplementation((_data, pubkey) => ({
+        reservePubkey: pubkey.toString(),
+        marketPubkey: marketPubkey.toString(),
+        liquidityMint: `mint-${pubkey.toString().slice(0, 8)}`,
+        collateralMint: `collateral-${pubkey.toString().slice(0, 8)}`,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [],
+        loanToValueRatio: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        availableAmountRaw: "1000000000",
+        borrowedAmountSfRaw: "100000000000000000000000000",
+        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        collateralMintTotalSupplyRaw: "1000000000",
+        scopePriceChain: null,
+      }));
+
+      vi.spyOn(decoder, "setReserveMintCache");
+
+      // Execute without allowlist
+      const cache = await loadReserves(mockConnection, marketPubkey);
+
+      // All reserves should be loaded: 2 reserves × 2 keys = 4 entries
+      expect(cache.size).toBe(4);
+      expect(decoder.setReserveMintCache).toHaveBeenCalledTimes(2);
+    });
+  });
 });
