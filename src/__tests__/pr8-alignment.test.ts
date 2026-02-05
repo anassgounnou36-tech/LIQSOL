@@ -76,6 +76,7 @@ describe("PR8 Health Computation Alignment", () => {
           confidence: 1000000000n, // $1 confidence
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
       [
@@ -85,6 +86,7 @@ describe("PR8 Health Computation Alignment", () => {
           confidence: 10000000n, // $0.01 confidence
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
     ]);
@@ -195,6 +197,7 @@ describe("PR8 Health Computation Alignment", () => {
           confidence: 1000000000n,
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
       // NO price for "SOL_CTOKEN" - this would cause failure if collateral mint was used for pricing
@@ -271,6 +274,7 @@ describe("PR8 Health Computation Alignment", () => {
           confidence: 1000000000n,
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
     ]);
@@ -364,6 +368,7 @@ describe("PR8 Health Computation Alignment", () => {
           confidence: 1000000000n,
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
       [
@@ -373,6 +378,7 @@ describe("PR8 Health Computation Alignment", () => {
           confidence: 10000000n,
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
     ]);

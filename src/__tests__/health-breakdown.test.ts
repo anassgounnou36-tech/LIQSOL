@@ -67,6 +67,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
           confidence: 1000000000n,
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
       [
@@ -76,6 +77,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
           confidence: 10000000n,
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
     ]);
@@ -172,6 +174,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
           confidence: 1000000000n,
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
     ]);
@@ -231,6 +234,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
           confidence: 1000000000n,
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
     ]);
@@ -304,6 +308,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
           confidence: 1000000000n,
           exponent: -9,
           slot: 1000n,
+          oracleType: "pyth",
         },
       ],
     ]);
@@ -348,6 +353,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
       confidence: 10000000n,
       exponent: -9,
       slot: 1000n,
+      oracleType: "pyth",
     });
 
     const result = computeHealthRatio({
