@@ -368,6 +368,8 @@ export class LiveObligationIndexer {
       // PR7 gate: Skip mixed obligations (touch allowlisted + non-allowlisted reserves)
       // In SOL/USDC mode, we only load allowlisted reserves. Mixed obligations cannot be
       // correctly scored without their full reserve data; partial scoring would be misleading.
+      // Note: reserveCache is guaranteed to exist here since allowedLiquidityMints check above
+      // returns early if reserveCache is not present.
       const hasOutOfScopeReserve =
         (decoded.deposits ?? []).some((d) => !this.reserveCache!.byReserve.has(d.reserve)) ||
         (decoded.borrows ?? []).some((b) => !this.reserveCache!.byReserve.has(b.reserve));

@@ -242,7 +242,8 @@ describe("LiveObligationIndexer", () => {
       // Create a mock reserve cache with only SOL reserve
       const solReservePubkey = "11111111111111111111111111111112";
       const solMint = "So11111111111111111111111111111111111111112";
-      const usdcReservePubkey = "2FVLAhS2rFpPzTGxdFtGxw8M8ufQB2SX9eP39NsHLLUy"; // Valid base58 pubkey
+      // USDC reserve pubkey - intentionally NOT loaded in cache to test mixed obligation filtering
+      const usdcReservePubkey = "2FVLAhS2rFpPzTGxdFtGxw8M8ufQB2SX9eP39NsHLLUy";
       
       const mockReserve = {
         reservePubkey: new PublicKey(solReservePubkey),
@@ -316,7 +317,8 @@ describe("LiveObligationIndexer", () => {
       // Create a mock reserve cache with both SOL and USDC reserves
       const solReservePubkey = "11111111111111111111111111111112";
       const solMint = "So11111111111111111111111111111111111111112";
-      const usdcReservePubkey = "2FVLAhS2rFpPzTGxdFtGxw8M8ufQB2SX9eP39NsHLLUy"; // Valid base58 pubkey
+      // USDC reserve pubkey - will be loaded in cache to test complete (non-mixed) obligation
+      const usdcReservePubkey = "2FVLAhS2rFpPzTGxdFtGxw8M8ufQB2SX9eP39NsHLLUy";
       const usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       
       const solReserve = {
