@@ -22,6 +22,7 @@ describe("Health Ratio and Liquidation", () => {
           "SOL",
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: "SOL", // Add liquidityMint field
             availableAmount: 1000000n,
             loanToValue: 80, // 80% LTV
             liquidationThreshold: 85, // 85% liquidation threshold
@@ -41,6 +42,7 @@ describe("Health Ratio and Liquidation", () => {
           "USDC",
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: "USDC", // Add liquidityMint field
             availableAmount: 1000000n,
             loanToValue: 90, // 90% LTV
             liquidationThreshold: 95, // 95% liquidation threshold
@@ -158,6 +160,7 @@ describe("Health Ratio and Liquidation", () => {
           "SOL",
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: "SOL", // Add liquidityMint field
             availableAmount: 1000000n,
             loanToValue: 80,
             liquidationThreshold: 85,
@@ -207,6 +210,7 @@ describe("Health Ratio and Liquidation", () => {
           "SOL",
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: "SOL", // Add liquidityMint field
             availableAmount: 1000000n,
             loanToValue: 90,
             liquidationThreshold: 95,
@@ -271,6 +275,7 @@ describe("Health Ratio and Liquidation", () => {
           "SOL",
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: "SOL", // Add liquidityMint field
             availableAmount: 1000000n,
             loanToValue: 50, // Low LTV
             liquidationThreshold: 60, // Low liquidation threshold
@@ -290,6 +295,7 @@ describe("Health Ratio and Liquidation", () => {
           "USDC",
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: "USDC", // Add liquidityMint field
             availableAmount: 1000000n,
             loanToValue: 90,
             liquidationThreshold: 95,
@@ -370,6 +376,7 @@ describe("Health Ratio and Liquidation", () => {
           "USDC",
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: "USDC", // Add liquidityMint field
             availableAmount: 1000000n,
             loanToValue: 90,
             liquidationThreshold: 95,

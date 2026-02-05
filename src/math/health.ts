@@ -153,7 +153,7 @@ function uiFromMantissaSafe(mantissa: bigint, exponent: number): number | null {
 }
 
 /**
- * Apply confidence adjustment and stablecoin clamping
+ * Apply confidence adjustment and stablecoin sanity check
  * Returns null if inputs are not finite or result is invalid
  * 
  * @param mint - Token mint address
@@ -173,6 +173,18 @@ function adjustedUiPrice(
     return null;
   }
   
+  // Sanity check for stablecoins: reject absurd base prices outside [0.5, 2.0]
+  // This catches oracle failures before applying confidence adjustments
+  if (isStableMint(mint)) {
+    if (basePrice < 0.5 || basePrice > 2.0) {
+      logger.warn(
+        { mint, basePrice },
+        "Stablecoin price outside sanity bounds [0.5, 2.0], rejecting"
+      );
+      return null;
+    }
+  }
+  
   // Apply confidence adjustment
   const adjustedPrice = side === "collateral" 
     ? Math.max(0, basePrice - confidence)
@@ -183,7 +195,7 @@ function adjustedUiPrice(
     return null;
   }
   
-  // Apply stablecoin clamp [0.99, 1.01]
+  // Apply stablecoin clamp [0.99, 1.01] to adjusted price
   if (isStableMint(mint)) {
     return Math.min(1.01, Math.max(0.99, adjustedPrice));
   }
@@ -217,7 +229,11 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       return { scored: false, reason: "MISSING_RESERVE" };
     }
     
-    const oraclePrice = prices.get(deposit.mint);
+    // Price deposits using the underlying liquidity mint, not the collateral mint (cToken)
+    // Collateral tokens are shares; the oracle represents the underlying asset
+    const priceMint = reserve.liquidityMint;
+    
+    const oraclePrice = prices.get(priceMint);
     if (!oraclePrice) {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
@@ -236,7 +252,7 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     }
     
     // Apply confidence adjustment and stablecoin clamping for collateral
-    const priceUi = adjustedUiPrice(deposit.mint, baseUi, confUi, "collateral");
+    const priceUi = adjustedUiPrice(priceMint, baseUi, confUi, "collateral");
     
     if (priceUi === null || priceUi <= 0) {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };

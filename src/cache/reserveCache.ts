@@ -21,6 +21,10 @@ const KAMINO_LENDING_PROGRAM_ID = new PublicKey(
 export interface ReserveCacheEntry {
   /** Public key of the reserve account */
   reservePubkey: PublicKey;
+  /** Liquidity mint public key (underlying asset mint for pricing) */
+  liquidityMint: string;
+  /** Collateral mint public key (for mapping deposits to reserves) */
+  collateralMint: string;
   /** Available liquidity amount (raw, not adjusted for decimals) */
   availableAmount: bigint;
   /** 
@@ -49,8 +53,6 @@ export interface ReserveCacheEntry {
   collateralDecimals: number;
   /** Scope price chain indices array (0-511) for multi-chain Scope oracles, null if not using Scope */
   scopePriceChain: number[] | null;
-  /** Collateral mint public key (for mapping deposits to reserves) */
-  collateralMint: string;
   /** 
    * Collateral exchange rate in UI units (computed from reserve state)
    * Used to convert deposit notes (collateral tokens) to underlying liquidity tokens
@@ -471,10 +473,14 @@ export async function loadReserves(
       (pk) => new PublicKey(pk)
     );
     
-    // If this reserve uses Scope, track the mint→priceChain array mapping
+    // If this reserve uses Scope, track the mint→priceChain array mapping for BOTH mints
     // This allows different reserves (mints) to use the same Scope oracle with different chain indices
+    // Mapping both liquidity and collateral mints ensures any lookup path finds the configured chains
     if (decoded.scopePriceChain !== null && decoded.scopePriceChain.length > 0) {
       const liquidityMint = decoded.liquidityMint;
+      const collateralMint = decoded.collateralMint;
+      
+      // Map liquidity mint to chain array
       scopeMintChainMap.set(liquidityMint, decoded.scopePriceChain);
       logger.debug(
         {
@@ -484,11 +490,24 @@ export async function loadReserves(
         },
         "Mapped Scope liquidity mint to price chain array"
       );
+      
+      // Map collateral mint to same chain array
+      scopeMintChainMap.set(collateralMint, decoded.scopePriceChain);
+      logger.debug(
+        {
+          reserve: pubkey.toString(),
+          collateralMint: collateralMint,
+          priceChain: decoded.scopePriceChain,
+        },
+        "Mapped Scope collateral mint to price chain array"
+      );
     }
 
     // Create cache entry
     const cacheEntry: ReserveCacheEntry = {
       reservePubkey: pubkey,
+      liquidityMint: decoded.liquidityMint,
+      collateralMint: decoded.collateralMint,
       availableAmount: BigInt(decoded.availableAmountRaw),
       cumulativeBorrowRate: 0n, // Legacy field, not used
       cumulativeBorrowRateBsfRaw: BigInt(decoded.cumulativeBorrowRateBsfRaw),
@@ -500,7 +519,6 @@ export async function loadReserves(
       liquidityDecimals: decoded.liquidityDecimals,
       collateralDecimals: decoded.collateralDecimals,
       scopePriceChain: decoded.scopePriceChain,
-      collateralMint: decoded.collateralMint,
       collateralExchangeRateUi: computeExchangeRateUi(decoded),
     };
 

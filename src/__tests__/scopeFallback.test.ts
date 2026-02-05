@@ -70,6 +70,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -123,6 +124,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -164,6 +166,12 @@ describe("Scope Fallback Chain Search Tests", () => {
     });
 
     it("should scan curated fallback candidates when primary fallbacks fail", async () => {
+      // Enable curated chain scanning for this test
+      const originalEnv = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN;
+      if ((globalThis as any).process?.env) {
+        (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN = "1";
+      }
+      
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
       
@@ -172,6 +180,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -213,6 +222,15 @@ describe("Scope Fallback Chain Search Tests", () => {
       const price = cache.get(mint1);
       expect(price).toBeDefined();
       expect(price!.price).toBe(300000000n);
+      
+      // Restore original environment
+      if ((globalThis as any).process?.env) {
+        if (originalEnv !== undefined) {
+          (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN = originalEnv;
+        } else {
+          delete (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN;
+        }
+      }
     });
 
     it("should return null when no valid price found after exhaustive search", async () => {
@@ -224,6 +242,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -268,6 +287,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -318,6 +338,12 @@ describe("Scope Fallback Chain Search Tests", () => {
 
   describe("Filter out stale prices", () => {
     it("should skip stale prices in fallback scan", async () => {
+      // Enable curated chain scanning for this test
+      const originalEnv = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN;
+      if ((globalThis as any).process?.env) {
+        (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN = "1";
+      }
+      
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
       
@@ -326,6 +352,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -369,6 +396,15 @@ describe("Scope Fallback Chain Search Tests", () => {
       const price = cache.get(mint1);
       expect(price).toBeDefined();
       expect(price!.price).toBe(200000000n);
+      
+      // Restore original environment
+      if ((globalThis as any).process?.env) {
+        if (originalEnv !== undefined) {
+          (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN = originalEnv;
+        } else {
+          delete (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN;
+        }
+      }
     });
   });
 
@@ -382,6 +418,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -431,6 +468,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -480,6 +518,7 @@ describe("Scope Fallback Chain Search Tests", () => {
           mint1,
           {
             reservePubkey: PublicKey.unique(),
+            liquidityMint: mint1,
             availableAmount: 5000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,

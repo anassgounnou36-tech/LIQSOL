@@ -391,10 +391,25 @@ function decodeScopePrice(
       }
     }
     
-    // Step 4: Scan curated list of common chain candidates
+    // Step 4: Check if curated chain scanning is enabled
+    // Check dynamically to support test environment flag changes
+    const enableScopeScan = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN === "1";
+    if (!enableScopeScan) {
+      logger.warn(
+        { 
+          chains, 
+          availablePrices: oraclePrices.prices.length,
+          hint: "Set LIQSOL_ENABLE_SCOPE_SCAN=1 to enable curated chain scanning (not recommended for production)"
+        },
+        "No usable Scope price found in configured chains and chain 0; curated scan disabled"
+      );
+      return { priceData: null, triedFallbackScan: false };
+    }
+    
+    // Step 5: Scan curated list of common chain candidates (only when explicitly enabled)
     logger.debug(
       { configuredChains: chains, candidateCount: FALLBACK_CHAIN_CANDIDATES.length },
-      "Scanning curated fallback chain candidates for Scope price"
+      "Scanning curated fallback chain candidates for Scope price (LIQSOL_ENABLE_SCOPE_SCAN=1)"
     );
     for (const chain of FALLBACK_CHAIN_CANDIDATES) {
       // Skip if already tried in configured chains or primary fallback
