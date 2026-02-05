@@ -131,9 +131,10 @@ async function main() {
         emptyObligations: stats.emptyObligations,
         skippedOtherMarkets: stats.skippedOtherMarketsCount,
         skippedAllowlist: stats.skippedAllowlistCount,
+        touchesKnownReserveCount: stats.touchesKnownReserveCount,
         unscoredReasons: stats.unscoredReasons,
       },
-      "Scoring complete"
+      "Scoring eligibility summary (PR7 gate)"
     );
     
     // Print unscored summary to console for visibility

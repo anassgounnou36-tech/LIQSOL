@@ -94,6 +94,7 @@ export class LiveObligationIndexer {
     unscoredCount: 0,
     unscoredReasons: {} as Record<string, number>,
     skippedAllowlistCount: 0, // Track obligations skipped due to allowlist filtering
+    touchesKnownReserveCount: 0, // Track obligations that reference loaded reserves (PR7 gate)
   };
   
   // Circuit breaker for decode failures
@@ -310,6 +311,21 @@ export class LiveObligationIndexer {
     liquidationEligible?: boolean;
     unscoredReason?: string;
   } {
+    // PR7 gate: determine scope by whether the obligation references any loaded reserve
+    if (this.reserveCache) {
+      const touchesKnownReserve =
+        (decoded.deposits ?? []).some((d) => this.reserveCache!.has(d.reserve)) ||
+        (decoded.borrows ?? []).some((b) => this.reserveCache!.has(b.reserve));
+
+      if (!touchesKnownReserve) {
+        this.stats.skippedOtherMarketsCount++;
+        return { unscoredReason: "OTHER_MARKET" };
+      }
+
+      // track for visibility
+      this.stats.touchesKnownReserveCount++;
+    }
+
     // Skip empty obligations (no deposits AND no borrows)
     if (decoded.deposits.length === 0 && decoded.borrows.length === 0) {
       this.stats.emptyObligations++;
@@ -786,6 +802,7 @@ export class LiveObligationIndexer {
     unscoredCount: number;
     unscoredReasons: Record<string, number>;
     skippedAllowlistCount: number;
+    touchesKnownReserveCount: number;
   } {
     const entries = Array.from(this.cache.values());
     const lastUpdateTimes = entries.map(e => e.lastUpdated);
@@ -812,6 +829,7 @@ export class LiveObligationIndexer {
       unscoredCount: this.stats.unscoredCount,
       unscoredReasons: this.stats.unscoredReasons,
       skippedAllowlistCount: this.stats.skippedAllowlistCount,
+      touchesKnownReserveCount: this.stats.touchesKnownReserveCount,
     };
   }
 
