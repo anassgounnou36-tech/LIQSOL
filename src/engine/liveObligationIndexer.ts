@@ -47,6 +47,7 @@ export interface LiveObligationIndexerConfig {
   reserveCache?: ReserveCache; // Optional: reserve cache for health scoring
   oracleCache?: OracleCache; // Optional: oracle cache for health scoring
   allowlistMints?: string[]; // Optional: only score obligations that touch these mints (SOL, USDC, etc.)
+  allowedLiquidityMints?: Set<string>; // Optional: Set of liquidity mints to filter obligations by reserve lookup
 }
 
 interface ObligationEntry {
@@ -84,6 +85,7 @@ export class LiveObligationIndexer {
   private reserveCache?: ReserveCache;
   private oracleCache?: OracleCache;
   private allowlistMints?: Set<string>; // Set of mints to filter obligations (SOL, USDC, etc.)
+  private allowedLiquidityMints?: Set<string>; // Set of liquidity mints to filter via reserve lookup
   
   // Stats tracking
   private stats = {
@@ -116,12 +118,21 @@ export class LiveObligationIndexer {
     this.reserveCache = config.reserveCache;
     this.oracleCache = config.oracleCache;
     
-    // Initialize allowlist mints if provided
+    // Initialize allowlist mints if provided (legacy - for backward compatibility)
     if (config.allowlistMints && config.allowlistMints.length > 0) {
       this.allowlistMints = new Set(config.allowlistMints);
       logger.info(
         { allowlistMints: config.allowlistMints },
         "Allowlist mode enabled - will only score obligations touching these mints"
+      );
+    }
+    
+    // Initialize allowedLiquidityMints if provided (preferred - checks via reserve lookup)
+    if (config.allowedLiquidityMints && config.allowedLiquidityMints.size > 0) {
+      this.allowedLiquidityMints = config.allowedLiquidityMints;
+      logger.info(
+        { allowedLiquidityMints: Array.from(config.allowedLiquidityMints) },
+        "Allowlist mode enabled - will only score obligations touching reserves with these liquidity mints"
       );
     }
   }
@@ -311,9 +322,33 @@ export class LiveObligationIndexer {
       return { unscoredReason: "OTHER_MARKET" };
     }
 
-    // Filter by allowlist mints if configured
+    // Filter by allowedLiquidityMints if configured (preferred method)
+    // Check via reserve lookup to get the underlying liquidityMint
+    if (this.allowedLiquidityMints && this.allowedLiquidityMints.size > 0) {
+      if (!this.reserveCache) {
+        this.stats.skippedAllowlistCount++;
+        return { unscoredReason: "NOT_IN_ALLOWLIST" };
+      }
+
+      const touchesAllowlistedLiquidityMint =
+        (decoded.deposits ?? []).some((d) => {
+          const r = this.reserveCache!.get(d.reserve);
+          return r ? this.allowedLiquidityMints!.has(r.liquidityMint) : false;
+        }) ||
+        (decoded.borrows ?? []).some((b) => {
+          const r = this.reserveCache!.get(b.reserve);
+          return r ? this.allowedLiquidityMints!.has(r.liquidityMint) : false;
+        });
+
+      if (!touchesAllowlistedLiquidityMint) {
+        this.stats.skippedAllowlistCount++;
+        // Do not increment unscoredCount; treat as skipped for PR7 gate
+        return { unscoredReason: "NOT_IN_ALLOWLIST" };
+      }
+    }
+    // Fallback: Filter by allowlist mints if configured (legacy - direct mint check)
     // Only score obligations that touch at least one allowlisted mint
-    if (this.allowlistMints && this.allowlistMints.size > 0) {
+    else if (this.allowlistMints && this.allowlistMints.size > 0) {
       const obligationMints = new Set<string>();
       
       // Collect all mints from deposits and borrows

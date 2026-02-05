@@ -180,16 +180,26 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
  *
  * @param connection - Solana RPC connection
  * @param marketPubkey - The Kamino lending market public key
+ * @param allowlistLiquidityMints - Optional set of liquidity mints to filter reserves early
  * @returns Map of liquidity mint (as string) to ReserveCacheEntry
  */
 export async function loadReserves(
   connection: Connection,
-  marketPubkey: PublicKey
+  marketPubkey: PublicKey,
+  allowlistLiquidityMints?: Set<string>
 ): Promise<ReserveCache> {
   logger.info(
     { market: marketPubkey.toString() },
     "Loading reserves for market..."
   );
+  
+  // Log allowlist filtering if enabled
+  if (allowlistLiquidityMints && allowlistLiquidityMints.size > 0) {
+    logger.info(
+      { allowlistMints: Array.from(allowlistLiquidityMints) },
+      "Filtering reserves by allowlisted liquidity mints"
+    );
+  }
 
   // Calculate discriminator for Reserve accounts
   const reserveDiscriminator = anchorDiscriminator("Reserve");
@@ -268,6 +278,7 @@ export async function loadReserves(
   const decodedReserves: Array<{ pubkey: PublicKey; decoded: DecodedReserve }> = [];
   let decodedCount = 0;
   let matchedCount = 0;
+  let allowlistFilteredCount = 0;
 
   for (const { pubkey, data } of allReserveAccounts) {
     if (!data) {
@@ -289,6 +300,16 @@ export async function loadReserves(
         continue;
       }
 
+      // Filter by allowlist if configured (early filtering)
+      if (allowlistLiquidityMints && !allowlistLiquidityMints.has(decoded.liquidityMint)) {
+        allowlistFilteredCount++;
+        logger.debug(
+          { reserve: pubkey.toString(), liquidityMint: decoded.liquidityMint },
+          "Reserve not in allowlist, skipping"
+        );
+        continue;
+      }
+
       matchedCount++;
       
       // Store decoded reserve for fallback processing
@@ -305,6 +326,7 @@ export async function loadReserves(
     {
       decoded: decodedCount,
       matchedMarket: matchedCount,
+      allowlistFiltered: allowlistFilteredCount,
     },
     "Decoded reserves, starting SPL Mint fallback for missing decimals..."
   );

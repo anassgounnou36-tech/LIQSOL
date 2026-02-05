@@ -5,6 +5,7 @@ import { logger } from "../observability/logger.js";
 import { loadReserves } from "../cache/reserveCache.js";
 import { loadOracles } from "../cache/oracleCache.js";
 import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
+import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
 
 /**
  * CLI tool for scoring obligations from snapshot with health ratios and liquidation eligibility
@@ -15,17 +16,14 @@ import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
  *   - KAMINO_MARKET_PUBKEY: The market pubkey to filter obligations
  *   - KAMINO_KLEND_PROGRAM_ID: The Kamino Lending program ID
  *   - RPC_PRIMARY: Solana RPC endpoint URL
- *   - ALLOWLIST_MINTS (optional): Comma-separated list of mint addresses to filter obligations
- *     Example: ALLOWLIST_MINTS="So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
- *     This enables allowlist mode - only obligations touching these mints will be scored.
+ *   - LIQSOL_LIQ_MINT_ALLOWLIST (optional): Comma-separated list of liquidity mint addresses to filter
+ *     Example: LIQSOL_LIQ_MINT_ALLOWLIST="So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+ *     Default: SOL + USDC (PR7 gate behavior)
+ *     To disable allowlist: set to empty string
  * 
  * Loads reserves and oracles, then computes health scores for obligations from snapshot,
  * and prints top-N riskiest accounts sorted by health ratio.
  */
-
-// Well-known mint addresses for convenience
-const SOL_MINT = "So11111111111111111111111111111111111111112"; // Native SOL (wrapped SOL)
-const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC
 
 async function main() {
   logger.info("Starting scored obligations snapshot...");
@@ -62,18 +60,35 @@ async function main() {
     logger.info({ rpcUrl: env.RPC_PRIMARY }, "Connected to Solana RPC");
 
     // Parse allowlist mints from environment if configured
-    let allowlistMints: string[] | undefined;
-    if (env.ALLOWLIST_MINTS) {
-      allowlistMints = env.ALLOWLIST_MINTS.split(",").map(m => m.trim()).filter(m => m.length > 0);
-      logger.info(
-        { allowlistMints },
-        "Allowlist mode enabled - only scoring obligations touching these mints"
-      );
+    // Default to SOL+USDC for PR7 gate behavior
+    let allowlistMints: string[] = [SOL_MINT, USDC_MINT];
+
+    if (env.LIQSOL_LIQ_MINT_ALLOWLIST !== undefined) {
+      if (env.LIQSOL_LIQ_MINT_ALLOWLIST.length > 0) {
+        allowlistMints = env.LIQSOL_LIQ_MINT_ALLOWLIST
+          .split(",")
+          .map((m) => m.trim())
+          .filter(Boolean);
+      } else {
+        // Empty string disables allowlist
+        allowlistMints = [];
+      }
     }
 
-    // Load reserves
+    if (allowlistMints.length > 0) {
+      logger.info(
+        { allowlistMints },
+        "Allowlist mode enabled - filtering by liquidity mints"
+      );
+    } else {
+      logger.info("Allowlist mode disabled - scoring all obligations");
+    }
+
+    const allowedLiquidityMints = allowlistMints.length > 0 ? new Set(allowlistMints) : undefined;
+
+    // Load reserves with allowlist filtering
     logger.info("Loading reserves for market...");
-    const reserveCache = await loadReserves(connection, marketPubkey);
+    const reserveCache = await loadReserves(connection, marketPubkey, allowedLiquidityMints);
     logger.info({ reserveCount: reserveCache.size }, "Reserves loaded");
 
     // Load oracles
@@ -90,7 +105,7 @@ async function main() {
       rpcUrl: env.RPC_PRIMARY,
       reserveCache,
       oracleCache,
-      allowlistMints, // Pass allowlist mints for filtering
+      allowedLiquidityMints, // Pass allowlist set for reserve-based filtering
       bootstrapBatchSize: 100,
       bootstrapConcurrency: 5, // Higher concurrency for batch scoring
     });
