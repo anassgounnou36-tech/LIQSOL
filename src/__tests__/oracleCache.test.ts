@@ -59,7 +59,7 @@ describe("Oracle Cache Tests", () => {
           mint2,
           {
             reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
+            liquidityMint: mint2,
             availableAmount: 10000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
@@ -218,7 +218,7 @@ describe("Oracle Cache Tests", () => {
           mint2,
           {
             reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
+            liquidityMint: mint2,
             availableAmount: 10000000n,
             cumulativeBorrowRate: 0n,
             cumulativeBorrowRateBsfRaw: 1000000000000000000n,
