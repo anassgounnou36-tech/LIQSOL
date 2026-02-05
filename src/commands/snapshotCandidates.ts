@@ -248,6 +248,15 @@ async function main() {
           console.log(`  Borrow USD (raw): $${breakdown.totals.borrowUsdRaw.toFixed(2)}`);
           console.log(`  Borrow USD (adjusted): $${breakdown.totals.borrowUsdAdj.toFixed(2)}`);
           console.log(`  Health Ratio: ${breakdown.totals.healthRatio.toFixed(4)}`);
+          if (breakdown.totals.healthRatioRaw !== undefined) {
+            console.log(`  Health Ratio (unclamped): ${breakdown.totals.healthRatioRaw.toFixed(4)}`);
+          }
+          
+          // Compare with candidate table values for consistency check
+          console.log("\n  Candidate table values (for comparison):");
+          console.log(`    Borrow Value: $${c.borrowValueUsd.toFixed(2)}`);
+          console.log(`    Collateral Value: $${c.collateralValueUsd.toFixed(2)}`);
+          console.log(`    Health Ratio: ${c.healthRatio.toFixed(4)}`);
           
           if (breakdown.flags.missingLegs > 0 || breakdown.flags.approximations.length > 0) {
             console.log("\nFlags:");
