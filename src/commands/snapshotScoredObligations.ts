@@ -89,7 +89,7 @@ async function main() {
     // Load reserves with allowlist filtering
     logger.info("Loading reserves for market...");
     const reserveCache = await loadReserves(connection, marketPubkey, allowedLiquidityMints);
-    logger.info({ reserveCount: reserveCache.size }, "Reserves loaded");
+    logger.info({ reserveCount: reserveCache.byReserve.size }, "Reserves loaded");
 
     // Load oracles
     logger.info("Loading oracles...");

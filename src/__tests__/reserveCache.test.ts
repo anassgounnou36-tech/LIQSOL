@@ -114,15 +114,21 @@ describe("Reserve Cache Tests", () => {
       expect(mockConnection.getMultipleAccountsInfo).toHaveBeenCalledTimes(1);
       expect(decoder.decodeReserve).toHaveBeenCalledTimes(2);
 
-      // Verify cache has 4 entries: 2 reserves × 2 keys each (liquidity + collateral)
-      expect(cache.size).toBe(4);
-      expect(cache.has(mint1)).toBe(true);
-      expect(cache.has(mint2)).toBe(true);
-      expect(cache.has("collateral1")).toBe(true);
-      expect(cache.has("collateral2")).toBe(true);
+      // Verify dual-index structure
+      // byMint: 2 reserves × 2 keys each (liquidity + collateral) = 4 entries
+      expect(cache.byMint.size).toBe(4);
+      expect(cache.byMint.has(mint1)).toBe(true);
+      expect(cache.byMint.has(mint2)).toBe(true);
+      expect(cache.byMint.has("collateral1")).toBe(true);
+      expect(cache.byMint.has("collateral2")).toBe(true);
+      
+      // byReserve: 2 reserves = 2 entries
+      expect(cache.byReserve.size).toBe(2);
+      expect(cache.byReserve.has(reserve1Pubkey.toString())).toBe(true);
+      expect(cache.byReserve.has(reserve2Pubkey.toString())).toBe(true);
 
-      // Verify reserve 1
-      const entry1 = cache.get(mint1);
+      // Verify reserve 1 via byMint
+      const entry1 = cache.byMint.get(mint1);
       expect(entry1).toBeDefined();
       expect(entry1!.reservePubkey.toString()).toBe(reserve1Pubkey.toString());
       expect(entry1!.availableAmount).toBe(5000000n);
@@ -132,8 +138,8 @@ describe("Reserve Cache Tests", () => {
       expect(entry1!.oraclePubkeys.length).toBe(1);
       expect(entry1!.oraclePubkeys[0].toString()).toBe(oracle1);
 
-      // Verify reserve 2
-      const entry2 = cache.get(mint2);
+      // Verify reserve 2 via byMint
+      const entry2 = cache.byMint.get(mint2);
       expect(entry2).toBeDefined();
       expect(entry2!.reservePubkey.toString()).toBe(reserve2Pubkey.toString());
       expect(entry2!.availableAmount).toBe(10000000n);
@@ -142,6 +148,10 @@ describe("Reserve Cache Tests", () => {
       expect(entry2!.liquidationBonus).toBe(450);
       expect(entry2!.oraclePubkeys.length).toBe(1);
       expect(entry2!.oraclePubkeys[0].toString()).toBe(oracle2);
+      
+      // Verify byReserve lookups return same entries
+      expect(cache.byReserve.get(reserve1Pubkey.toString())).toBe(entry1);
+      expect(cache.byReserve.get(reserve2Pubkey.toString())).toBe(entry2);
 
       // Verify setReserveMintCache was called for both reserves with both mints
       expect(setReserveMintCacheSpy).toHaveBeenCalledTimes(2);
@@ -230,12 +240,17 @@ describe("Reserve Cache Tests", () => {
       const cache = await loadReserves(mockConnection, marketPubkey);
 
       // Only reserve 1 should be in cache (matches market)
-      // Cache stores both liquidity and collateral mints, so 2 entries for 1 reserve
-      expect(cache.size).toBe(2);
-      expect(cache.has("mint1")).toBe(true);
-      expect(cache.has("collateral1")).toBe(true);
-      expect(cache.has("mint2")).toBe(false);
-      expect(cache.has("collateral2")).toBe(false);
+      // byMint: Cache stores both liquidity and collateral mints, so 2 entries for 1 reserve
+      expect(cache.byMint.size).toBe(2);
+      expect(cache.byMint.has("mint1")).toBe(true);
+      expect(cache.byMint.has("collateral1")).toBe(true);
+      expect(cache.byMint.has("mint2")).toBe(false);
+      expect(cache.byMint.has("collateral2")).toBe(false);
+      
+      // byReserve: Only 1 reserve
+      expect(cache.byReserve.size).toBe(1);
+      expect(cache.byReserve.has(reserve1Pubkey.toString())).toBe(true);
+      expect(cache.byReserve.has(reserve2Pubkey.toString())).toBe(false);
     });
 
     it("should handle empty reserve list", async () => {
@@ -248,7 +263,8 @@ describe("Reserve Cache Tests", () => {
 
       const cache = await loadReserves(mockConnection, marketPubkey);
 
-      expect(cache.size).toBe(0);
+      expect(cache.byMint.size).toBe(0);
+      expect(cache.byReserve.size).toBe(0);
       expect(mockConnection.getMultipleAccountsInfo).not.toHaveBeenCalled();
     });
 
@@ -272,7 +288,8 @@ describe("Reserve Cache Tests", () => {
 
       const cache = await loadReserves(mockConnection, marketPubkey);
 
-      expect(cache.size).toBe(0);
+      expect(cache.byMint.size).toBe(0);
+      expect(cache.byReserve.size).toBe(0);
     });
 
     it("should handle decode errors gracefully", async () => {
@@ -300,7 +317,8 @@ describe("Reserve Cache Tests", () => {
       const cache = await loadReserves(mockConnection, marketPubkey);
 
       // Should return empty cache without throwing
-      expect(cache.size).toBe(0);
+      expect(cache.byMint.size).toBe(0);
+      expect(cache.byReserve.size).toBe(0);
     });
 
     it("should batch fetch accounts in chunks", async () => {
@@ -359,8 +377,10 @@ describe("Reserve Cache Tests", () => {
 
       // Should be called twice: once for first 100, once for remaining 50
       expect(mockConnection.getMultipleAccountsInfo).toHaveBeenCalledTimes(2);
-      // Cache stores both liquidity and collateral mints: 150 reserves × 2 = 300 entries
-      expect(cache.size).toBe(300);
+      // byMint: Cache stores both liquidity and collateral mints: 150 reserves × 2 = 300 entries
+      expect(cache.byMint.size).toBe(300);
+      // byReserve: 150 reserves = 150 entries
+      expect(cache.byReserve.size).toBe(150);
     });
 
     it("should handle reserves with missing decimals and fetch from SPL mint accounts", async () => {
@@ -442,12 +462,16 @@ describe("Reserve Cache Tests", () => {
       expect(mockConnection.getMultipleAccountsInfo).toHaveBeenCalledTimes(2);
 
       // Verify cache was populated (both liquidity and collateral mints)
-      expect(cache.size).toBe(2);
-      expect(cache.has(liquidityMint.toString())).toBe(true);
-      expect(cache.has(collateralMint.toString())).toBe(true);
+      expect(cache.byMint.size).toBe(2);
+      expect(cache.byMint.has(liquidityMint.toString())).toBe(true);
+      expect(cache.byMint.has(collateralMint.toString())).toBe(true);
+      
+      // Verify byReserve has 1 entry
+      expect(cache.byReserve.size).toBe(1);
+      expect(cache.byReserve.has(reserve1Pubkey.toString())).toBe(true);
 
       // Verify decimals were resolved from mint account
-      const entry = cache.get(liquidityMint.toString());
+      const entry = cache.byMint.get(liquidityMint.toString());
       expect(entry).toBeDefined();
       expect(entry!.liquidityDecimals).toBe(6);
       expect(entry!.collateralDecimals).toBe(9);
@@ -507,7 +531,8 @@ describe("Reserve Cache Tests", () => {
       const cache = await loadReserves(mockConnection, marketPubkey);
 
       // Reserve should not be cached since decimals couldn't be resolved
-      expect(cache.size).toBe(0);
+      expect(cache.byMint.size).toBe(0);
+      expect(cache.byReserve.size).toBe(0);
     });
   });
 
@@ -561,7 +586,7 @@ describe("Reserve Cache Tests", () => {
       const cache = await loadReserves(mockConnection, marketPubkey);
 
       // Verify cache entry
-      const entry = cache.get("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+      const entry = cache.byMint.get("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
       expect(entry).toBeDefined();
       
       // With the corrected formula: exchangeRate = collateralSupply / totalLiquidity
@@ -618,7 +643,7 @@ describe("Reserve Cache Tests", () => {
 
       const cache = await loadReserves(mockConnection, marketPubkey);
 
-      const entry = cache.get("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+      const entry = cache.byMint.get("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
       expect(entry).toBeDefined();
       
       // exchangeRate = 1200 / 1100 = 1.0909...
@@ -690,11 +715,14 @@ describe("Reserve Cache Tests", () => {
       const cache = await loadReserves(mockConnection, marketPubkey, allowlist);
 
       // Verify only SOL and USDC reserves are cached
-      // Each reserve creates 2 entries (liquidity + collateral), so 2 reserves × 2 = 4 entries
-      expect(cache.size).toBe(4);
-      expect(cache.has(SOL_MINT)).toBe(true);
-      expect(cache.has(USDC_MINT)).toBe(true);
-      expect(cache.has(BTC_MINT)).toBe(false); // BTC should be filtered out
+      // byMint: Each reserve creates 2 entries (liquidity + collateral), so 2 reserves × 2 = 4 entries
+      expect(cache.byMint.size).toBe(4);
+      expect(cache.byMint.has(SOL_MINT)).toBe(true);
+      expect(cache.byMint.has(USDC_MINT)).toBe(true);
+      expect(cache.byMint.has(BTC_MINT)).toBe(false); // BTC should be filtered out
+      
+      // byReserve: 2 reserves = 2 entries
+      expect(cache.byReserve.size).toBe(2);
       
       // Verify setReserveMintCache was only called for SOL and USDC
       expect(decoder.setReserveMintCache).toHaveBeenCalledTimes(2);
@@ -742,8 +770,11 @@ describe("Reserve Cache Tests", () => {
       // Execute without allowlist
       const cache = await loadReserves(mockConnection, marketPubkey);
 
-      // All reserves should be loaded: 2 reserves × 2 keys = 4 entries
-      expect(cache.size).toBe(4);
+      // All reserves should be loaded
+      // byMint: 2 reserves × 2 keys = 4 entries
+      expect(cache.byMint.size).toBe(4);
+      // byReserve: 2 reserves = 2 entries
+      expect(cache.byReserve.size).toBe(2);
       expect(decoder.setReserveMintCache).toHaveBeenCalledTimes(2);
     });
   });

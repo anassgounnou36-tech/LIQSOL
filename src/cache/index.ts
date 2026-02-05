@@ -15,7 +15,7 @@ import {
  * Combined cache result containing both reserve and oracle data
  */
 export interface CacheResult {
-  /** Reserve cache keyed by liquidity mint */
+  /** Reserve cache with dual-index structure (byMint and byReserve) */
   reserves: ReserveCache;
   /** Oracle cache keyed by mint */
   oracles: OracleCache;
@@ -50,11 +50,11 @@ export async function loadMarketCaches(
 
   // Sanity check: Ensure we have a reasonable number of reserves
   const MIN_EXPECTED_RESERVES = 5;
-  if (reserves.size < MIN_EXPECTED_RESERVES) {
+  if (reserves.byReserve.size < MIN_EXPECTED_RESERVES) {
     logger.warn(
       {
         market: marketPubkey.toString(),
-        reserveCount: reserves.size,
+        reserveCount: reserves.byReserve.size,
         minExpected: MIN_EXPECTED_RESERVES,
       },
       "WARNING: Fewer reserves than expected loaded. This may indicate a configuration issue or RPC problem."
@@ -62,13 +62,13 @@ export async function loadMarketCaches(
   }
 
   // Log loaded mints for debugging
-  const reserveMints = Array.from(reserves.keys());
+  const reserveMints = Array.from(reserves.byMint.keys());
   const oracleMints = Array.from(oracles.keys());
   
   logger.info(
     {
       market: marketPubkey.toString(),
-      reserves: reserves.size,
+      reserves: reserves.byReserve.size,
       oracles: oracles.size,
       elapsedMs: elapsed,
     },
