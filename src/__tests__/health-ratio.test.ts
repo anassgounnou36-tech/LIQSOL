@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { computeHealthRatio, type HealthRatioResult } from "../math/health.js";
 import { isLiquidatable } from "../math/liquidation.js";
 import { PublicKey } from "@solana/web3.js";
-import type { ReserveCache } from "../cache/reserveCache.js";
+import type { ReserveCacheEntry } from "../cache/reserveCache.js";
 import type { OracleCache } from "../cache/oracleCache.js";
 import type { ObligationDeposit, ObligationBorrow } from "../kamino/types.js";
 
@@ -17,7 +17,7 @@ function expectScored(result: HealthRatioResult): Scored {
 describe("Health Ratio and Liquidation", () => {
   describe("computeHealthRatio", () => {
     it("should compute health ratio correctly for healthy position", () => {
-      const reserves: ReserveCache = new Map([
+      const reserves: Map<string, ReserveCacheEntry> = new Map([
         [
           "SOL",
           {
@@ -116,7 +116,7 @@ describe("Health Ratio and Liquidation", () => {
     });
 
     it("should handle missing reserve gracefully", () => {
-      const reserves: ReserveCache = new Map();
+      const reserves: Map<string, ReserveCacheEntry> = new Map();
       const prices: OracleCache = new Map([
         [
           "SOL",
@@ -155,7 +155,7 @@ describe("Health Ratio and Liquidation", () => {
     });
 
     it("should handle missing price gracefully", () => {
-      const reserves: ReserveCache = new Map([
+      const reserves: Map<string, ReserveCacheEntry> = new Map([
         [
           "SOL",
           {
@@ -205,7 +205,7 @@ describe("Health Ratio and Liquidation", () => {
     });
 
     it("should clamp health ratio to [0, 2]", () => {
-      const reserves: ReserveCache = new Map([
+      const reserves: Map<string, ReserveCacheEntry> = new Map([
         [
           "SOL",
           {
@@ -270,7 +270,7 @@ describe("Health Ratio and Liquidation", () => {
     });
 
     it("should return 0 health ratio for underwater position", () => {
-      const reserves: ReserveCache = new Map([
+      const reserves: Map<string, ReserveCacheEntry> = new Map([
         [
           "SOL",
           {
@@ -371,7 +371,7 @@ describe("Health Ratio and Liquidation", () => {
     it("should correctly convert deposits using inverted exchange rate formula", () => {
       // Test the corrected deposit conversion: depositUi = depositedNotesUi / exchangeRateUi
       // Scenario: Exchange rate > 1 (collateral tokens worth more than liquidity tokens due to accrued interest)
-      const reserves: ReserveCache = new Map([
+      const reserves: Map<string, ReserveCacheEntry> = new Map([
         [
           "USDC",
           {
