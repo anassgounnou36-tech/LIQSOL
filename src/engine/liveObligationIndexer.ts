@@ -312,10 +312,11 @@ export class LiveObligationIndexer {
     unscoredReason?: string;
   } {
     // PR7 gate: determine scope by whether the obligation references any loaded reserve
+    // Use byReserve index for membership checks (deposit.reserve/borrow.reserve are reserve pubkeys)
     if (this.reserveCache) {
       const touchesKnownReserve =
-        (decoded.deposits ?? []).some((d) => this.reserveCache!.has(d.reserve)) ||
-        (decoded.borrows ?? []).some((b) => this.reserveCache!.has(b.reserve));
+        (decoded.deposits ?? []).some((d) => this.reserveCache!.byReserve.has(d.reserve)) ||
+        (decoded.borrows ?? []).some((b) => this.reserveCache!.byReserve.has(b.reserve));
 
       if (!touchesKnownReserve) {
         this.stats.skippedOtherMarketsCount++;
@@ -340,6 +341,7 @@ export class LiveObligationIndexer {
 
     // Filter by allowedLiquidityMints if configured (preferred method)
     // Check via reserve lookup to get the underlying liquidityMint
+    // Use byReserve index for reserve lookup (deposit.reserve/borrow.reserve are reserve pubkeys)
     if (this.allowedLiquidityMints && this.allowedLiquidityMints.size > 0) {
       if (!this.reserveCache) {
         this.stats.skippedAllowlistCount++;
@@ -348,11 +350,11 @@ export class LiveObligationIndexer {
 
       const touchesAllowlistedLiquidityMint =
         (decoded.deposits ?? []).some((d) => {
-          const r = this.reserveCache!.get(d.reserve);
+          const r = this.reserveCache!.byReserve.get(d.reserve);
           return r ? this.allowedLiquidityMints!.has(r.liquidityMint) : false;
         }) ||
         (decoded.borrows ?? []).some((b) => {
-          const r = this.reserveCache!.get(b.reserve);
+          const r = this.reserveCache!.byReserve.get(b.reserve);
           return r ? this.allowedLiquidityMints!.has(r.liquidityMint) : false;
         });
 
@@ -388,11 +390,11 @@ export class LiveObligationIndexer {
     }
 
     try {
-      // Compute health ratio
+      // Compute health ratio using byMint index for health computation
       const result = computeHealthRatio({
         deposits: decoded.deposits,
         borrows: decoded.borrows,
-        reserves: this.reserveCache,
+        reserves: this.reserveCache.byMint,
         prices: this.oracleCache,
       });
 

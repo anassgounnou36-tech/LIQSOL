@@ -61,9 +61,16 @@ export interface ReserveCacheEntry {
 }
 
 /**
- * Reserve cache mapping liquidity mint to reserve data
+ * Reserve cache with dual-index structure for efficient lookups
+ * - byMint: Maps mint (liquidity or collateral) to reserve data for health math
+ * - byReserve: Maps reserve pubkey to reserve data for membership/allowlist checks
  */
-export type ReserveCache = Map<string, ReserveCacheEntry>;
+export interface ReserveCache {
+  /** Index by mint (liquidity or collateral) for health computation and oracle lookups */
+  byMint: Map<string, ReserveCacheEntry>;
+  /** Index by reserve pubkey for membership checks and allowlist filtering */
+  byReserve: Map<string, ReserveCacheEntry>;
+}
 
 /**
  * Scope mint chain map - maps liquidity mint to priceChain indices array
@@ -238,7 +245,7 @@ export async function loadReserves(
 
   if (accountInfos.length === 0) {
     logger.warn("No reserves found for market");
-    return new Map();
+    return { byMint: new Map(), byReserve: new Map() };
   }
 
   // Extract pubkeys for batch fetching
@@ -460,8 +467,9 @@ export async function loadReserves(
     }
   }
 
-  // Step 5: Build cache and compute exchange rates
-  const cache = new Map<string, ReserveCacheEntry>();
+  // Step 5: Build dual-index cache and compute exchange rates
+  const byMint = new Map<string, ReserveCacheEntry>();
+  const byReserve = new Map<string, ReserveCacheEntry>();
   let cachedCount = 0;
   let failedDecodeCount = 0;
 
@@ -544,10 +552,15 @@ export async function loadReserves(
       collateralExchangeRateUi: computeExchangeRateUi(decoded),
     };
 
-    // Store in cache keyed by BOTH liquidity and collateral mints
+    // Store in byMint index keyed by BOTH liquidity and collateral mints
     // This enables lookups by deposit.mint (collateral mint) to find the reserve and prices
-    cache.set(decoded.liquidityMint, cacheEntry);
-    cache.set(decoded.collateralMint, cacheEntry);
+    byMint.set(decoded.liquidityMint, cacheEntry);
+    byMint.set(decoded.collateralMint, cacheEntry);
+    
+    // Store in byReserve index keyed by reserve pubkey
+    // This enables membership checks: obligation.deposit.reserve or obligation.borrow.reserve
+    byReserve.set(pubkey.toString(), cacheEntry);
+    
     cachedCount++;
 
     // Populate setReserveMintCache for obligation decoding
@@ -588,27 +601,40 @@ export async function loadReserves(
     );
   }
 
-  return cache;
+  return { byMint, byReserve };
 }
 
 /**
- * Helper function to get all mints that reference a specific oracle pubkey
+ * Helper function to get all liquidity mints that reference a specific oracle pubkey
  * Used for mapping oracle prices to all reserves that use that oracle
+ * 
+ * NOTE: Returns only liquidity mints (not collateral mints) to avoid duplicates,
+ * since each reserve is stored twice in byMint (once for liquidity, once for collateral)
  * 
  * @param reserveCache - The reserve cache to search
  * @param oraclePubkey - Oracle public key as string
- * @returns Array of mint addresses (strings) that use this oracle
+ * @returns Array of liquidity mint addresses (strings) that use this oracle
  */
 export function getMintsByOracle(
   reserveCache: ReserveCache,
   oraclePubkey: string
 ): string[] {
   const result: string[] = [];
-  for (const [mint, reserve] of reserveCache.entries()) {
-    // Check if any oracle in the reserve matches (compare as PublicKey first for efficiency)
+  const seen = new Set<string>(); // Track which reserves we've processed
+  
+  for (const [, reserve] of reserveCache.byMint.entries()) {
+    // Skip if we've already seen this reserve (avoids processing same reserve twice)
+    const reserveKey = reserve.reservePubkey.toString();
+    if (seen.has(reserveKey)) {
+      continue;
+    }
+    
+    // Check if any oracle in the reserve matches
     const hasOracle = reserve.oraclePubkeys.some(pk => pk.toString() === oraclePubkey);
     if (hasOracle) {
-      result.push(mint);
+      // Only add liquidity mint (not collateral mint) to avoid duplicates
+      result.push(reserve.liquidityMint);
+      seen.add(reserveKey);
     }
   }
   return result;

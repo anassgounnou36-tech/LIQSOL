@@ -34,7 +34,7 @@ export interface HealthRatioInput {
   deposits: ObligationDeposit[];
   /** Array of borrowed positions */
   borrows: ObligationBorrow[];
-  /** Reserve cache keyed by mint */
+  /** Reserve cache with dual-index structure */
   reserves: Map<string, ReserveCacheEntry>;
   /** Oracle price cache keyed by mint */
   prices: Map<string, OraclePriceData>;

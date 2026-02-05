@@ -496,7 +496,7 @@ export async function loadOracles(
   const oraclePubkeySet = new Set<string>();
   const oracleToMints = new Map<string, Set<string>>();
 
-  for (const [mint, reserve] of reserveCache.entries()) {
+  for (const [mint, reserve] of reserveCache.byMint.entries()) {
     for (const oraclePubkey of reserve.oraclePubkeys) {
       const oraclePubkeyStr = oraclePubkey.toString();
       oraclePubkeySet.add(oraclePubkeyStr);
@@ -561,13 +561,13 @@ export async function loadOracles(
   );
 
   // Diagnostic: Check oracle coverage
-  const reserveCount = reserveCache.size;
+  const reserveCount = reserveCache.byMint.size;
   if (oraclePubkeys.length < 10 && reserveCount > 50) {
     logger.warn(
       {
         uniqueOracles: oraclePubkeys.length,
         reserveCount,
-        sampleReserves: Array.from(reserveCache.entries()).slice(0, 3).map(([mint, reserve]) => ({
+        sampleReserves: Array.from(reserveCache.byMint.entries()).slice(0, 3).map(([mint, reserve]) => ({
           mint,
           oracleCount: reserve.oraclePubkeys.length,
           oracles: reserve.oraclePubkeys.map(pk => pk.toString()),
