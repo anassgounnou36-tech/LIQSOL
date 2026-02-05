@@ -34,48 +34,52 @@ describe("Oracle Cache Tests", () => {
       );
 
       // Create mock reserve cache
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: null,
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oracle1],
-          },
-        ],
-        [
-          mint2,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint2,
-            availableAmount: 10000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: null,
-            loanToValue: 70,
-            liquidationThreshold: 75,
-            liquidationBonus: 450,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oracle2],
-          },
-        ],
-      ]);
+      const reservePubkey1 = PublicKey.unique();
+      const reserveEntry1 = {
+        reservePubkey: reservePubkey1,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oracle1],
+      };
+      const reservePubkey2 = PublicKey.unique();
+      const reserveEntry2 = {
+        reservePubkey: reservePubkey2,
+        liquidityMint: mint2,
+        availableAmount: 10000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        loanToValue: 70,
+        liquidationThreshold: 75,
+        liquidationBonus: 450,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oracle2],
+      };
+      const reserveCache: ReserveCache = {
+        byMint: new Map([
+          [mint1, reserveEntry1],
+          [mint2, reserveEntry2],
+        ]),
+        byReserve: new Map([
+          [reservePubkey1.toString(), reserveEntry1],
+          [reservePubkey2.toString(), reserveEntry2],
+        ]),
+      };
 
       // Mock Pyth price account data for oracle1
       const pythData = Buffer.alloc(3500);
@@ -138,7 +142,7 @@ describe("Oracle Cache Tests", () => {
     });
 
     it("should handle empty reserve cache", async () => {
-      const reserveCache: ReserveCache = new Map();
+      const reserveCache: ReserveCache = { byMint: new Map(), byReserve: new Map() };
       mockConnection.getMultipleAccountsInfo = vi.fn();
 
       const cache = await loadOracles(mockConnection, reserveCache);
@@ -153,28 +157,28 @@ describe("Oracle Cache Tests", () => {
         "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
       );
 
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: null,
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oracle1],
-          },
-        ],
-      ]);
+      const reservePubkey = PublicKey.unique();
+      const reserveEntry = {
+        reservePubkey: reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oracle1],
+      };
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
         null,
@@ -193,48 +197,52 @@ describe("Oracle Cache Tests", () => {
       );
 
       // Both reserves use the same oracle
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: null,
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [sharedOracle],
-          },
-        ],
-        [
-          mint2,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint2,
-            availableAmount: 10000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: null,
-            loanToValue: 70,
-            liquidationThreshold: 75,
-            liquidationBonus: 450,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [sharedOracle],
-          },
-        ],
-      ]);
+      const reservePubkey1 = PublicKey.unique();
+      const reserveEntry1 = {
+        reservePubkey: reservePubkey1,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [sharedOracle],
+      };
+      const reservePubkey2 = PublicKey.unique();
+      const reserveEntry2 = {
+        reservePubkey: reservePubkey2,
+        liquidityMint: mint2,
+        availableAmount: 10000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        loanToValue: 70,
+        liquidationThreshold: 75,
+        liquidationBonus: 450,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [sharedOracle],
+      };
+      const reserveCache: ReserveCache = {
+        byMint: new Map([
+          [mint1, reserveEntry1],
+          [mint2, reserveEntry2],
+        ]),
+        byReserve: new Map([
+          [reservePubkey1.toString(), reserveEntry1],
+          [reservePubkey2.toString(), reserveEntry2],
+        ]),
+      };
 
       // Mock Pyth data
       const pythData = Buffer.alloc(3500);
@@ -274,28 +282,28 @@ describe("Oracle Cache Tests", () => {
       );
 
       // Reserve has multiple oracles
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: null,
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oracle1, oracle2],
-          },
-        ],
-      ]);
+      const reservePubkey = PublicKey.unique();
+      const reserveEntry = {
+        reservePubkey: reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oracle1, oracle2],
+      };
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Mock Pyth data for oracle1
       const pythData = Buffer.alloc(3500);
@@ -340,28 +348,28 @@ describe("Oracle Cache Tests", () => {
         "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
       );
 
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: null,
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oracle1],
-          },
-        ],
-      ]);
+      const reservePubkey = PublicKey.unique();
+      const reserveEntry = {
+        reservePubkey: reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oracle1],
+      };
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Return invalid data (too small)
       mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
@@ -379,28 +387,34 @@ describe("Oracle Cache Tests", () => {
       const oracles = Array.from({ length: 150 }, () => PublicKey.unique());
       const mints = oracles.map((_, i) => `mint${i}`);
 
-      const reserveCache: ReserveCache = new Map(
-        mints.map((mint, i) => [
-          mint,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: null,
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oracles[i]],
-          },
-        ])
-      );
+      const byMintMap = new Map();
+      const byReserveMap = new Map();
+      mints.forEach((mint, i) => {
+        const reservePubkey = PublicKey.unique();
+        const reserveEntry = {
+          reservePubkey: reservePubkey,
+          liquidityMint: mint,
+          availableAmount: 5000000n,
+          cumulativeBorrowRate: 0n,
+          cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+          collateralMint: "mock-collateral-mint",
+          collateralExchangeRateUi: 1.0,
+          scopePriceChain: null,
+          loanToValue: 75,
+          liquidationThreshold: 80,
+          liquidationBonus: 500,
+          borrowFactor: 100,
+          liquidityDecimals: 6,
+          collateralDecimals: 6,
+          oraclePubkeys: [oracles[i]],
+        };
+        byMintMap.set(mint, reserveEntry);
+        byReserveMap.set(reservePubkey.toString(), reserveEntry);
+      });
+      const reserveCache: ReserveCache = {
+        byMint: byMintMap,
+        byReserve: byReserveMap,
+      };
 
       // Mock to return Pyth data for all
       mockConnection.getMultipleAccountsInfo = vi
@@ -433,28 +447,28 @@ describe("Oracle Cache Tests", () => {
         "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
       );
 
-      const reserveCache: ReserveCache = new Map([
-        [
-          mint1,
-          {
-            reservePubkey: PublicKey.unique(),
-            liquidityMint: mint1,
-            availableAmount: 5000000n,
-            cumulativeBorrowRate: 0n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
-            collateralMint: "mock-collateral-mint",
-            collateralExchangeRateUi: 1.0,
-            scopePriceChain: null,
-            loanToValue: 75,
-            liquidationThreshold: 80,
-            liquidationBonus: 500,
-            borrowFactor: 100,
-            liquidityDecimals: 6,
-            collateralDecimals: 6,
-            oraclePubkeys: [oracle1],
-          },
-        ],
-      ]);
+      const reservePubkey = PublicKey.unique();
+      const reserveEntry = {
+        reservePubkey: reservePubkey,
+        liquidityMint: mint1,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [oracle1],
+      };
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint1, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
 
       // Create Pyth data that will work with manual decoder but might fail with SDK
       // This simulates the real-world scenario where SDK has offset issues
