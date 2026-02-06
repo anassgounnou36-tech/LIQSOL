@@ -53,7 +53,6 @@ async function main() {
 
   const mint = (mintArg || "USDC") as FlashloanMint;
   const amount = amountArg || "1000";
-  
   // Parse fee buffer or use defaults: USDC → 1.0, SOL → 0.01
   let requiredFeeBufferUi: number;
   if (feeBufferArg) {
@@ -199,7 +198,6 @@ async function main() {
 
   // Fee buffer precheck: ensure destination ATA has sufficient balance
   const currentUi = await getTokenUiBalance(connection, destinationAta);
-  
   logger.info(
     { event: "fee_buffer_check", currentUi, requiredFeeBufferUi, destinationAta: destinationAta.toBase58() },
     "Checking fee buffer requirement"
@@ -207,6 +205,7 @@ async function main() {
 
   if (currentUi < requiredFeeBufferUi) {
     const mintName = mint === "SOL" ? "SOL (wrapped SOL)" : mint;
+    // Shortfall is always positive here since currentUi < requiredFeeBufferUi
     const shortfall = requiredFeeBufferUi - currentUi;
     
     throw new Error(

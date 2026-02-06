@@ -54,10 +54,8 @@ function createPlaceholderInstruction(signer: PublicKey): TransactionInstruction
 
 async function validateFlashloan(mint: FlashloanMint, amount: string, requiredFeeBufferUi?: number) {
   console.log(`\nValidating ${mint} flashloan (${amount})...`);
-  
   // Use default fee buffer if not provided: USDC → 1.0, SOL → 0.01
   const feeBuffer = requiredFeeBufferUi !== undefined ? requiredFeeBufferUi : (mint === "SOL" ? 0.01 : 1.0);
-  
   // Load environment
   const env = loadEnv();
   
@@ -142,11 +140,10 @@ async function validateFlashloan(mint: FlashloanMint, amount: string, requiredFe
 
   // Fee buffer precheck: ensure destination ATA has sufficient balance
   const currentUi = await getTokenUiBalance(connection, destinationAta);
-  
   if (currentUi < feeBuffer) {
     const mintName = mint === "SOL" ? "SOL (wrapped SOL)" : mint;
+    // Shortfall is always positive here since currentUi < feeBuffer
     const shortfall = feeBuffer - currentUi;
-    
     throw new Error(
       `Insufficient fee buffer in destination ATA.\n` +
       `  Destination ATA: ${destinationAta.toBase58()}\n` +
