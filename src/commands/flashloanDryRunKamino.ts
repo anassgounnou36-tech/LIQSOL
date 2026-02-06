@@ -74,7 +74,7 @@ async function main() {
     "Building flashloan instructions"
   );
 
-  const { destinationAta, flashBorrowIx, flashRepayIx } = await buildKaminoFlashloanIxs({
+  const { destinationAta, tokenProgramId, flashBorrowIx, flashRepayIx } = await buildKaminoFlashloanIxs({
     connection,
     marketPubkey: new PublicKey(env.KAMINO_MARKET_PUBKEY),
     programId: new PublicKey(env.KAMINO_KLEND_PROGRAM_ID),
@@ -85,9 +85,17 @@ async function main() {
   });
 
   logger.info(
-    { event: "flashloan_built", destinationAta: destinationAta.toBase58() },
+    { 
+      event: "flashloan_built", 
+      destinationAta: destinationAta.toBase58(),
+      tokenProgramId: tokenProgramId.toBase58()
+    },
     "Flashloan instructions built"
   );
+
+  // Debug prints for ATA and token program
+  console.log("Destination ATA:", destinationAta.toBase58());
+  console.log("Token program:", tokenProgramId.toBase58());
 
   // Create placeholder instruction
   const placeholderIx = createPlaceholderInstruction(signer.publicKey);
@@ -144,26 +152,29 @@ async function main() {
   console.log(`   Compute Units Consumed: ${unitsConsumed}`);
   console.log(`   Instructions: ${transaction.instructions.length}`);
   console.log(`   Destination ATA: ${destinationAta.toBase58()}`);
+  console.log(`   Token Program: ${tokenProgramId.toBase58()}`);
   console.log("\nSimulation Logs:");
   logs.forEach((log, i) => {
     console.log(`   [${i}] ${log}`);
   });
 
-  // Validate that logs contain expected program invocations
-  const hasBorrow = logs.some((log) => log.includes("borrow") || log.includes("Borrow"));
-  const hasRepay = logs.some((log) => log.includes("repay") || log.includes("Repay"));
+  // Validate logs contain expected Kamino program invocations (deterministic check)
+  const kaminoProgramId = env.KAMINO_KLEND_PROGRAM_ID;
+  const invokeCount = logs.filter((log) => log.includes(`Program ${kaminoProgramId} invoke`)).length;
 
-  if (!hasBorrow || !hasRepay) {
+  if (invokeCount < 2) {
     logger.warn(
-      { event: "missing_invocations", hasBorrow, hasRepay },
-      "Expected borrow/repay invocations not found in logs"
+      { event: "missing_invocations", invokeCount, expected: ">=2" },
+      `Expected >=2 Kamino program invocations (borrow+repay), got ${invokeCount}`
     );
   } else {
     logger.info(
-      { event: "invocations_verified" },
-      "Borrow and repay invocations verified in logs"
+      { event: "invocations_verified", invokeCount },
+      "Kamino flashloan invocations verified in logs"
     );
   }
+
+  console.log({ invokeCount }, "Kamino flashloan dry-run log summary");
 }
 
 main().catch((err) => {

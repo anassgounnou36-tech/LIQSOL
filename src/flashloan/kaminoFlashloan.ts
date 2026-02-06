@@ -3,11 +3,8 @@ import { KaminoMarket } from "@kamino-finance/klend-sdk";
 import { getAssociatedTokenAddress } from "@kamino-finance/klend-sdk";
 import { getFlashLoanInstructions } from "@kamino-finance/klend-sdk";
 import { Decimal } from "decimal.js";
-
-// @solana/kit account role constants for instruction conversion
-const ACCOUNT_ROLE_WRITABLE = 1;
-const ACCOUNT_ROLE_SIGNER = 2;
-const ACCOUNT_ROLE_WRITABLE_SIGNER = 3;
+import { createKeyPairSignerFromBytes } from "@solana/signers";
+import { AccountRole } from "@solana/instructions";
 
 export type FlashloanMint = "USDC" | "SOL";
 
@@ -25,19 +22,21 @@ export interface BuildKaminoFlashloanParams {
 
 export interface KaminoFlashloanIxs {
   destinationAta: PublicKey;
+  tokenProgramId: PublicKey;
   flashBorrowIx: TransactionInstruction;
   flashRepayIx: TransactionInstruction;
 }
 
 /**
- * Convert SDK instruction account to web3.js AccountMeta
+ * Convert SDK instruction account to web3.js AccountMeta using AccountRole enum
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function convertSdkAccount(a: any) {
+  const role = a.role as AccountRole;
   return {
     pubkey: new PublicKey(a.address),
-    isSigner: a.role === ACCOUNT_ROLE_SIGNER || a.role === ACCOUNT_ROLE_WRITABLE_SIGNER,
-    isWritable: a.role === ACCOUNT_ROLE_WRITABLE || a.role === ACCOUNT_ROLE_WRITABLE_SIGNER,
+    isSigner: role === AccountRole.READONLY_SIGNER || role === AccountRole.WRITABLE_SIGNER,
+    isWritable: role === AccountRole.WRITABLE || role === AccountRole.WRITABLE_SIGNER,
   };
 }
 
@@ -88,27 +87,34 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   const reserveMint = reserve.getLiquidityMint();
   const decimals = reserve.stats.decimals;
 
+  // Get token program for the reserve (Token-2022 safe)
+  const tokenProgramId = reserve.getLiquidityTokenProgram();
+
   // Convert UI amount to lamports
   const amountDecimal = new Decimal(p.amountUi);
   const lamportsDecimal = amountDecimal.mul(new Decimal(10).pow(decimals));
 
-  // Derive user ATA for the reserve
+  // Derive user ATA for the reserve with correct token program
   // SDK's getAssociatedTokenAddress handles token program automatically
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const destinationAtaStr = await getAssociatedTokenAddress(
     reserveMint,
-    p.signer.publicKey.toBase58() as any
+    p.signer.publicKey.toBase58() as any,
+    tokenProgramId // Use reserve's token program for Token-2022 compatibility
   );
   const destinationAta = new PublicKey(destinationAtaStr);
 
   // Get lending market authority
   const lendingMarketAuthority = await market.getLendingMarketAuthority();
 
+  // Convert web3.js Keypair to @solana/kit KeyPairSigner
+  const sdkSigner = await createKeyPairSignerFromBytes(p.signer.secretKey);
+
   // Build flashloan instructions using SDK helper
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { flashBorrowIx, flashRepayIx } = getFlashLoanInstructions({
     borrowIxIndex: p.borrowIxIndex,
-    userTransferAuthority: p.signer.publicKey.toBase58() as any, // SDK expects TransactionSigner
+    userTransferAuthority: sdkSigner, // Use proper signer object, not base58 string
     lendingMarketAuthority,
     lendingMarketAddress: market.getAddress(),
     reserve,
@@ -134,6 +140,7 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
 
   return {
     destinationAta,
+    tokenProgramId: new PublicKey(tokenProgramId),
     flashBorrowIx: borrowIx,
     flashRepayIx: repayIx,
   };
