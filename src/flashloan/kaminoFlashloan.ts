@@ -1,4 +1,5 @@
 import { Connection, PublicKey, TransactionInstruction, Keypair } from "@solana/web3.js";
+import { Buffer } from "node:buffer";
 import { KaminoMarket } from "@kamino-finance/klend-sdk";
 import { getAssociatedTokenAddress } from "@kamino-finance/klend-sdk";
 import { getFlashLoanInstructions } from "@kamino-finance/klend-sdk";
@@ -6,6 +7,8 @@ import { Decimal } from "decimal.js";
 import { createKeyPairSignerFromBytes } from "@solana/signers";
 import { AccountRole } from "@solana/instructions";
 import { createSolanaRpc } from "@solana/rpc";
+import type { Address } from "@solana/addresses";
+import { none } from "@solana/options";
 
 export type FlashloanMint = "USDC" | "SOL";
 
@@ -56,19 +59,19 @@ function convertSdkAccount(a: any) {
 export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Promise<KaminoFlashloanIxs> {
   // Create @solana/kit RPC from connection URL for Kamino SDK compatibility
   // The SDK v7.3.9 requires @solana/kit Rpc, not web3.js v1 Connection
+  // Extract RPC endpoint from web3.js Connection (uses private property)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rpc = createSolanaRpc((p.connection as any)._rpcEndpoint);
+  const rpcEndpoint = (p.connection as any)._rpcEndpoint as string;
+  const rpc = createSolanaRpc(rpcEndpoint);
 
   // Load market from Kamino SDK
   // Note: SDK v7.3.9 requires recentSlotDurationMs parameter
   const market = await KaminoMarket.load(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rpc as any, // Use @solana/kit RPC instead of web3.js Connection
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    p.marketPubkey.toBase58() as any, // SDK uses Address (branded string) type
+    rpc as any, // RPC type compatibility between @solana/kit versions
+    p.marketPubkey.toBase58() as Address,
     1000, // recentSlotDurationMs - default value
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    p.programId.toBase58() as any // SDK uses Address (branded string) type
+    p.programId.toBase58() as Address
   );
 
   if (!market) {
@@ -101,11 +104,9 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   const lamportsDecimal = amountDecimal.mul(new Decimal(10).pow(decimals));
 
   // Derive user ATA for the reserve with correct token program
-  // SDK's getAssociatedTokenAddress handles token program automatically
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const destinationAtaStr = await getAssociatedTokenAddress(
     reserveMint,
-    p.signer.publicKey.toBase58() as any,
+    p.signer.publicKey.toBase58() as Address,
     tokenProgramId // Use reserve's token program for Token-2022 compatibility
   );
   const destinationAta = new PublicKey(destinationAtaStr);
@@ -117,7 +118,6 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   const sdkSigner = await createKeyPairSignerFromBytes(p.signer.secretKey);
 
   // Build flashloan instructions using SDK helper
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { flashBorrowIx, flashRepayIx } = getFlashLoanInstructions({
     borrowIxIndex: p.borrowIxIndex,
     userTransferAuthority: sdkSigner, // Use proper signer object, not base58 string
@@ -125,10 +125,10 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
     lendingMarketAddress: market.getAddress(),
     reserve,
     amountLamports: lamportsDecimal,
-    destinationAta: destinationAtaStr as any,
-    referrerAccount: null as any, // No referrer for flashloans
-    referrerTokenState: null as any,
-    programId: p.programId.toBase58() as any,
+    destinationAta: destinationAtaStr,
+    referrerAccount: none(), // No referrer for flashloans
+    referrerTokenState: none(),
+    programId: p.programId.toBase58() as Address,
   });
 
   // Convert SDK instructions to web3.js TransactionInstruction
