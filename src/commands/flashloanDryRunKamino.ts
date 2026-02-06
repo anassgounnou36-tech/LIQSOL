@@ -62,6 +62,22 @@ async function main() {
     "Configuration loaded"
   );
 
+  // Preflight: payer must exist on-chain and have lamports
+  const payerInfo = await connection.getAccountInfo(signer.publicKey);
+  if (!payerInfo) {
+    throw new Error(
+      `Fee payer account ${signer.publicKey.toBase58()} does not exist on-chain yet. ` +
+      `Send some SOL to this address (e.g. 0.05 SOL) then retry.`
+    );
+  }
+
+  if (payerInfo.lamports <= 0) {
+    throw new Error(
+      `Fee payer account ${signer.publicKey.toBase58()} has 0 lamports. ` +
+      `Fund it with SOL for transaction fees then retry.`
+    );
+  }
+
   // Build compute budget instructions
   const computeBudgetIxs = buildComputeBudgetIxs({ cuLimit: 600_000, cuPriceMicroLamports: 0 });
   
@@ -182,6 +198,35 @@ async function main() {
     { event: "transaction_built", instructionCount: transaction.instructions.length },
     "Transaction built, simulating..."
   );
+
+  // Preflight: check all accounts exist before simulation
+  function collectTxPubkeys(ixs: TransactionInstruction[]): PublicKey[] {
+    const map = new Map<string, PublicKey>();
+    for (const ix of ixs) {
+      map.set(ix.programId.toBase58(), ix.programId);
+      for (const k of ix.keys) map.set(k.pubkey.toBase58(), k.pubkey);
+    }
+    return [...map.values()];
+  }
+
+  const allKeys = collectTxPubkeys(transaction.instructions);
+  const infos = await connection.getMultipleAccountsInfo(allKeys);
+
+  const missing = allKeys
+    .map((k, i) => ({ k, info: infos[i] }))
+    .filter((x) => x.info === null)
+    .map((x) => x.k.toBase58());
+
+  if (missing.length) {
+    logger.error(
+      { event: "preflight_missing_accounts", missing, total: allKeys.length },
+      "Some accounts referenced by the transaction do not exist on-chain"
+    );
+
+    throw new Error(
+      `Preflight failed: missing ${missing.length} account(s). First missing: ${missing[0]}`
+    );
+  }
 
   // Simulate transaction
   const simulation = await connection.simulateTransaction(transaction, [signer]);

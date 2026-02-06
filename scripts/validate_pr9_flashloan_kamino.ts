@@ -48,6 +48,22 @@ async function validateFlashloan(mint: FlashloanMint, amount: string) {
   const connection = new Connection(env.RPC_PRIMARY, "confirmed");
   const signer = loadKeypair(env.BOT_KEYPAIR_PATH);
 
+  // Preflight: payer must exist on-chain and have lamports
+  const payerInfo = await connection.getAccountInfo(signer.publicKey);
+  if (!payerInfo) {
+    throw new Error(
+      `Fee payer account ${signer.publicKey.toBase58()} does not exist on-chain yet. ` +
+      `Send some SOL to this address (e.g. 0.05 SOL) then retry.`
+    );
+  }
+
+  if (payerInfo.lamports <= 0) {
+    throw new Error(
+      `Fee payer account ${signer.publicKey.toBase58()} has 0 lamports. ` +
+      `Fund it with SOL for transaction fees then retry.`
+    );
+  }
+
   // Build compute budget instructions
   const computeBudgetIxs = buildComputeBudgetIxs({ cuLimit: 600_000, cuPriceMicroLamports: 0 });
   
@@ -128,6 +144,30 @@ async function validateFlashloan(mint: FlashloanMint, amount: string) {
   transaction.recentBlockhash = blockhash;
   transaction.lastValidBlockHeight = lastValidBlockHeight;
   transaction.feePayer = signer.publicKey;
+
+  // Preflight: check all accounts exist before simulation
+  function collectTxPubkeys(ixs: TransactionInstruction[]): PublicKey[] {
+    const map = new Map<string, PublicKey>();
+    for (const ix of ixs) {
+      map.set(ix.programId.toBase58(), ix.programId);
+      for (const k of ix.keys) map.set(k.pubkey.toBase58(), k.pubkey);
+    }
+    return [...map.values()];
+  }
+
+  const allKeys = collectTxPubkeys(transaction.instructions);
+  const infos = await connection.getMultipleAccountsInfo(allKeys);
+
+  const missing = allKeys
+    .map((k, i) => ({ k, info: infos[i] }))
+    .filter((x) => x.info === null)
+    .map((x) => x.k.toBase58());
+
+  if (missing.length) {
+    throw new Error(
+      `Preflight failed: missing ${missing.length} account(s). First missing: ${missing[0]}`
+    );
+  }
 
   // Simulate transaction
   const simulation = await connection.simulateTransaction(transaction, [signer]);
