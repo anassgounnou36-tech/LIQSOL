@@ -59,16 +59,14 @@ function convertSdkAccount(a: any) {
 export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Promise<KaminoFlashloanIxs> {
   // Create @solana/kit RPC from connection URL for Kamino SDK compatibility
   // The SDK v7.3.9 requires @solana/kit Rpc, not web3.js v1 Connection
-  // Extract RPC endpoint from web3.js Connection (uses private property)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rpcEndpoint = (p.connection as any)._rpcEndpoint as string;
-  const rpc = createSolanaRpc(rpcEndpoint);
+  const rpc = createSolanaRpc(p.connection.rpcEndpoint);
 
   // Load market from Kamino SDK
   // Note: SDK v7.3.9 requires recentSlotDurationMs parameter
+  // Note: Type cast needed due to @solana/kit v2 vs v3 incompatibility in SDK dependencies
   const market = await KaminoMarket.load(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rpc as any, // RPC type compatibility between @solana/kit versions
+    rpc as any, // RPC type compatibility between @solana/kit v2 (SDK) and v3 (our imports)
     p.marketPubkey.toBase58() as Address,
     1000, // recentSlotDurationMs - default value
     p.programId.toBase58() as Address

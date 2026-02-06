@@ -93,10 +93,6 @@ async function main() {
     "Flashloan instructions built"
   );
 
-  // Debug prints for ATA and token program
-  console.log("Destination ATA:", destinationAta.toBase58());
-  console.log("Token program:", tokenProgramId.toBase58());
-
   // Create placeholder instruction
   const placeholderIx = createPlaceholderInstruction(signer.publicKey);
 
@@ -173,8 +169,6 @@ async function main() {
       "Kamino flashloan invocations verified in logs"
     );
   }
-
-  console.log({ invokeCount }, "Kamino flashloan dry-run log summary");
 }
 
 main().catch((err) => {
