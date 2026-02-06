@@ -5,6 +5,7 @@ import { getFlashLoanInstructions } from "@kamino-finance/klend-sdk";
 import { Decimal } from "decimal.js";
 import { createKeyPairSignerFromBytes } from "@solana/signers";
 import { AccountRole } from "@solana/instructions";
+import { createSolanaRpc } from "@solana/rpc";
 
 export type FlashloanMint = "USDC" | "SOL";
 
@@ -53,11 +54,16 @@ function convertSdkAccount(a: any) {
  * @returns Object containing destination ATA, borrow instruction, and repay instruction
  */
 export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Promise<KaminoFlashloanIxs> {
+  // Create @solana/kit RPC from connection URL for Kamino SDK compatibility
+  // The SDK v7.3.9 requires @solana/kit Rpc, not web3.js v1 Connection
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rpc = createSolanaRpc((p.connection as any)._rpcEndpoint);
+
   // Load market from Kamino SDK
   // Note: SDK v7.3.9 requires recentSlotDurationMs parameter
   const market = await KaminoMarket.load(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    p.connection as any, // Cast to handle web3.js v1 vs @solana/kit compatibility
+    rpc as any, // Use @solana/kit RPC instead of web3.js Connection
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     p.marketPubkey.toBase58() as any, // SDK uses Address (branded string) type
     1000, // recentSlotDurationMs - default value
