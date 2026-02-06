@@ -31,14 +31,32 @@ function createPlaceholderInstruction(signer: PublicKey): TransactionInstruction
   });
 }
 
+/**
+ * Helper function to fetch token UI balance for an ATA
+ */
+async function getTokenBalance(connection: Connection, ata: PublicKey): Promise<number> {
+  try {
+    const balance = await connection.getTokenAccountBalance(ata);
+    return parseFloat(balance.value.uiAmountString || "0");
+  } catch (err) {
+    // If account doesn't exist, return 0
+    return 0;
+  }
+}
+
 async function main() {
   // Parse command line args
   const args = process.argv.slice(2);
   const mintArg = args.find((_arg, i) => args[i - 1] === "--mint")?.toUpperCase();
   const amountArg = args.find((_arg, i) => args[i - 1] === "--amount");
+  const feeBufferArg = args.find((_arg, i) => args[i - 1] === "--fee-buffer-ui");
 
   const mint = (mintArg || "USDC") as FlashloanMint;
   const amount = amountArg || "1000";
+  // Default fee buffer: 0.3% (Kamino flashloan fee) + small margin = 0.5% of borrowed amount
+  // User can override with --fee-buffer-ui
+  const defaultFeeBuffer = parseFloat(amount) * 0.005;
+  const feeBufferUi = feeBufferArg ? parseFloat(feeBufferArg) : defaultFeeBuffer;
 
   // Validate mint
   if (mint !== "SOL" && mint !== "USDC") {
@@ -46,7 +64,7 @@ async function main() {
   }
 
   logger.info(
-    { event: "flashloan_dryrun_start", mint, amount },
+    { event: "flashloan_dryrun_start", mint, amount, feeBufferUi },
     "Starting Kamino flashloan dry-run"
   );
 
@@ -170,6 +188,55 @@ async function main() {
       preIxsCount: preIxs.length
     },
     "Flashloan instructions built"
+  );
+
+  // Fee buffer precheck: Ensure destination ATA has enough balance to cover flashloan fee
+  logger.info(
+    { event: "checking_fee_buffer", ata: destinationAta.toBase58(), requiredFeeBuffer: feeBufferUi },
+    "Checking fee buffer in destination ATA"
+  );
+
+  const currentBalance = await getTokenBalance(connection, destinationAta);
+
+  logger.info(
+    { event: "ata_balance_fetched", currentBalance, requiredFeeBuffer: feeBufferUi },
+    "Current ATA balance fetched"
+  );
+
+  if (currentBalance < feeBufferUi) {
+    const shortfall = feeBufferUi - currentBalance;
+    logger.error(
+      { 
+        event: "insufficient_fee_buffer", 
+        currentBalance, 
+        requiredFeeBuffer: feeBufferUi,
+        shortfall,
+        mint
+      },
+      "Insufficient fee buffer in destination ATA"
+    );
+
+    throw new Error(
+      `Insufficient fee buffer in destination ATA.\n` +
+      `\n` +
+      `Flashloan repay will fail with "insufficient funds" because the ATA does not hold enough ${mint} to cover the flashloan fee.\n` +
+      `\n` +
+      `Current balance: ${currentBalance} ${mint}\n` +
+      `Required fee buffer: ${feeBufferUi} ${mint}\n` +
+      `Shortfall: ${shortfall} ${mint}\n` +
+      `\n` +
+      `ACTION REQUIRED:\n` +
+      `1. Transfer at least ${shortfall.toFixed(6)} ${mint} to the destination ATA: ${destinationAta.toBase58()}\n` +
+      `2. Or specify a custom fee buffer with: --fee-buffer-ui <amount>\n` +
+      `\n` +
+      `Note: Kamino charges a 0.3% flashloan fee. The default fee buffer is 0.5% of the borrowed amount (${amount} ${mint}).\n` +
+      `In a production liquidation, the swap would generate profit to cover this fee. For this dry-run, you must prefund the ATA.`
+    );
+  }
+
+  logger.info(
+    { event: "fee_buffer_check_passed", currentBalance, requiredFeeBuffer: feeBufferUi },
+    "Fee buffer check passed"
   );
 
   // Create placeholder instruction

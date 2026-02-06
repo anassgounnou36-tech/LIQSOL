@@ -21,6 +21,19 @@ import { buildComputeBudgetIxs } from "../src/execution/computeBudget.js";
 import { MEMO_PROGRAM_ID } from "../src/constants/programs.js";
 import { SOL_MINT, USDC_MINT } from "../src/constants/mints.js";
 
+/**
+ * Helper function to fetch token UI balance for an ATA
+ */
+async function getTokenBalance(connection: Connection, ata: PublicKey): Promise<number> {
+  try {
+    const balance = await connection.getTokenAccountBalance(ata);
+    return parseFloat(balance.value.uiAmountString || "0");
+  } catch (err) {
+    // If account doesn't exist, return 0
+    return 0;
+  }
+}
+
 function loadKeypair(filePath: string): Keypair {
   const raw = fs.readFileSync(filePath, "utf8");
   const arr = JSON.parse(raw);
@@ -122,6 +135,24 @@ async function validateFlashloan(mint: FlashloanMint, amount: string) {
   }
 
   const { destinationAta, flashBorrowIx, flashRepayIx } = built;
+
+  // Fee buffer precheck: Ensure destination ATA has enough balance to cover flashloan fee
+  // Default fee buffer: 0.3% (Kamino flashloan fee) + small margin = 0.5% of borrowed amount
+  const feeBufferUi = parseFloat(amount) * 0.005;
+  const currentBalance = await getTokenBalance(connection, destinationAta);
+
+  console.log(`  Checking fee buffer: ${currentBalance} ${mint} (required: ${feeBufferUi} ${mint})`);
+
+  if (currentBalance < feeBufferUi) {
+    const shortfall = feeBufferUi - currentBalance;
+    throw new Error(
+      `Insufficient fee buffer in destination ATA for ${mint} flashloan.\n` +
+      `Current balance: ${currentBalance} ${mint}\n` +
+      `Required fee buffer: ${feeBufferUi} ${mint}\n` +
+      `Shortfall: ${shortfall} ${mint}\n` +
+      `Transfer at least ${shortfall.toFixed(6)} ${mint} to: ${destinationAta.toBase58()}`
+    );
+  }
 
   // Create placeholder instruction
   const placeholderIx = createPlaceholderInstruction(signer.publicKey);
