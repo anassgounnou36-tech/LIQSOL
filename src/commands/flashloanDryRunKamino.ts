@@ -4,7 +4,6 @@ import { Buffer } from "node:buffer";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   ASSOCIATED_TOKEN_PROGRAM_ID,
-  TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { loadEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
@@ -116,7 +115,7 @@ async function main() {
         built.destinationAta,           // ATA address
         signer.publicKey,               // owner
         mintPubkey,                     // mint
-        built.tokenProgramId ?? TOKEN_PROGRAM_ID, // token program (Token or Token-2022)
+        built.tokenProgramId,           // token program (Token or Token-2022) from SDK
         ASSOCIATED_TOKEN_PROGRAM_ID
       )
     );
