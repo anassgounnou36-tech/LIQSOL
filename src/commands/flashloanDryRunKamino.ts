@@ -105,10 +105,7 @@ async function main() {
   // Build compute budget instructions
   const computeBudgetIxs = buildComputeBudgetIxs({ cuLimit: 600_000, cuPriceMicroLamports: 0 });
   
-  logger.info(
-    { event: "compute_budget_built", count: computeBudgetIxs.length },
-    "Compute budget instructions built"
-  );
+  logger.info({ event: "compute_budget_ixs", count: computeBudgetIxs.length }, "Compute budget instructions built");
 
   // Pass 1: Build flashloan assuming no preIxs
   let borrowIxIndex = computeBudgetIxs.length;
@@ -235,8 +232,15 @@ async function main() {
   // 4. Placeholder (where liquidation + swap would go)
   // 5. Flash repay
   const transaction = new Transaction();
-  transaction.add(...computeBudgetIxs);
-  transaction.add(...preIxs);              // ensure ATA exists before borrow
+
+  if (computeBudgetIxs.length > 0) {
+    transaction.add(...computeBudgetIxs);
+  }
+
+  if (preIxs.length > 0) {
+    transaction.add(...preIxs); // ensure ATA exists before borrow
+  }
+
   transaction.add(flashBorrowIx);
   transaction.add(placeholderIx);
   transaction.add(flashRepayIx);

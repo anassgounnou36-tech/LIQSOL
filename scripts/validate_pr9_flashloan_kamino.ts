@@ -166,8 +166,15 @@ async function validateFlashloan(mint: FlashloanMint, amount: string, requiredFe
   // 4. Placeholder (where liquidation + swap would go)
   // 5. Flash repay
   const transaction = new Transaction();
-  transaction.add(...computeBudgetIxs);
-  transaction.add(...preIxs);              // ensure ATA exists before borrow
+
+  if (computeBudgetIxs.length > 0) {
+    transaction.add(...computeBudgetIxs);
+  }
+
+  if (preIxs.length > 0) {
+    transaction.add(...preIxs); // ensure ATA exists before borrow
+  }
+
   transaction.add(flashBorrowIx);
   transaction.add(placeholderIx);
   transaction.add(flashRepayIx);
