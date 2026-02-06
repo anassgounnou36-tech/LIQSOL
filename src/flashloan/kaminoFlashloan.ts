@@ -1,4 +1,4 @@
-import { Connection, PublicKey, TransactionInstruction, Keypair } from "@solana/web3.js";
+import { Connection, PublicKey, TransactionInstruction, Keypair, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { Buffer } from "node:buffer";
 import { KaminoMarket } from "@kamino-finance/klend-sdk";
 import { getAssociatedTokenAddress } from "@kamino-finance/klend-sdk";
@@ -130,14 +130,23 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   });
 
   // Convert SDK instructions to web3.js TransactionInstruction
+  // Force-add Instructions Sysvar for Kamino's borrowIxIndex validation
+  const borrowKeys = (flashBorrowIx.accounts || []).map(convertSdkAccount);
+  if (!borrowKeys.some(k => k.pubkey.equals(SYSVAR_INSTRUCTIONS_PUBKEY))) {
+    borrowKeys.push({ pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false });
+  }
   const borrowIx = new TransactionInstruction({
-    keys: (flashBorrowIx.accounts || []).map(convertSdkAccount),
+    keys: borrowKeys,
     programId: new PublicKey(flashBorrowIx.programAddress),
     data: Buffer.from(flashBorrowIx.data || []),
   });
 
+  const repayKeys = (flashRepayIx.accounts || []).map(convertSdkAccount);
+  if (!repayKeys.some(k => k.pubkey.equals(SYSVAR_INSTRUCTIONS_PUBKEY))) {
+    repayKeys.push({ pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false });
+  }
   const repayIx = new TransactionInstruction({
-    keys: (flashRepayIx.accounts || []).map(convertSdkAccount),
+    keys: repayKeys,
     programId: new PublicKey(flashRepayIx.programAddress),
     data: Buffer.from(flashRepayIx.data || []),
   });

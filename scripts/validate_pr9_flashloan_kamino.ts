@@ -8,7 +8,7 @@
  * - No missing accounts or wrong PDA issues
  */
 
-import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import fs from "node:fs";
 import { Buffer } from "node:buffer";
 import {
@@ -158,9 +158,16 @@ async function validateFlashloan(mint: FlashloanMint, amount: string) {
   const allKeys = collectTxPubkeys(transaction.instructions);
   const infos = await connection.getMultipleAccountsInfo(allKeys);
 
+  // Build ignored set: Instructions Sysvar + destination ATA if created in-tx
+  const ignored = new Set<string>();
+  ignored.add(SYSVAR_INSTRUCTIONS_PUBKEY.toBase58());
+  if (preIxs.length > 0) {
+    ignored.add(destinationAta.toBase58());
+  }
+
   const missing = allKeys
     .map((k, i) => ({ k, info: infos[i] }))
-    .filter((x) => x.info === null)
+    .filter((x) => x.info === null && !ignored.has(x.k.toBase58()))
     .map((x) => x.k.toBase58());
 
   if (missing.length) {
