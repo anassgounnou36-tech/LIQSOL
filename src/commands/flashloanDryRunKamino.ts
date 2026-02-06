@@ -1,11 +1,16 @@
 import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import fs from "node:fs";
 import { Buffer } from "node:buffer";
+import {
+  createAssociatedTokenAccountIdempotentInstruction,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import { loadEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { buildKaminoFlashloanIxs, type FlashloanMint } from "../flashloan/kaminoFlashloan.js";
 import { buildComputeBudgetIxs } from "../execution/computeBudget.js";
 import { MEMO_PROGRAM_ID } from "../constants/programs.js";
+import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
 
 function loadKeypair(filePath: string): Keypair {
   const raw = fs.readFileSync(filePath, "utf8");
@@ -65,16 +70,15 @@ async function main() {
     "Compute budget instructions built"
   );
 
-  // Build flashloan instructions
-  // borrowIxIndex will be the position after compute budget ixs
-  const borrowIxIndex = computeBudgetIxs.length;
+  // Pass 1: Build flashloan assuming no preIxs
+  let borrowIxIndex = computeBudgetIxs.length;
   
   logger.info(
-    { event: "building_flashloan", borrowIxIndex, mint, amount },
-    "Building flashloan instructions"
+    { event: "building_flashloan_pass1", borrowIxIndex, mint, amount },
+    "Building flashloan instructions (pass 1)"
   );
 
-  const { destinationAta, tokenProgramId, flashBorrowIx, flashRepayIx } = await buildKaminoFlashloanIxs({
+  let built = await buildKaminoFlashloanIxs({
     connection,
     marketPubkey: new PublicKey(env.KAMINO_MARKET_PUBKEY),
     programId: new PublicKey(env.KAMINO_KLEND_PROGRAM_ID),
@@ -84,11 +88,70 @@ async function main() {
     borrowIxIndex,
   });
 
+  // Idempotent ATA create if missing
+  const preIxs: TransactionInstruction[] = [];
+  const ataInfo = await connection.getAccountInfo(built.destinationAta);
+  
+  if (!ataInfo) {
+    logger.info(
+      { event: "ata_missing", ata: built.destinationAta.toBase58() },
+      "Destination ATA does not exist, creating idempotent instruction"
+    );
+    
+    // Determine mint pubkey based on mint type
+    let mintPubkey: PublicKey;
+    if (mint === "USDC") {
+      mintPubkey = new PublicKey(USDC_MINT);
+    } else if (mint === "SOL") {
+      mintPubkey = new PublicKey(SOL_MINT);
+    } else {
+      // This should never happen due to type checking, but guard against it
+      throw new Error(`Unsupported mint type: ${mint}`);
+    }
+    
+    preIxs.push(
+      createAssociatedTokenAccountIdempotentInstruction(
+        signer.publicKey,               // payer
+        built.destinationAta,           // ATA address
+        signer.publicKey,               // owner
+        mintPubkey,                     // mint
+        built.tokenProgramId,           // token program (Token or Token-2022) from SDK
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      )
+    );
+
+    // Pass 2: recompute borrowIxIndex and rebuild flashloan with correct index
+    borrowIxIndex = computeBudgetIxs.length + preIxs.length;
+    
+    logger.info(
+      { event: "building_flashloan_pass2", borrowIxIndex },
+      "Rebuilding flashloan with adjusted borrowIxIndex (pass 2)"
+    );
+    
+    built = await buildKaminoFlashloanIxs({
+      connection,
+      marketPubkey: new PublicKey(env.KAMINO_MARKET_PUBKEY),
+      programId: new PublicKey(env.KAMINO_KLEND_PROGRAM_ID),
+      signer,
+      mint,
+      amountUi: amount,
+      borrowIxIndex,
+    });
+  } else {
+    logger.info(
+      { event: "ata_exists", ata: built.destinationAta.toBase58() },
+      "Destination ATA already exists"
+    );
+  }
+
+  const { destinationAta, tokenProgramId, flashBorrowIx, flashRepayIx } = built;
+
   logger.info(
     { 
       event: "flashloan_built", 
       destinationAta: destinationAta.toBase58(),
-      tokenProgramId: tokenProgramId.toBase58()
+      tokenProgramId: tokenProgramId.toBase58(),
+      preIxsCount: preIxs.length
     },
     "Flashloan instructions built"
   );
@@ -98,11 +161,13 @@ async function main() {
 
   // Build transaction with correct instruction order:
   // 1. Compute budget instructions
-  // 2. Flash borrow (at borrowIxIndex)
-  // 3. Placeholder (where liquidation + swap would go)
-  // 4. Flash repay
+  // 2. Pre-instructions (ATA creation if needed)
+  // 3. Flash borrow (at borrowIxIndex)
+  // 4. Placeholder (where liquidation + swap would go)
+  // 5. Flash repay
   const transaction = new Transaction();
   transaction.add(...computeBudgetIxs);
+  transaction.add(...preIxs);              // ensure ATA exists before borrow
   transaction.add(flashBorrowIx);
   transaction.add(placeholderIx);
   transaction.add(flashRepayIx);

@@ -11,10 +11,15 @@
 import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import fs from "node:fs";
 import { Buffer } from "node:buffer";
+import {
+  createAssociatedTokenAccountIdempotentInstruction,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import { loadEnv } from "../src/config/env.js";
 import { buildKaminoFlashloanIxs, type FlashloanMint } from "../src/flashloan/kaminoFlashloan.js";
 import { buildComputeBudgetIxs } from "../src/execution/computeBudget.js";
 import { MEMO_PROGRAM_ID } from "../src/constants/programs.js";
+import { SOL_MINT, USDC_MINT } from "../src/constants/mints.js";
 
 function loadKeypair(filePath: string): Keypair {
   const raw = fs.readFileSync(filePath, "utf8");
@@ -46,10 +51,10 @@ async function validateFlashloan(mint: FlashloanMint, amount: string) {
   // Build compute budget instructions
   const computeBudgetIxs = buildComputeBudgetIxs({ cuLimit: 600_000, cuPriceMicroLamports: 0 });
   
-  // Build flashloan instructions
-  const borrowIxIndex = computeBudgetIxs.length;
+  // Pass 1: Build flashloan assuming no preIxs
+  let borrowIxIndex = computeBudgetIxs.length;
   
-  const { destinationAta, flashBorrowIx, flashRepayIx } = await buildKaminoFlashloanIxs({
+  let built = await buildKaminoFlashloanIxs({
     connection,
     marketPubkey: new PublicKey(env.KAMINO_MARKET_PUBKEY),
     programId: new PublicKey(env.KAMINO_KLEND_PROGRAM_ID),
@@ -59,12 +64,61 @@ async function validateFlashloan(mint: FlashloanMint, amount: string) {
     borrowIxIndex,
   });
 
+  // Idempotent ATA create if missing
+  const preIxs: TransactionInstruction[] = [];
+  const ataInfo = await connection.getAccountInfo(built.destinationAta);
+  
+  if (!ataInfo) {
+    // Determine mint pubkey based on mint type
+    let mintPubkey: PublicKey;
+    if (mint === "USDC") {
+      mintPubkey = new PublicKey(USDC_MINT);
+    } else if (mint === "SOL") {
+      mintPubkey = new PublicKey(SOL_MINT);
+    } else {
+      // This should never happen due to type checking, but guard against it
+      throw new Error(`Unsupported mint type: ${mint}`);
+    }
+    
+    preIxs.push(
+      createAssociatedTokenAccountIdempotentInstruction(
+        signer.publicKey,               // payer
+        built.destinationAta,           // ATA address
+        signer.publicKey,               // owner
+        mintPubkey,                     // mint
+        built.tokenProgramId,           // token program (Token or Token-2022) from SDK
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      )
+    );
+
+    // Pass 2: recompute borrowIxIndex and rebuild flashloan with correct index
+    borrowIxIndex = computeBudgetIxs.length + preIxs.length;
+    
+    built = await buildKaminoFlashloanIxs({
+      connection,
+      marketPubkey: new PublicKey(env.KAMINO_MARKET_PUBKEY),
+      programId: new PublicKey(env.KAMINO_KLEND_PROGRAM_ID),
+      signer,
+      mint,
+      amountUi: amount,
+      borrowIxIndex,
+    });
+  }
+
+  const { destinationAta, flashBorrowIx, flashRepayIx } = built;
+
   // Create placeholder instruction
   const placeholderIx = createPlaceholderInstruction(signer.publicKey);
 
-  // Build transaction
+  // Build transaction with correct instruction order:
+  // 1. Compute budget instructions
+  // 2. Pre-instructions (ATA creation if needed)
+  // 3. Flash borrow (at borrowIxIndex)
+  // 4. Placeholder (where liquidation + swap would go)
+  // 5. Flash repay
   const transaction = new Transaction();
   transaction.add(...computeBudgetIxs);
+  transaction.add(...preIxs);              // ensure ATA exists before borrow
   transaction.add(flashBorrowIx);
   transaction.add(placeholderIx);
   transaction.add(flashRepayIx);
