@@ -99,7 +99,17 @@ async function main() {
       "Destination ATA does not exist, creating idempotent instruction"
     );
     
-    const mintPubkey = mint === "USDC" ? new PublicKey(USDC_MINT) : new PublicKey(SOL_MINT);
+    // Determine mint pubkey based on mint type
+    let mintPubkey: PublicKey;
+    if (mint === "USDC") {
+      mintPubkey = new PublicKey(USDC_MINT);
+    } else if (mint === "SOL") {
+      mintPubkey = new PublicKey(SOL_MINT);
+    } else {
+      // This should never happen due to type checking, but guard against it
+      throw new Error(`Unsupported mint type: ${mint}`);
+    }
+    
     preIxs.push(
       createAssociatedTokenAccountIdempotentInstruction(
         signer.publicKey,               // payer
