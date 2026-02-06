@@ -6,6 +6,7 @@
  * - Logs contain expected program invocations (borrow/repay)
  * - Compute units consumed is reported
  * - No missing accounts or wrong PDA issues
+ * - Fee buffer precheck is enforced
  */
 
 import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
@@ -20,6 +21,19 @@ import { buildKaminoFlashloanIxs, type FlashloanMint } from "../src/flashloan/ka
 import { buildComputeBudgetIxs } from "../src/execution/computeBudget.js";
 import { MEMO_PROGRAM_ID } from "../src/constants/programs.js";
 import { SOL_MINT, USDC_MINT } from "../src/constants/mints.js";
+
+/**
+ * Helper function to get token balance in UI units
+ */
+async function getTokenUiBalance(connection: Connection, ata: PublicKey): Promise<number> {
+  try {
+    const balance = await connection.getTokenAccountBalance(ata);
+    return parseFloat(balance.value.uiAmountString || "0");
+  } catch {
+    // If ATA doesn't exist yet, return 0
+    return 0;
+  }
+}
 
 function loadKeypair(filePath: string): Keypair {
   const raw = fs.readFileSync(filePath, "utf8");
@@ -38,8 +52,11 @@ function createPlaceholderInstruction(signer: PublicKey): TransactionInstruction
   });
 }
 
-async function validateFlashloan(mint: FlashloanMint, amount: string) {
+async function validateFlashloan(mint: FlashloanMint, amount: string, requiredFeeBufferUi?: number) {
   console.log(`\nValidating ${mint} flashloan (${amount})...`);
+  
+  // Use default fee buffer if not provided: USDC → 1.0, SOL → 0.01
+  const feeBuffer = requiredFeeBufferUi !== undefined ? requiredFeeBufferUi : (mint === "SOL" ? 0.01 : 1.0);
   
   // Load environment
   const env = loadEnv();
@@ -122,6 +139,25 @@ async function validateFlashloan(mint: FlashloanMint, amount: string) {
   }
 
   const { destinationAta, flashBorrowIx, flashRepayIx } = built;
+
+  // Fee buffer precheck: ensure destination ATA has sufficient balance
+  const currentUi = await getTokenUiBalance(connection, destinationAta);
+  
+  if (currentUi < feeBuffer) {
+    const mintName = mint === "SOL" ? "SOL (wrapped SOL)" : mint;
+    const shortfall = feeBuffer - currentUi;
+    
+    throw new Error(
+      `Insufficient fee buffer in destination ATA.\n` +
+      `  Destination ATA: ${destinationAta.toBase58()}\n` +
+      `  Mint: ${mintName}\n` +
+      `  Current balance: ${currentUi} ${mint}\n` +
+      `  Required buffer: ${feeBuffer} ${mint}\n` +
+      `  Shortfall: ${shortfall} ${mint}\n\n` +
+      `Action required: Transfer at least ${feeBuffer} ${mint} to the destination ATA before running this validator.\n` +
+      `You can override the default buffer with --fee-buffer-ui <amount>.`
+    );
+  }
 
   // Create placeholder instruction
   const placeholderIx = createPlaceholderInstruction(signer.publicKey);
@@ -224,10 +260,23 @@ async function main() {
   console.log("PR9 Kamino Flashloan Validator");
   console.log("==============================\n");
 
+  // Parse command line args
+  const args = process.argv.slice(2);
+  const feeBufferArg = args.find((_arg, i) => args[i - 1] === "--fee-buffer-ui");
+  
+  let feeBufferUi: number | undefined;
+  if (feeBufferArg) {
+    feeBufferUi = parseFloat(feeBufferArg);
+    if (isNaN(feeBufferUi) || feeBufferUi < 0) {
+      throw new Error(`Invalid --fee-buffer-ui: ${feeBufferArg}. Must be a non-negative number.`);
+    }
+    console.log(`Using custom fee buffer: ${feeBufferUi}\n`);
+  }
+
   try {
     // Test both SOL and USDC flashloans
-    await validateFlashloan("USDC", "1000");
-    await validateFlashloan("SOL", "10");
+    await validateFlashloan("USDC", "1000", feeBufferUi);
+    await validateFlashloan("SOL", "10", feeBufferUi);
 
     console.log("\n✅ PR9 flashloan validation passed!");
   } catch (err) {

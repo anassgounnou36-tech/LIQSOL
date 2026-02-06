@@ -12,6 +12,19 @@ import { buildComputeBudgetIxs } from "../execution/computeBudget.js";
 import { MEMO_PROGRAM_ID } from "../constants/programs.js";
 import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
 
+/**
+ * Helper function to get token balance in UI units
+ */
+async function getTokenUiBalance(connection: Connection, ata: PublicKey): Promise<number> {
+  try {
+    const balance = await connection.getTokenAccountBalance(ata);
+    return parseFloat(balance.value.uiAmountString || "0");
+  } catch {
+    // If ATA doesn't exist yet, return 0
+    return 0;
+  }
+}
+
 function loadKeypair(filePath: string): Keypair {
   const raw = fs.readFileSync(filePath, "utf8");
   const arr = JSON.parse(raw);
@@ -36,9 +49,21 @@ async function main() {
   const args = process.argv.slice(2);
   const mintArg = args.find((_arg, i) => args[i - 1] === "--mint")?.toUpperCase();
   const amountArg = args.find((_arg, i) => args[i - 1] === "--amount");
+  const feeBufferArg = args.find((_arg, i) => args[i - 1] === "--fee-buffer-ui");
 
   const mint = (mintArg || "USDC") as FlashloanMint;
   const amount = amountArg || "1000";
+  
+  // Parse fee buffer or use defaults: USDC → 1.0, SOL → 0.01
+  let requiredFeeBufferUi: number;
+  if (feeBufferArg) {
+    requiredFeeBufferUi = parseFloat(feeBufferArg);
+    if (isNaN(requiredFeeBufferUi) || requiredFeeBufferUi < 0) {
+      throw new Error(`Invalid --fee-buffer-ui: ${feeBufferArg}. Must be a non-negative number.`);
+    }
+  } else {
+    requiredFeeBufferUi = mint === "SOL" ? 0.01 : 1.0;
+  }
 
   // Validate mint
   if (mint !== "SOL" && mint !== "USDC") {
@@ -46,7 +71,7 @@ async function main() {
   }
 
   logger.info(
-    { event: "flashloan_dryrun_start", mint, amount },
+    { event: "flashloan_dryrun_start", mint, amount, requiredFeeBufferUi },
     "Starting Kamino flashloan dry-run"
   );
 
@@ -170,6 +195,35 @@ async function main() {
       preIxsCount: preIxs.length
     },
     "Flashloan instructions built"
+  );
+
+  // Fee buffer precheck: ensure destination ATA has sufficient balance
+  const currentUi = await getTokenUiBalance(connection, destinationAta);
+  
+  logger.info(
+    { event: "fee_buffer_check", currentUi, requiredFeeBufferUi, destinationAta: destinationAta.toBase58() },
+    "Checking fee buffer requirement"
+  );
+
+  if (currentUi < requiredFeeBufferUi) {
+    const mintName = mint === "SOL" ? "SOL (wrapped SOL)" : mint;
+    const shortfall = requiredFeeBufferUi - currentUi;
+    
+    throw new Error(
+      `Insufficient fee buffer in destination ATA.\n` +
+      `  Destination ATA: ${destinationAta.toBase58()}\n` +
+      `  Mint: ${mintName}\n` +
+      `  Current balance: ${currentUi} ${mint}\n` +
+      `  Required buffer: ${requiredFeeBufferUi} ${mint}\n` +
+      `  Shortfall: ${shortfall} ${mint}\n\n` +
+      `Action required: Transfer at least ${requiredFeeBufferUi} ${mint} to the destination ATA before running this command.\n` +
+      `You can override the default buffer with --fee-buffer-ui <amount>.`
+    );
+  }
+
+  logger.info(
+    { event: "fee_buffer_ok", currentUi, requiredFeeBufferUi },
+    "Fee buffer requirement satisfied"
   );
 
   // Create placeholder instruction
