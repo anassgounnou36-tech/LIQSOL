@@ -57,7 +57,7 @@ async function validateFlashloan(mint: FlashloanMint, amount: string) {
     );
   }
 
-  if (payerInfo.lamports <= 0) {
+  if (payerInfo.lamports === 0) {
     throw new Error(
       `Fee payer account ${signer.publicKey.toBase58()} has 0 lamports. ` +
       `Fund it with SOL for transaction fees then retry.`
