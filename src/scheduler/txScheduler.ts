@@ -60,6 +60,12 @@ export function refreshQueue(params: TtlManagerParams, candidateSource?: any[]):
 
   if (toRefresh.length === 0) return queue;
 
+  // Batch limit to cap recompute work per cycle
+  const batchLimit = Number(process.env.SCHED_REFRESH_BATCH_LIMIT ?? 25);
+  const toRefreshLimited = toRefresh.slice(0, batchLimit);
+  
+  console.log(`Refreshing ${toRefreshLimited.length}/${toRefresh.length} flagged items (batch limit: ${batchLimit})`);
+
   const sourceByKey = new Map<string, any>();
   if (candidateSource && Array.isArray(candidateSource)) {
     for (const c of candidateSource) {
@@ -69,7 +75,7 @@ export function refreshQueue(params: TtlManagerParams, candidateSource?: any[]):
   }
 
   const refreshed = queue.map(plan => {
-    const evalItem = toRefresh.find(e => e.key === plan.key);
+    const evalItem = toRefreshLimited.find(e => e.key === plan.key);
     if (!evalItem) return plan;
     const candidateLike = sourceByKey.get(plan.key) ?? {
       obligationPubkey: plan.key,

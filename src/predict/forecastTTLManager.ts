@@ -93,6 +93,13 @@ export function evaluateForecasts(
       }
     }
 
+    // Per-candidate throttle: defer recompute if not expired and too fresh
+    const minInterval = params.minRefreshIntervalMs ?? 0;
+    if (!expired && needsRecompute && ageMs < minInterval) {
+      needsRecompute = false;
+      reason = reason ? `${reason},throttle` : 'throttle';
+    }
+
     out.push({
       ...f,
       ttlMin,
