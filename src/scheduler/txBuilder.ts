@@ -48,7 +48,12 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     slippageBufferPct: process.env.EV_SLIPPAGE_BUFFER_PCT ? Number(process.env.EV_SLIPPAGE_BUFFER_PCT) : undefined,
   };
   
-  const hazard = scoreHazard(Number(candidateLike.healthRatioRaw ?? candidateLike.healthRatio ?? 0), Number(process.env.HAZARD_ALPHA ?? 25));
+  // Safely compute hazard: use candidate HR if available, otherwise fallback to plan.hazard
+  const hasHr = candidateLike.healthRatioRaw != null || candidateLike.healthRatio != null;
+  const hazard = hasHr
+    ? scoreHazard(Number(candidateLike.healthRatioRaw ?? candidateLike.healthRatio ?? 0), Number(process.env.HAZARD_ALPHA ?? 25))
+    : Number(plan.hazard ?? 0);
+  
   const ev = computeEV(amountUsd, hazard, evParams);
   const ttlStr = estimateTtlString(candidateLike, {
     solDropPctPerMin: Number(process.env.TTL_SOL_DROP_PCT_PER_MIN ?? 0.2),

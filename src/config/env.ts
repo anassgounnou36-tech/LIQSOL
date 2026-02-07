@@ -60,6 +60,9 @@ export const EnvSchema = z.object({
   SCHED_EV_DROP_PCT: z.string().optional().default('0.15'),
   SCHED_TTL_EXPIRED_MARGIN_MIN: z.string().optional().default('2'),
   SCHED_MIN_REFRESH_INTERVAL_MS: z.string().optional().default('60000'),
+
+  // PR12: Scheduler batch limit for refresh queue
+  SCHED_REFRESH_BATCH_LIMIT: z.string().optional().default('25'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
