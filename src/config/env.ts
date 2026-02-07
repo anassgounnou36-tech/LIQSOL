@@ -48,6 +48,11 @@ export const EnvSchema = z.object({
   USE_FORECAST_FOR_DRYRUN: z.string().optional().default('false'),
   FORECAST_WEIGHT_EV: z.string().optional().default('0.75'),
   FORECAST_WEIGHT_TTL: z.string().optional().default('0.25'),
+
+  // PR10: Scheduler thresholds
+  SCHED_MIN_EV: z.string().optional().default('0'),
+  SCHED_MAX_TTL_MIN: z.string().optional().default('10'),
+  SCHED_MIN_HAZARD: z.string().optional().default('0.05'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

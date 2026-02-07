@@ -30,6 +30,8 @@
     "test:flashloan:forecast": "tsx scripts/test_flashloan_dryrun_with_forecast.ts",
     "test:flashloan:forecast:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_flashloan_forecast_wsl.ps1",
     "prediction:test:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_prediction_pr85_wsl.ps1",
+    "test:scheduler:forecast": "tsx scripts/test_scheduler_with_forecast.ts",
+    "test:scheduler:forecast:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_scheduler_forecast_wsl.ps1",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
