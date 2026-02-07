@@ -28,6 +28,16 @@ export const EnvSchema = z.object({
   // Example: "So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
   // Default: SOL+USDC for PR7 gate behavior. Set to empty string to disable allowlist.
   LIQSOL_LIQ_MINT_ALLOWLIST: z.string().optional(),
+
+  // PR 8.5: EV-based ranking configuration (opt-in)
+  USE_EV_RANKING: z.string().optional().default('false'),
+  MIN_BORROW_USD: z.string().optional().default('10'),
+  HAZARD_ALPHA: z.string().optional().default('25'),
+  EV_CLOSE_FACTOR: z.string().optional().default('0.5'),
+  EV_LIQUIDATION_BONUS_PCT: z.string().optional().default('0.05'),
+  EV_FLASHLOAN_FEE_PCT: z.string().optional().default('0.002'),
+  EV_FIXED_GAS_USD: z.string().optional().default('0.5'),
+  EV_SLIPPAGE_BUFFER_PCT: z.string().optional(), // optional, no default
 });
 
 export type Env = z.infer<typeof EnvSchema>;
