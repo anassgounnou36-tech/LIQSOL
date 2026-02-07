@@ -1,5 +1,6 @@
 import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import fs from "node:fs";
+import path from "node:path";
 import { Buffer } from "node:buffer";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
@@ -11,6 +12,60 @@ import { buildKaminoFlashloanIxs, type FlashloanMint } from "../flashloan/kamino
 import { buildComputeBudgetIxs } from "../execution/computeBudget.js";
 import { MEMO_PROGRAM_ID } from "../constants/programs.js";
 import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
+import { scoreHazard } from "../predict/hazardScorer.js";
+import { computeEV, type EvParams } from "../predict/evCalculator.js";
+import { estimateTtlString } from "../predict/ttlEstimator.js";
+
+/**
+ * Normalize any candidates payload into an array.
+ * Supports: array, {data: [...]}, {candidates: [...]}, keyed object.
+ */
+function normalizeCandidates(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  if (Array.isArray(payload.data)) return payload.data;
+  if (Array.isArray(payload.candidates)) return payload.candidates;
+  return Object.values(payload);
+}
+
+/**
+ * Load candidates with forecast scores from data/candidates.scored.json
+ * Returns null if file doesn't exist
+ */
+function loadCandidatesScored(): any | null {
+  const p = path.join(process.cwd(), 'data', 'candidates.scored.json');
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load raw candidates from data/candidates.json
+ * Throws if file doesn't exist
+ */
+function loadCandidatesRaw(): any {
+  const p = path.join(process.cwd(), 'data', 'candidates.json');
+  if (!fs.existsSync(p)) {
+    throw new Error('Missing data/candidates.json. Run: npm run snapshot:candidates:wsl');
+  }
+  return JSON.parse(fs.readFileSync(p, 'utf8'));
+}
+
+/**
+ * Parse TTL string (e.g., "5m30s") into minutes
+ * Returns Infinity for unknown or invalid values
+ */
+function parseTtlMinutes(ttlStr: string): number {
+  if (!ttlStr || ttlStr === 'unknown') return Infinity;
+  const m = /^(\d+)m(\d+)s$/.exec(ttlStr);
+  if (!m) return Infinity;
+  const minutes = Number(m[1]);
+  const seconds = Number(m[2]);
+  return minutes + seconds / 60;
+}
 
 /**
  * Helper function to get token balance in UI units
@@ -85,6 +140,96 @@ async function main() {
     { event: "config_loaded", signer: signer.publicKey.toBase58(), rpc: env.RPC_PRIMARY },
     "Configuration loaded"
   );
+
+  // PR 8.7: Forecast-aware candidate ranking
+  const useForecast = env.USE_FORECAST_FOR_DRYRUN === 'true';
+  
+  // Load payload (object or array), then normalize to array
+  const scoredPayload = loadCandidatesScored();
+  const rawPayload = scoredPayload ?? loadCandidatesRaw();
+  let candidates = normalizeCandidates(rawPayload);
+
+  logger.info(
+    {
+      event: "forecast_candidates_loaded",
+      source: scoredPayload ? "scored" : "raw",
+      isArray: Array.isArray(rawPayload),
+      normalizedCount: candidates.length,
+    },
+    "Loaded forecast candidates"
+  );
+
+  let ranked: any[] = candidates;
+  let target: any;
+
+  if (useForecast) {
+    logger.info({ event: "forecast_ranking_enabled" }, "Forecast ranking enabled for dry-run");
+    
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      throw new Error("No candidates available (empty or invalid candidates payload)");
+    }
+
+    // Compute on the fly if forecast fields are missing
+    const alpha = Number(env.HAZARD_ALPHA ?? 25);
+    const evParams: EvParams = {
+      closeFactor: Number(env.EV_CLOSE_FACTOR ?? 0.5),
+      liquidationBonusPct: Number(env.EV_LIQUIDATION_BONUS_PCT ?? 0.05),
+      flashloanFeePct: Number(env.EV_FLASHLOAN_FEE_PCT ?? 0.002),
+      fixedGasUsd: Number(env.EV_FIXED_GAS_USD ?? 0.5),
+      slippageBufferPct: env.EV_SLIPPAGE_BUFFER_PCT ? Number(env.EV_SLIPPAGE_BUFFER_PCT) : undefined,
+    };
+    const solDropPctPerMin = Number(env.TTL_SOL_DROP_PCT_PER_MIN ?? 0.2);
+    const maxDropPct = Number(env.TTL_MAX_DROP_PCT ?? 20);
+
+    ranked = candidates.map((c: any) => {
+      const hr = Number(c.healthRatioRaw ?? c.healthRatio ?? 0);
+      const hazard = c.hazard ?? scoreHazard(hr, alpha);
+      const borrow = Number(c.borrowValueUsd ?? 0);
+      const ev = c.ev ?? computeEV(borrow, hazard, evParams);
+      const ttlStr = (c.forecast?.timeToLiquidation) ?? estimateTtlString(c, { solDropPctPerMin, maxDropPct });
+      const ttlMin = parseTtlMinutes(ttlStr);
+      return { ...c, key: c.key ?? c.obligationPubkey ?? 'unknown', hazard, ev, ttlMin, ttlStr };
+    }).sort((a: any, b: any) => {
+      if (b.ev !== a.ev) return Number(b.ev) - Number(a.ev);
+      if (a.ttlMin !== b.ttlMin) return Number(a.ttlMin) - Number(b.ttlMin);
+      return Number(b.hazard) - Number(a.hazard);
+    });
+
+    // Log top 10 ranked
+    logger.info({ event: "forecast_ranking_complete", totalCandidates: ranked.length }, "Ranking complete");
+    console.log("\n📊 Top 10 Ranked Candidates by EV/TTL/Hazard:");
+    console.table(ranked.slice(0, 10).map((x: any) => ({
+      key: x.key,
+      healthRatio: Number(x.healthRatioRaw ?? x.healthRatio ?? 0).toFixed(4),
+      hazard: Number(x.hazard).toFixed(4),
+      ev: Number(x.ev).toFixed(4),
+      ttl: x.ttlStr,
+      borrowValueUsd: Number(x.borrowValueUsd ?? 0).toFixed(2),
+    })));
+
+    target = ranked[0];
+    if (!target) {
+      throw new Error('No candidates available for dry-run after ranking');
+    }
+    
+    logger.info(
+      { 
+        event: "target_selected",
+        key: target.key,
+        ev: target.ev,
+        ttl: target.ttlStr,
+        hazard: target.hazard
+      },
+      "Top-ranked candidate selected for simulation"
+    );
+  } else {
+    logger.info({ event: "forecast_ranking_disabled" }, "Forecast ranking disabled, using baseline selection");
+    target = candidates[0];
+    if (!target) {
+      throw new Error('No candidates available for dry-run');
+    }
+  }
+
 
   // Preflight: payer must exist on-chain and have lamports
   const payerInfo = await connection.getAccountInfo(signer.publicKey);

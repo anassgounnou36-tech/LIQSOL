@@ -43,6 +43,11 @@ export const EnvSchema = z.object({
   FORECAST_TTL_MS: z.string().optional().default('300000'),
   TTL_SOL_DROP_PCT_PER_MIN: z.string().optional().default('0.2'),
   TTL_MAX_DROP_PCT: z.string().optional().default('20'),
+
+  // PR 8.7: Forecast ranking for flashloan dry-run
+  USE_FORECAST_FOR_DRYRUN: z.string().optional().default('false'),
+  FORECAST_WEIGHT_EV: z.string().optional().default('0.75'),
+  FORECAST_WEIGHT_TTL: z.string().optional().default('0.25'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

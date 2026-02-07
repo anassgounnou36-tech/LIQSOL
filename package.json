@@ -27,6 +27,8 @@
     "flashloan:dryrun:kamino:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_flashloan_dryrun_kamino_wsl.ps1",
     "test:pr9:flashloan:kamino": "tsx scripts/validate_pr9_flashloan_kamino.ts",
     "test:pr9:flashloan:kamino:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_pr9_flashloan_kamino_wsl.ps1",
+    "test:flashloan:forecast": "tsx scripts/test_flashloan_dryrun_with_forecast.ts",
+    "test:flashloan:forecast:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_flashloan_forecast_wsl.ps1",
     "prediction:test:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_prediction_pr85_wsl.ps1",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
