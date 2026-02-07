@@ -53,6 +53,13 @@ export const EnvSchema = z.object({
   SCHED_MIN_EV: z.string().optional().default('0'),
   SCHED_MAX_TTL_MIN: z.string().optional().default('10'),
   SCHED_MIN_HAZARD: z.string().optional().default('0.05'),
+
+  // PR11: Forecast TTL management and EV-based refresh thresholds
+  FORECAST_MAX_AGE_MS: z.string().optional().default('300000'),
+  SCHED_REFRESH_INTERVAL_MS: z.string().optional().default('30000'),
+  SCHED_EV_DROP_PCT: z.string().optional().default('0.15'),
+  SCHED_TTL_EXPIRED_MARGIN_MIN: z.string().optional().default('2'),
+  SCHED_MIN_REFRESH_INTERVAL_MS: z.string().optional().default('60000'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

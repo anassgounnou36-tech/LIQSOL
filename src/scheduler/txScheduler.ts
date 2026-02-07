@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { FlashloanPlan } from './txBuilder.js';
+import { FlashloanPlan, recomputePlanFields } from './txBuilder.js';
+import { evaluateForecasts, type ForecastEntry, parseTtlMinutes, type TtlManagerParams } from '../predict/forecastTTLManager.js';
 
 const QUEUE_PATH = path.join(process.cwd(), 'data', 'tx_queue.json');
 
@@ -28,3 +29,85 @@ export function enqueuePlans(plans: FlashloanPlan[]): FlashloanPlan[] {
   saveQueue(all);
   return all;
 }
+
+export function normalizeCandidates(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+  if (Array.isArray(payload.data)) return payload.data;
+  if (Array.isArray(payload.candidates)) return payload.candidates;
+  return Object.values(payload);
+}
+
+export function refreshQueue(params: TtlManagerParams, candidateSource?: any[]): FlashloanPlan[] {
+  const queue = loadQueue();
+  if (queue.length === 0) return queue;
+
+  // Build forecast entries from queue
+  const forecasts: ForecastEntry[] = queue.map(q => ({
+    key: q.key,
+    ev: Number(q.ev ?? 0),
+    hazard: Number(q.hazard ?? 0),
+    ttlStr: q.ttlStr,
+    ttlMin: q.ttlMin ?? parseTtlMinutes(q.ttlStr),
+    forecastUpdatedAtMs: Number(q.createdAtMs ?? 0),
+  }));
+
+  const prevEvByKey = new Map<string, number>();
+  for (const q of queue) prevEvByKey.set(q.key, Number(q.ev ?? 0));
+
+  const evaluated = evaluateForecasts(forecasts, params, { prevEvByKey });
+  const toRefresh = evaluated.filter(e => e.needsRecompute);
+
+  if (toRefresh.length === 0) return queue;
+
+  const sourceByKey = new Map<string, any>();
+  if (candidateSource && Array.isArray(candidateSource)) {
+    for (const c of candidateSource) {
+      const key = c.key ?? c.obligationPubkey ?? 'unknown';
+      sourceByKey.set(key, c);
+    }
+  }
+
+  const refreshed = queue.map(plan => {
+    const evalItem = toRefresh.find(e => e.key === plan.key);
+    if (!evalItem) return plan;
+    const candidateLike = sourceByKey.get(plan.key) ?? {
+      obligationPubkey: plan.key,
+      ownerPubkey: plan.ownerPubkey,
+      borrowValueUsd: plan.amountUsd,
+      healthRatio: undefined,
+      healthRatioRaw: undefined,
+    };
+    return recomputePlanFields(plan, candidateLike);
+  });
+
+  const sorted = refreshed.sort((a, b) => (Number(b.ev) - Number(a.ev)) || (Number(a.ttlMin) - Number(b.ttlMin)) || (Number(b.hazard) - Number(a.hazard)));
+  saveQueue(sorted);
+  return sorted;
+}
+
+let refreshInProgress = false;
+
+export function startSchedulerRefreshLoop(params: TtlManagerParams, candidateSource?: any[]): () => void {
+  const intervalMs = Number(process.env.SCHED_REFRESH_INTERVAL_MS ?? 30000);
+  const intervalId = setInterval(() => {
+    // Prevent concurrent refreshes
+    if (refreshInProgress) {
+      console.log('\n⏭️  Scheduler refresh: skipping (previous refresh still in progress)');
+      return;
+    }
+    refreshInProgress = true;
+    try {
+      const updated = refreshQueue(params, candidateSource);
+      console.log(`\n🔁 Scheduler refresh: queue size ${updated.length}`);
+    } catch (err) {
+      console.error('Scheduler refresh error:', err);
+    } finally {
+      refreshInProgress = false;
+    }
+  }, intervalMs);
+  
+  // Return cleanup function
+  return () => clearInterval(intervalId);
+}
+
