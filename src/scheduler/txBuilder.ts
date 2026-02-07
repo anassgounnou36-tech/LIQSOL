@@ -1,6 +1,7 @@
 import { scoreHazard } from '../predict/hazardScorer.js';
 import { computeEV, type EvParams } from '../predict/evCalculator.js';
 import { estimateTtlString } from '../predict/ttlEstimator.js';
+import { parseTtlMinutes } from '../predict/forecastTTLManager.js';
 
 export interface FlashloanPlan {
   key: string;
@@ -53,7 +54,9 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     solDropPctPerMin: Number(process.env.TTL_SOL_DROP_PCT_PER_MIN ?? 0.2),
     maxDropPct: Number(process.env.TTL_MAX_DROP_PCT ?? 20),
   });
-  const ttlMin = (ttlStr && /^\d+m\d+s$/.test(ttlStr)) ? (parseInt(ttlStr.split('m')[0], 10) + parseInt(ttlStr.split('m')[1], 10) / 60) : Infinity;
+  
+  // Parse TTL string into minutes using shared utility
+  const ttlMin = parseTtlMinutes(ttlStr);
   
   return {
     ...plan,

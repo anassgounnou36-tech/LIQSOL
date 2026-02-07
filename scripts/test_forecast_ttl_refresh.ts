@@ -9,7 +9,7 @@ function getEnvNum(key: string, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
-(async () => {
+(() => {
   const params: TtlManagerParams = {
     forecastMaxAgeMs: getEnvNum('FORECAST_MAX_AGE_MS', 300_000),
     minRefreshIntervalMs: getEnvNum('SCHED_MIN_REFRESH_INTERVAL_MS', 60_000),

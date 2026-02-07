@@ -86,15 +86,28 @@ export function refreshQueue(params: TtlManagerParams, candidateSource?: any[]):
   return sorted;
 }
 
-export function startSchedulerRefreshLoop(params: TtlManagerParams, candidateSource?: any[]): void {
+let refreshInProgress = false;
+
+export function startSchedulerRefreshLoop(params: TtlManagerParams, candidateSource?: any[]): () => void {
   const intervalMs = Number(process.env.SCHED_REFRESH_INTERVAL_MS ?? 30000);
-  setInterval(() => {
+  const intervalId = setInterval(() => {
+    // Prevent concurrent refreshes
+    if (refreshInProgress) {
+      console.log('\n⏭️  Scheduler refresh: skipping (previous refresh still in progress)');
+      return;
+    }
+    refreshInProgress = true;
     try {
       const updated = refreshQueue(params, candidateSource);
       console.log(`\n🔁 Scheduler refresh: queue size ${updated.length}`);
     } catch (err) {
       console.error('Scheduler refresh error:', err);
+    } finally {
+      refreshInProgress = false;
     }
   }, intervalMs);
+  
+  // Return cleanup function
+  return () => clearInterval(intervalId);
 }
 

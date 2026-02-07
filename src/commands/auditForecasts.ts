@@ -21,7 +21,7 @@ function getEnvNum(key: string, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
-(async () => {
+(() => {
   const queue = loadQueue();
 
   // Normalize queue entries to ForecastEntry
