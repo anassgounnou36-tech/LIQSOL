@@ -62,7 +62,7 @@ export function refreshQueue(params: TtlManagerParams, candidateSource?: any[]):
 
   // Batch limit to cap recompute work per cycle
   const batchLimit = Number(process.env.SCHED_REFRESH_BATCH_LIMIT ?? 25);
-  const toRefreshLimited = toRefresh.slice(0, Math.max(0, batchLimit));
+  const toRefreshLimited = toRefresh.slice(0, batchLimit);
   
   console.log(`Refreshing ${toRefreshLimited.length}/${toRefresh.length} flagged items (batch limit: ${batchLimit})`);
 
