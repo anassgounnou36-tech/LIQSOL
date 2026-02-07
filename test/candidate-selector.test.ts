@@ -209,4 +209,190 @@ describe("PR8 Candidate Selector", () => {
 
     expect(large?.priorityScore).toBeGreaterThan(small?.priorityScore || 0);
   });
+
+  // PR 8.5: EV-based ranking tests
+  describe("EV-based ranking (opt-in)", () => {
+    it("should compute hazard and EV when useEvRanking is enabled", () => {
+      const scored: ScoredObligation[] = [
+        {
+          obligationPubkey: "test1",
+          ownerPubkey: "owner1",
+          healthRatio: 0.95,
+          liquidationEligible: true,
+          borrowValueUsd: 10000,
+          collateralValueUsd: 9500,
+        },
+        {
+          obligationPubkey: "test2",
+          ownerPubkey: "owner2",
+          healthRatio: 1.05,
+          liquidationEligible: false,
+          borrowValueUsd: 5000,
+          collateralValueUsd: 5250,
+        },
+      ];
+
+      const candidates = selectCandidates(scored, {
+        useEvRanking: true,
+        minBorrowUsd: 10,
+        hazardAlpha: 25,
+        evParams: {
+          closeFactor: 0.5,
+          liquidationBonusPct: 0.05,
+          flashloanFeePct: 0.002,
+          fixedGasUsd: 0.5,
+        },
+      });
+
+      expect(candidates.length).toBe(2);
+      expect(candidates[0].hazard).toBeDefined();
+      expect(candidates[0].ev).toBeDefined();
+      expect(candidates[1].hazard).toBeDefined();
+      expect(candidates[1].ev).toBeDefined();
+    });
+
+    it("should sort by EV descending when useEvRanking is enabled", () => {
+      const scored: ScoredObligation[] = [
+        {
+          obligationPubkey: "low_ev",
+          ownerPubkey: "owner1",
+          healthRatio: 1.15,
+          liquidationEligible: false,
+          borrowValueUsd: 5000,
+          collateralValueUsd: 5750,
+        },
+        {
+          obligationPubkey: "high_ev",
+          ownerPubkey: "owner2",
+          healthRatio: 0.95,
+          liquidationEligible: true,
+          borrowValueUsd: 10000,
+          collateralValueUsd: 9500,
+        },
+      ];
+
+      const candidates = selectCandidates(scored, {
+        useEvRanking: true,
+        minBorrowUsd: 10,
+        hazardAlpha: 25,
+        evParams: {
+          closeFactor: 0.5,
+          liquidationBonusPct: 0.05,
+          flashloanFeePct: 0.002,
+          fixedGasUsd: 0.5,
+        },
+      });
+
+      // High EV should be first
+      expect(candidates[0].obligationPubkey).toBe("high_ev");
+      expect(candidates[0].ev).toBeGreaterThan(candidates[1].ev || 0);
+    });
+
+    it("should filter by minBorrowUsd unless liquidatable in EV mode", () => {
+      const scored: ScoredObligation[] = [
+        {
+          obligationPubkey: "below_min",
+          ownerPubkey: "owner1",
+          healthRatio: 1.05,
+          liquidationEligible: false,
+          borrowValueUsd: 5, // Below minBorrowUsd
+          collateralValueUsd: 5.25,
+        },
+        {
+          obligationPubkey: "below_min_liq",
+          ownerPubkey: "owner2",
+          healthRatio: 0.95,
+          liquidationEligible: true,
+          borrowValueUsd: 5, // Below minBorrowUsd but liquidatable
+          collateralValueUsd: 4.75,
+        },
+        {
+          obligationPubkey: "above_min",
+          ownerPubkey: "owner3",
+          healthRatio: 1.05,
+          liquidationEligible: false,
+          borrowValueUsd: 100,
+          collateralValueUsd: 105,
+        },
+      ];
+
+      const candidates = selectCandidates(scored, {
+        useEvRanking: true,
+        minBorrowUsd: 10,
+        hazardAlpha: 25,
+        evParams: {
+          closeFactor: 0.5,
+          liquidationBonusPct: 0.05,
+          flashloanFeePct: 0.002,
+          fixedGasUsd: 0.5,
+        },
+      });
+
+      // Should include below_min_liq (liquidatable) and above_min
+      expect(candidates.length).toBe(2);
+      expect(candidates.map((c) => c.obligationPubkey)).toContain("below_min_liq");
+      expect(candidates.map((c) => c.obligationPubkey)).toContain("above_min");
+      expect(candidates.map((c) => c.obligationPubkey)).not.toContain("below_min");
+    });
+
+    it("should use healthRatioRaw when available in EV mode", () => {
+      const scored: ScoredObligation[] = [
+        {
+          obligationPubkey: "with_raw",
+          ownerPubkey: "owner1",
+          healthRatio: 2.0, // Clamped
+          healthRatioRaw: 10.5, // Unclamped
+          liquidationEligible: false,
+          borrowValueUsd: 1000,
+          collateralValueUsd: 10500,
+        },
+      ];
+
+      const candidates = selectCandidates(scored, {
+        useEvRanking: true,
+        minBorrowUsd: 10,
+        hazardAlpha: 25,
+        evParams: {
+          closeFactor: 0.5,
+          liquidationBonusPct: 0.05,
+          flashloanFeePct: 0.002,
+          fixedGasUsd: 0.5,
+        },
+      });
+
+      expect(candidates.length).toBe(1);
+      // Hazard computed from healthRatioRaw (10.5) should be much lower than from clamped (2.0)
+      // With alpha=25 and margin=9.5: hazard = 1/(1+25*9.5) = 1/238.5 ≈ 0.0042
+      expect(candidates[0].hazard).toBeLessThan(0.01);
+    });
+
+    it("should maintain default behavior when useEvRanking is false", () => {
+      const scored: ScoredObligation[] = [
+        {
+          obligationPubkey: "liq1",
+          ownerPubkey: "owner1",
+          healthRatio: 0.95,
+          liquidationEligible: true,
+          borrowValueUsd: 1000,
+          collateralValueUsd: 950,
+        },
+        {
+          obligationPubkey: "safe1",
+          ownerPubkey: "owner2",
+          healthRatio: 1.5,
+          liquidationEligible: false,
+          borrowValueUsd: 10000,
+          collateralValueUsd: 15000,
+        },
+      ];
+
+      const candidates = selectCandidates(scored, { useEvRanking: false });
+
+      // Should use default priority scoring
+      expect(candidates[0].obligationPubkey).toBe("liq1");
+      expect(candidates[0].hazard).toBeUndefined();
+      expect(candidates[0].ev).toBeUndefined();
+      expect(candidates[0].priorityScore).toBeGreaterThan(candidates[1].priorityScore);
+    });
+  });
 });
