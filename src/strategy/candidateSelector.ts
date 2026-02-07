@@ -7,6 +7,7 @@
 
 import { scoreHazard } from '../predict/hazardScorer.js';
 import { computeEV, EvParams } from '../predict/evCalculator.js';
+import { estimateTtlString } from '../predict/ttlEstimator.js';
 
 export interface ScoredObligation {
   obligationPubkey: string;
@@ -26,6 +27,11 @@ export interface Candidate extends ScoredObligation {
   priceMoveToLiquidationPct?: number; // heuristic for SOL/USDC pairs (optional for PR8)
   hazard?: number; // PR 8.5: hazard score when using EV ranking
   ev?: number; // PR 8.5: expected value when using EV ranking
+  forecast?: { // PR 8.6: forecast object with EV, TTL, and rank
+    evScore: number;
+    timeToLiquidation: string;
+    rank?: number;
+  };
 }
 
 export interface CandidateSelectorConfig {
@@ -35,6 +41,35 @@ export interface CandidateSelectorConfig {
   minBorrowUsd?: number; // default 10
   hazardAlpha?: number; // default 25
   evParams?: EvParams; // EV calculation parameters
+  // PR 8.6: Forecast caching and TTL parameters
+  forecastTtlMs?: number; // default 300000 (5 minutes)
+  ttlSolDropPctPerMin?: number; // default 0.2
+  ttlMaxDropPct?: number; // default 20
+}
+
+// PR 8.6: Simple in-memory forecast cache with TTL
+// Note: This is a bounded cache that only grows with unique obligation keys.
+// In production, the number of liquidatable/near-liquidatable obligations is typically
+// small (< 100), so memory impact is minimal. For long-running processes with high
+// churn, consider implementing periodic cleanup of expired entries.
+type ForecastEntry = {
+  evScore: number;
+  timeToLiquidation: string;
+  rank?: number;
+  atMs: number;
+};
+
+const forecastCache = new Map<string, ForecastEntry>();
+
+function getCachedForecast(key: string, ttlMs: number): ForecastEntry | undefined {
+  const e = forecastCache.get(key);
+  if (!e) return undefined;
+  if (Date.now() - e.atMs > ttlMs) return undefined;
+  return e;
+}
+
+function setCachedForecast(key: string, f: ForecastEntry) {
+  forecastCache.set(key, f);
 }
 
 /**
@@ -88,17 +123,47 @@ export function selectCandidates(
     const minBorrow = config.minBorrowUsd ?? 10;
     const alpha = config.hazardAlpha ?? 25;
     const evParams = config.evParams; // TypeScript narrowing
+    const ttlMs = config.forecastTtlMs ?? 300000; // Default 5 minutes
+    const ttlOpts = {
+      solDropPctPerMin: config.ttlSolDropPctPerMin ?? 0.2,
+      maxDropPct: config.ttlMaxDropPct ?? 20,
+    };
 
-    return candidates
+    const withEvAndForecast = candidates
       .map((c) => {
         // Use healthRatioRaw if available for more precise calculations
         const hr = c.healthRatioRaw ?? c.healthRatio;
         const hazard = scoreHazard(hr, alpha);
         const ev = computeEV(c.borrowValueUsd, hazard, evParams);
-        return { ...c, hazard, ev };
+        
+        // PR 8.6: Forecast TTL caching
+        const key = c.obligationPubkey;
+        const cached = getCachedForecast(key, ttlMs);
+        let ttlString = cached?.timeToLiquidation;
+        // Validate cached EV score matches current calculation (within small tolerance)
+        if (ttlString && cached && Math.abs(cached.evScore - ev) < 0.01) {
+          // Use cached TTL
+        } else {
+          // Recalculate TTL if cache miss or EV changed
+          ttlString = estimateTtlString(c, ttlOpts);
+          setCachedForecast(key, { evScore: ev, timeToLiquidation: ttlString, atMs: Date.now() });
+        }
+        
+        return { 
+          ...c, 
+          hazard, 
+          ev, 
+          forecast: { evScore: ev, timeToLiquidation: ttlString } 
+        };
       })
       .filter((c) => c.liquidationEligible || c.borrowValueUsd >= minBorrow)
       .sort((a, b) => (b.ev ?? 0) - (a.ev ?? 0));
+
+    // PR 8.6: Inject rank after final sort
+    return withEvAndForecast.map((c, idx) => ({
+      ...c,
+      forecast: { ...(c.forecast ?? { evScore: 0, timeToLiquidation: 'unknown' }), rank: idx + 1 },
+    }));
   }
 
   // Default: sort by priorityScore
