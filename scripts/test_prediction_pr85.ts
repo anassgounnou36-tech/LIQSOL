@@ -11,7 +11,9 @@ function loadCandidates(): any[] {
   }
   const raw = fs.readFileSync(p, 'utf8');
   try { 
-    return JSON.parse(raw); 
+    const parsed = JSON.parse(raw);
+    // Handle both array and {candidates: array} formats
+    return Array.isArray(parsed) ? parsed : (parsed.candidates || []);
   } catch (e) {
     console.error('Failed to parse candidates.json:', e);
     process.exit(1);
