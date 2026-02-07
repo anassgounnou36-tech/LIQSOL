@@ -48,6 +48,10 @@ export interface CandidateSelectorConfig {
 }
 
 // PR 8.6: Simple in-memory forecast cache with TTL
+// Note: This is a bounded cache that only grows with unique obligation keys.
+// In production, the number of liquidatable/near-liquidatable obligations is typically
+// small (< 100), so memory impact is minimal. For long-running processes with high
+// churn, consider implementing periodic cleanup of expired entries.
 type ForecastEntry = {
   evScore: number;
   timeToLiquidation: string;
@@ -136,7 +140,11 @@ export function selectCandidates(
         const key = c.obligationPubkey;
         const cached = getCachedForecast(key, ttlMs);
         let ttlString = cached?.timeToLiquidation;
-        if (!ttlString) {
+        // Validate cached EV score matches current calculation (within small tolerance)
+        if (ttlString && cached && Math.abs(cached.evScore - ev) < 0.01) {
+          // Use cached TTL
+        } else {
+          // Recalculate TTL if cache miss or EV changed
           ttlString = estimateTtlString(c, ttlOpts);
           setCachedForecast(key, { evScore: ev, timeToLiquidation: ttlString, atMs: Date.now() });
         }
@@ -154,7 +162,7 @@ export function selectCandidates(
     // PR 8.6: Inject rank after final sort
     return withEvAndForecast.map((c, idx) => ({
       ...c,
-      forecast: { ...c.forecast!, rank: idx + 1 },
+      forecast: { ...(c.forecast ?? { evScore: 0, timeToLiquidation: 'unknown' }), rank: idx + 1 },
     }));
   }
 

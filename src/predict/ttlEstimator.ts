@@ -6,6 +6,14 @@
  */
 
 /**
+ * Candidate data for TTL estimation
+ */
+export interface TtlCandidate {
+  healthRatio?: number;
+  healthRatioRaw?: number;
+}
+
+/**
  * Estimate time to liquidation as a human-readable string.
  * 
  * Approximates TTL by calculating the required price drop over an assumed
@@ -18,7 +26,7 @@
  * @returns Human-readable time string (e.g., "5m30s", "now", "unknown")
  */
 export function estimateTtlString(
-  candidate: any,
+  candidate: TtlCandidate,
   opts: { solDropPctPerMin: number; maxDropPct: number }
 ): string {
   try {
