@@ -12,12 +12,25 @@ import { scoreHazard } from '../src/predict/hazardScorer.js';
 import { computeEV, type EvParams } from '../src/predict/evCalculator.js';
 import { estimateTtlString } from '../src/predict/ttlEstimator.js';
 
+/**
+ * Normalize any candidates payload into an array.
+ * Supports: array, {data: [...]}, {candidates: [...]}, keyed object.
+ */
+function normalizeCandidates(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  if (Array.isArray(payload.data)) return payload.data;
+  if (Array.isArray(payload.candidates)) return payload.candidates;
+  return Object.values(payload);
+}
+
 function loadCandidatesRaw(): any[] {
   const p = path.join(process.cwd(), 'data', 'candidates.json');
   if (!fs.existsSync(p)) {
     throw new Error('Missing data/candidates.json');
   }
-  return JSON.parse(fs.readFileSync(p, 'utf8'));
+  const rawPayload = JSON.parse(fs.readFileSync(p, 'utf8'));
+  return normalizeCandidates(rawPayload);
 }
 
 function parseTtlMinutes(ttlStr: string): number {

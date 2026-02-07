@@ -17,10 +17,22 @@ import { computeEV, type EvParams } from "../predict/evCalculator.js";
 import { estimateTtlString } from "../predict/ttlEstimator.js";
 
 /**
+ * Normalize any candidates payload into an array.
+ * Supports: array, {data: [...]}, {candidates: [...]}, keyed object.
+ */
+function normalizeCandidates(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  if (Array.isArray(payload.data)) return payload.data;
+  if (Array.isArray(payload.candidates)) return payload.candidates;
+  return Object.values(payload);
+}
+
+/**
  * Load candidates with forecast scores from data/candidates.scored.json
  * Returns null if file doesn't exist
  */
-function loadCandidatesScored(): any[] | null {
+function loadCandidatesScored(): any | null {
   const p = path.join(process.cwd(), 'data', 'candidates.scored.json');
   if (!fs.existsSync(p)) return null;
   try {
@@ -34,7 +46,7 @@ function loadCandidatesScored(): any[] | null {
  * Load raw candidates from data/candidates.json
  * Throws if file doesn't exist
  */
-function loadCandidatesRaw(): any[] {
+function loadCandidatesRaw(): any {
   const p = path.join(process.cwd(), 'data', 'candidates.json');
   if (!fs.existsSync(p)) {
     throw new Error('Missing data/candidates.json. Run: npm run snapshot:candidates:wsl');
@@ -131,12 +143,31 @@ async function main() {
 
   // PR 8.7: Forecast-aware candidate ranking
   const useForecast = env.USE_FORECAST_FOR_DRYRUN === 'true';
-  let candidates = loadCandidatesScored() ?? loadCandidatesRaw();
+  
+  // Load payload (object or array), then normalize to array
+  const scoredPayload = loadCandidatesScored();
+  const rawPayload = scoredPayload ?? loadCandidatesRaw();
+  let candidates = normalizeCandidates(rawPayload);
+
+  logger.info(
+    {
+      event: "forecast_candidates_loaded",
+      source: scoredPayload ? "scored" : "raw",
+      isArray: Array.isArray(rawPayload),
+      normalizedCount: candidates.length,
+    },
+    "Loaded forecast candidates"
+  );
+
   let ranked: any[] = candidates;
   let target: any;
 
   if (useForecast) {
     logger.info({ event: "forecast_ranking_enabled" }, "Forecast ranking enabled for dry-run");
+    
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      throw new Error("No candidates available (empty or invalid candidates payload)");
+    }
 
     // Compute on the fly if forecast fields are missing
     const alpha = Number(env.HAZARD_ALPHA ?? 25);
@@ -157,7 +188,7 @@ async function main() {
       const ev = c.ev ?? computeEV(borrow, hazard, evParams);
       const ttlStr = (c.forecast?.timeToLiquidation) ?? estimateTtlString(c, { solDropPctPerMin, maxDropPct });
       const ttlMin = parseTtlMinutes(ttlStr);
-      return { ...c, hazard, ev, ttlMin, ttlStr };
+      return { ...c, key: c.key ?? c.obligationPubkey ?? 'unknown', hazard, ev, ttlMin, ttlStr };
     }).sort((a: any, b: any) => {
       if (b.ev !== a.ev) return Number(b.ev) - Number(a.ev);
       if (a.ttlMin !== b.ttlMin) return Number(a.ttlMin) - Number(b.ttlMin);
@@ -168,11 +199,12 @@ async function main() {
     logger.info({ event: "forecast_ranking_complete", totalCandidates: ranked.length }, "Ranking complete");
     console.log("\n📊 Top 10 Ranked Candidates by EV/TTL/Hazard:");
     console.table(ranked.slice(0, 10).map((x: any) => ({
-      key: x.key ?? x.obligationPubkey ?? 'unknown',
+      key: x.key,
       healthRatio: Number(x.healthRatioRaw ?? x.healthRatio ?? 0).toFixed(4),
       hazard: Number(x.hazard).toFixed(4),
       ev: Number(x.ev).toFixed(4),
       ttl: x.ttlStr,
+      borrowValueUsd: Number(x.borrowValueUsd ?? 0).toFixed(2),
     })));
 
     target = ranked[0];
@@ -183,7 +215,7 @@ async function main() {
     logger.info(
       { 
         event: "target_selected",
-        key: target.key ?? target.obligationPubkey ?? 'unknown',
+        key: target.key,
         ev: target.ev,
         ttl: target.ttlStr,
         hazard: target.hazard
