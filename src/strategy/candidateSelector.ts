@@ -92,13 +92,12 @@ export function selectCandidates(
     return candidates
       .map((c) => {
         // Use healthRatioRaw if available for more precise calculations
-        const hr = (c.healthRatioRaw ?? c.healthRatio) as number;
+        const hr = c.healthRatioRaw ?? c.healthRatio;
         const hazard = scoreHazard(hr, alpha);
-        const borrowUsd = Number(c.borrowValueUsd ?? 0);
-        const ev = computeEV(borrowUsd, hazard, evParams);
+        const ev = computeEV(c.borrowValueUsd, hazard, evParams);
         return { ...c, hazard, ev };
       })
-      .filter((c) => c.liquidationEligible || (Number(c.borrowValueUsd ?? 0) >= minBorrow))
+      .filter((c) => c.liquidationEligible || c.borrowValueUsd >= minBorrow)
       .sort((a, b) => (b.ev ?? 0) - (a.ev ?? 0));
   }
 

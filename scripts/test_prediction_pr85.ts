@@ -3,7 +3,25 @@ import path from 'path';
 import { scoreHazard } from '../src/predict/hazardScorer.js';
 import { computeEV, EvParams } from '../src/predict/evCalculator.js';
 
-function loadCandidates(): any[] {
+interface CandidateData {
+  key?: string;
+  obligationPubkey?: string;
+  healthRatio?: number;
+  healthRatioRaw?: number;
+  liquidationEligible?: boolean;
+  borrowValueUsd?: number;
+}
+
+interface ScoredCandidate {
+  key: string;
+  healthRatio: number;
+  hazard: number;
+  ev: number;
+  borrowValueUsd: number;
+  liquidationEligible: boolean;
+}
+
+function loadCandidates(): CandidateData[] {
   const p = path.join(process.cwd(), 'data', 'candidates.json');
   if (!fs.existsSync(p)) {
     console.error('Missing data/candidates.json. Run: npm run snapshot:candidates:wsl');
@@ -37,21 +55,23 @@ const params: EvParams = {
 };
 
 const data = loadCandidates();
-const withScores = data.map((c: any) => {
+const withScores: ScoredCandidate[] = data.map((c) => {
   const hr = Number(c.healthRatioRaw ?? c.healthRatio ?? 0);
   const hazard = scoreHazard(hr, alpha);
   const borrow = Number(c.borrowValueUsd ?? 0);
   const ev = computeEV(borrow, hazard, params);
+  const liquidationEligible = c.liquidationEligible ?? false;
   return { 
     key: c.key ?? c.obligationPubkey ?? 'unknown', 
     healthRatio: hr, 
     hazard, 
     ev, 
-    borrowValueUsd: borrow 
+    borrowValueUsd: borrow,
+    liquidationEligible,
   };
-}).filter((c: any) => c.borrowValueUsd >= minBorrowUsd || (c.healthRatio <= 1));
+}).filter((c) => c.liquidationEligible || c.borrowValueUsd >= minBorrowUsd);
 
-withScores.sort((a: any, b: any) => b.ev - a.ev);
+withScores.sort((a, b) => b.ev - a.ev);
 
 console.log('EV params:', params, 'hazard alpha:', alpha, 'minBorrowUsd:', minBorrowUsd);
 console.table(withScores.slice(0, 10), ['key', 'healthRatio', 'hazard', 'ev', 'borrowValueUsd']);
