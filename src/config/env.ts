@@ -38,6 +38,11 @@ export const EnvSchema = z.object({
   EV_FLASHLOAN_FEE_PCT: z.string().optional().default('0.002'),
   EV_FIXED_GAS_USD: z.string().optional().default('0.5'),
   EV_SLIPPAGE_BUFFER_PCT: z.string().optional(), // optional, no default
+
+  // PR 8.6: Forecast caching and TTL parameters
+  FORECAST_TTL_MS: z.string().optional().default('300000'),
+  TTL_SOL_DROP_PCT_PER_MIN: z.string().optional().default('0.2'),
+  TTL_MAX_DROP_PCT: z.string().optional().default('20'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

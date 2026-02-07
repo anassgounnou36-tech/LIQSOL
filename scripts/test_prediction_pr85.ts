@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { scoreHazard } from '../src/predict/hazardScorer.js';
 import { computeEV, EvParams } from '../src/predict/evCalculator.js';
+import { estimateTtlString } from '../src/predict/ttlEstimator.js';
 
 interface CandidateData {
   key?: string;
@@ -19,6 +20,7 @@ interface ScoredCandidate {
   ev: number;
   borrowValueUsd: number;
   liquidationEligible: boolean;
+  timeToLiquidation: string; // PR 8.6: TTL display
 }
 
 function loadCandidates(): CandidateData[] {
@@ -53,6 +55,9 @@ const params: EvParams = {
   fixedGasUsd: getEnvNum('EV_FIXED_GAS_USD', 0.5),
   slippageBufferPct: process.env.EV_SLIPPAGE_BUFFER_PCT ? getEnvNum('EV_SLIPPAGE_BUFFER_PCT', 0.005) : undefined,
 };
+// PR 8.6: TTL parameters
+const solDropPctPerMin = getEnvNum('TTL_SOL_DROP_PCT_PER_MIN', 0.2);
+const maxDropPct = getEnvNum('TTL_MAX_DROP_PCT', 20);
 
 const data = loadCandidates();
 const withScores: ScoredCandidate[] = data.map((c) => {
@@ -61,6 +66,7 @@ const withScores: ScoredCandidate[] = data.map((c) => {
   const borrow = Number(c.borrowValueUsd ?? 0);
   const ev = computeEV(borrow, hazard, params);
   const liquidationEligible = c.liquidationEligible ?? false;
+  const ttl = estimateTtlString(c, { solDropPctPerMin, maxDropPct }); // PR 8.6: TTL estimation
   return { 
     key: c.key ?? c.obligationPubkey ?? 'unknown', 
     healthRatio: hr, 
@@ -68,10 +74,12 @@ const withScores: ScoredCandidate[] = data.map((c) => {
     ev, 
     borrowValueUsd: borrow,
     liquidationEligible,
+    timeToLiquidation: ttl, // PR 8.6: TTL field
   };
 }).filter((c) => c.liquidationEligible || c.borrowValueUsd >= minBorrowUsd);
 
 withScores.sort((a, b) => b.ev - a.ev);
 
-console.log('EV params:', params, 'hazard alpha:', alpha, 'minBorrowUsd:', minBorrowUsd);
-console.table(withScores.slice(0, 10), ['key', 'healthRatio', 'hazard', 'ev', 'borrowValueUsd']);
+console.log('EV params:', params, 'hazard alpha:', alpha, 'minBorrowUsd:', minBorrowUsd,
+  'TTL drop/min:', solDropPctPerMin, 'TTL cap:', maxDropPct); // PR 8.6: TTL params
+console.table(withScores.slice(0, 10), ['key', 'healthRatio', 'hazard', 'ev', 'borrowValueUsd', 'timeToLiquidation']);
