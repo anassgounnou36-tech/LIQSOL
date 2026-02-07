@@ -17,6 +17,13 @@ function getEnvNum(key: string, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
+function getOptionalEnvNum(key: string): number | undefined {
+  const v = process.env[key];
+  if (!v) return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 (async () => {
   const hazardAlpha = getEnvNum('HAZARD_ALPHA', 25);
   const evParams: EvParams = {
@@ -24,7 +31,7 @@ function getEnvNum(key: string, def: number): number {
     liquidationBonusPct: getEnvNum('EV_LIQUIDATION_BONUS_PCT', 0.05),
     flashloanFeePct: getEnvNum('EV_FLASHLOAN_FEE_PCT', 0.002),
     fixedGasUsd: getEnvNum('EV_FIXED_GAS_USD', 0.5),
-    slippageBufferPct: process.env.EV_SLIPPAGE_BUFFER_PCT ? getEnvNum('EV_SLIPPAGE_BUFFER_PCT', 0.005) : undefined,
+    slippageBufferPct: getOptionalEnvNum('EV_SLIPPAGE_BUFFER_PCT'),
   };
   const params = {
     minEv: getEnvNum('SCHED_MIN_EV', 0),

@@ -6,7 +6,12 @@ const QUEUE_PATH = path.join(process.cwd(), 'data', 'tx_queue.json');
 
 export function loadQueue(): FlashloanPlan[] {
   if (!fs.existsSync(QUEUE_PATH)) return [];
-  try { return JSON.parse(fs.readFileSync(QUEUE_PATH, 'utf8')); } catch { return []; }
+  try {
+    return JSON.parse(fs.readFileSync(QUEUE_PATH, 'utf8'));
+  } catch (err) {
+    console.warn(`Failed to load queue from ${QUEUE_PATH}: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
 }
 
 export function saveQueue(items: FlashloanPlan[]): void {

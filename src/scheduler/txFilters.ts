@@ -22,10 +22,10 @@ export function normalizeCandidates(payload: any): any[] {
 
 export function parseTtlMinutes(ttlStr?: string): number {
   if (!ttlStr || ttlStr === 'unknown') return Infinity;
-  const m = /^(\d+)m(\d+)s$/.exec(ttlStr);
+  const m = /^(?:(\d+)m)?(?:(\d+)s)?$/.exec(ttlStr);
   if (!m) return Infinity;
-  const minutes = Number(m[1]);
-  const seconds = Number(m[2]);
+  const minutes = Number(m[1] || 0);
+  const seconds = Number(m[2] || 0);
   return minutes + seconds / 60;
 }
 
