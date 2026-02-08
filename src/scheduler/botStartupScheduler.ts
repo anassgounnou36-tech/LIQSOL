@@ -6,6 +6,9 @@ import { runDryExecutor } from '../execute/executor.js';
 import { YellowstoneAccountListener } from '../monitoring/yellowstoneAccountListener.js';
 import { YellowstonePriceListener } from '../monitoring/yellowstonePriceListener.js';
 import { EventRefreshOrchestrator } from '../monitoring/eventRefreshOrchestrator.js';
+import { Connection, PublicKey } from '@solana/web3.js';
+import { loadReserves, getMintsByOracle, type ReserveCache } from '../cache/reserveCache.js';
+import { logger } from '../observability/logger.js';
 
 function getEnvNum(key: string, def: number): number {
   const v = process.env[key];
@@ -13,28 +16,86 @@ function getEnvNum(key: string, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
+function deriveObligationPubkeysFromQueue(): string[] {
+  const q = loadQueue();
+  return q.map(p => String(p.key)).filter(Boolean);
+}
+
+async function deriveOraclePubkeysFromReserves(env: any): Promise<{ oraclePubkeys: string[]; reserveCache: ReserveCache }> {
+  const conn = new Connection(env.RPC_PRIMARY, 'confirmed');
+  const market = new PublicKey(env.KAMINO_MARKET_PUBKEY);
+  const reserves = await loadReserves(conn, market);
+  const set = new Set<string>();
+  for (const [, r] of reserves.byMint.entries()) {
+    for (const pk of r.oraclePubkeys) {
+      set.add(pk.toString());
+    }
+  }
+  return { oraclePubkeys: Array.from(set), reserveCache: reserves };
+}
+
 // Initialize listeners and orchestrator for event-driven refresh
 async function initRealtime(): Promise<EventRefreshOrchestrator> {
-  const grpcEndpoint = process.env.YELLOWSTONE_GRPC_URL || '';
-  const obligationPubkeys = (process.env.OBLIGATION_PUBKEYS ?? '').split(',').map(s => s.trim()).filter(Boolean);
-  const assetMints = (process.env.PRICE_ASSET_MINTS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  const env = loadEnv();
+  const grpcUrl = env.YELLOWSTONE_GRPC_URL;
+  const token = env.YELLOWSTONE_X_TOKEN;
 
-  const accountListener = new YellowstoneAccountListener({ grpcEndpoint, obligationPubkeys, reconnectMs: 5000 });
-  const priceListener = new YellowstonePriceListener({ grpcEndpoint, assetMints, reconnectMs: 5000 });
+  const obligationPubkeys = deriveObligationPubkeysFromQueue();
+  logger.info({ count: obligationPubkeys.length }, 'Derived obligation pubkeys from queue');
+
+  const { oraclePubkeys, reserveCache } = await deriveOraclePubkeysFromReserves(env);
+  logger.info({ count: oraclePubkeys.length }, 'Derived oracle pubkeys from reserves');
+
+  // Build oracle→mint mapping for price listener
+  const oracleToMints = new Map<string, string[]>();
+  for (const oracle of oraclePubkeys) {
+    const mints = getMintsByOracle(reserveCache, oracle);
+    if (mints.length > 0) {
+      oracleToMints.set(oracle, mints);
+    }
+  }
+  logger.info({ uniqueOracles: oracleToMints.size }, 'Built oracle→mint mapping');
+
   const orchestrator = new EventRefreshOrchestrator({
-    minPricePctChange: parseFloat(process.env.MIN_PRICE_PCT_CHANGE || '1.0'),
-    minHealthDelta: parseFloat(process.env.MIN_HEALTH_DELTA || '0.01'),
-    minRefreshIntervalMs: parseInt(process.env.EVENT_MIN_REFRESH_INTERVAL_MS || '3000', 10),
+    minHealthDelta: Number(process.env.MIN_HEALTH_DELTA ?? 0.01),
+    minRefreshIntervalMs: Number(process.env.EVENT_MIN_REFRESH_INTERVAL_MS ?? 3000),
+    batchLimit: Number(process.env.EVENT_REFRESH_BATCH_LIMIT ?? 50),
   });
 
-  accountListener.on('ready', info => console.log(`[Realtime] Account listener ready:`, info));
-  accountListener.on('account-update', ev => orchestrator.handleAccountUpdate(ev));
+  const accountListener = new YellowstoneAccountListener({
+    grpcUrl,
+    authToken: token,
+    accountPubkeys: obligationPubkeys,
+    reconnectMs: 5000,
+    debounceMs: 150,
+  });
 
-  priceListener.on('ready', info => console.log(`[Realtime] Price listener ready:`, info));
-  priceListener.on('price-update', ev => orchestrator.handlePriceUpdate(ev));
+  const priceListener = new YellowstonePriceListener({
+    grpcUrl,
+    authToken: token,
+    oraclePubkeys,
+    reconnectMs: 5000,
+    debounceMs: 150,
+  });
+
+  accountListener.on('ready', info => logger.info(info, 'Account listener ready'));
+  accountListener.on('account-update', ev => orchestrator.handleAccountUpdate(ev));
+  accountListener.on('error', err => logger.error({ err }, 'Account listener error'));
+
+  priceListener.on('ready', info => logger.info(info, 'Price listener ready'));
+  priceListener.on('price-update', ev => {
+    // Resolve mint from oracle pubkey using oracle→mint map
+    const mints = oracleToMints.get(ev.oraclePubkey) ?? [];
+    for (const mint of mints) {
+      orchestrator.handlePriceUpdate({ ...ev, mint });
+    }
+  });
+  priceListener.on('error', err => logger.error({ err }, 'Price listener error'));
 
   await accountListener.start();
   await priceListener.start();
+
+  logger.info('Real-time listeners initialized and started');
 
   return orchestrator;
 }

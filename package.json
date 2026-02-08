@@ -42,6 +42,8 @@
     "scheduler:main:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_scheduler_main_wsl.ps1",
     "test:forecast-realtime-refresh": "tsx scripts/test_forecast_realtime_refresh.ts",
     "test:forecast-realtime-refresh:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_forecast_realtime_refresh_wsl.ps1",
+    "test:yellowstone:smoke": "tsx scripts/test_yellowstone_smoke.ts",
+    "test:yellowstone:smoke:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_yellowstone_smoke_wsl.ps1",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
