@@ -55,8 +55,8 @@ export class EventRefreshOrchestrator {
     if (!this.canRefresh(key)) return;
     
     let significant = false;
-    const beforeHealth = Number(ev.before?.health ?? ev.before?.healthRatio ?? NaN);
-    const afterHealth = Number(ev.after?.health ?? ev.after?.healthRatio ?? NaN);
+    const beforeHealth = parseFloat(String(ev.before?.health ?? ev.before?.healthRatio ?? NaN));
+    const afterHealth = parseFloat(String(ev.after?.health ?? ev.after?.healthRatio ?? NaN));
     if (Number.isFinite(beforeHealth) && Number.isFinite(afterHealth)) {
       const delta = Math.abs(afterHealth - beforeHealth);
       if (delta >= this.cfg.minHealthDelta) significant = true;

@@ -118,7 +118,7 @@ export async function startBotStartupScheduler(): Promise<void> {
   await cycleOnce();
 
   // Keep a very slow heartbeat cycle for audit/logging (optional)
-  const heartbeatMs = Number(process.env.SCHED_HEARTBEAT_INTERVAL_MS ?? 60000);
+  const heartbeatMs = parseInt(process.env.SCHED_HEARTBEAT_INTERVAL_MS || '60000', 10);
   setInterval(() => {
     cycleOnce().catch(err => console.error('[Scheduler] Cycle error:', err));
   }, heartbeatMs);
