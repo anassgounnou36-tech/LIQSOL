@@ -40,6 +40,8 @@
     "executor:dry:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_executor_dry_wsl.ps1",
     "scheduler:main": "tsx src/scheduler/botStartupScheduler.ts",
     "scheduler:main:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_scheduler_main_wsl.ps1",
+    "test:forecast-realtime-refresh": "tsx scripts/test_forecast_realtime_refresh.ts",
+    "test:forecast-realtime-refresh:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_forecast_realtime_refresh_wsl.ps1",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",

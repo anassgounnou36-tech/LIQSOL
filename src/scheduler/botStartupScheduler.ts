@@ -5,6 +5,9 @@ import { loadEnv } from '../config/env.js';
 import { refreshQueue, loadQueue } from './txScheduler.js';
 import { type TtlManagerParams } from '../predict/forecastTTLManager.js';
 import { runDryExecutor } from '../execute/executor.js';
+import { YellowstoneAccountListener } from '../monitoring/yellowstoneAccountListener.js';
+import { YellowstonePriceListener } from '../monitoring/yellowstonePriceListener.js';
+import { EventRefreshOrchestrator } from '../monitoring/eventRefreshOrchestrator.js';
 
 function getEnvNum(key: string, def: number): number {
   const v = process.env[key];
@@ -25,6 +28,32 @@ function loadCandidateSource(): any[] {
   }
 }
 
+// Initialize listeners and orchestrator for event-driven refresh
+async function initRealtime(): Promise<EventRefreshOrchestrator> {
+  const grpcEndpoint = process.env.YELLOWSTONE_GRPC_URL || '';
+  const obligationPubkeys = (process.env.OBLIGATION_PUBKEYS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  const assetMints = (process.env.PRICE_ASSET_MINTS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+
+  const accountListener = new YellowstoneAccountListener({ grpcEndpoint, obligationPubkeys, reconnectMs: 5000 });
+  const priceListener = new YellowstonePriceListener({ grpcEndpoint, assetMints, reconnectMs: 5000 });
+  const orchestrator = new EventRefreshOrchestrator({
+    minPricePctChange: Number(process.env.MIN_PRICE_PCT_CHANGE ?? 1.0),
+    minHealthDelta: Number(process.env.MIN_HEALTH_DELTA ?? 0.01),
+    minRefreshIntervalMs: Number(process.env.EVENT_MIN_REFRESH_INTERVAL_MS ?? 3000),
+  });
+
+  accountListener.on('ready', info => console.log(`[Realtime] Account listener ready:`, info));
+  accountListener.on('account-update', ev => orchestrator.handleAccountUpdate(ev));
+
+  priceListener.on('ready', info => console.log(`[Realtime] Price listener ready:`, info));
+  priceListener.on('price-update', ev => orchestrator.handlePriceUpdate(ev));
+
+  await accountListener.start();
+  await priceListener.start();
+
+  return orchestrator;
+}
+
 export async function startBotStartupScheduler(): Promise<void> {
   // Ensure env is loaded so scheduler flags are present
   loadEnv();
@@ -40,17 +69,21 @@ export async function startBotStartupScheduler(): Promise<void> {
 
   const candidateSource = loadCandidateSource();
 
+  // Initialize event-driven refresh
+  const orchestrator = await initRealtime();
+
   async function cycleOnce(): Promise<void> {
     console.log('\n[Scheduler] Cycle start');
 
-    if (cfg.enableRefresh) {
+    // Optional: keep a very infrequent periodic refresh as safety (disabled by default)
+    if ((process.env.SCHEDULER_ENABLE_REFRESH ?? 'false') === 'true') {
       const updated = refreshQueue(ttlParams, candidateSource);
       console.log(`[Scheduler] Refresh complete: queue size ${updated.length}`);
     } else {
-      console.log('[Scheduler] Refresh disabled.');
+      console.log('[Scheduler] Event-driven refresh enabled (cron refresh disabled).');
     }
 
-    if (cfg.enableAudit) {
+    if ((process.env.SCHEDULER_ENABLE_AUDIT ?? 'true') === 'true') {
       const queue = loadQueue();
       const total = queue.length;
       const active = queue.filter(p => Number(p.ttlMin ?? Infinity) > 0).length;
@@ -67,28 +100,28 @@ export async function startBotStartupScheduler(): Promise<void> {
           .map(p => ({ key: p.key, ev: Number(p.ev).toFixed(2), ttlMin: Number(p.ttlMin).toFixed(2), hazard: Number(p.hazard).toFixed(3) }));
         console.table(top);
       }
-    } else {
-      console.log('[Audit] Disabled.');
     }
 
-    if (cfg.enableDryRun) {
+    if ((process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true') === 'true') {
       try {
         const res = await runDryExecutor({ dry: true });
         console.log('[Executor] Dry-run completed:', res?.status ?? 'ok');
       } catch (e) {
         console.warn('[Executor] Dry-run failed:', (e as Error).message);
       }
-    } else {
-      console.log('[Executor] Dry-run disabled.');
     }
 
     console.log('[Scheduler] Cycle end');
   }
 
+  // Run initial cycle; rely on event-driven triggers afterwards
   await cycleOnce();
+
+  // Keep a very slow heartbeat cycle for audit/logging (optional)
+  const heartbeatMs = Number(process.env.SCHED_HEARTBEAT_INTERVAL_MS ?? 60000);
   setInterval(() => {
     cycleOnce().catch(err => console.error('[Scheduler] Cycle error:', err));
-  }, cfg.loopIntervalMs);
+  }, heartbeatMs);
 }
 
 // CLI entry
