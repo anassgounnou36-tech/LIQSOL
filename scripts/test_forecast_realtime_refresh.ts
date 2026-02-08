@@ -6,13 +6,14 @@ import { loadQueue } from '../src/scheduler/txScheduler.js';
 (async () => {
   console.log('Starting real-time refresh test (simulated events)...');
 
+  // Create listeners but don't start them (to avoid connection errors in test mode)
   const accountListener = new YellowstoneAccountListener({
-    grpcEndpoint: 'simulated',
-    obligationPubkeys: ['kgpZaovQNKALCNyxUFuoPj4kSqm6YQz5H4qXgM5p61d'],
+    grpcUrl: 'simulated',
+    accountPubkeys: ['kgpZaovQNKALCNyxUFuoPj4kSqm6YQz5H4qXgM5p61d'],
   });
   const priceListener = new YellowstonePriceListener({
-    grpcEndpoint: 'simulated',
-    assetMints: ['So11111111111111111111111111111111111111112', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'],
+    grpcUrl: 'simulated',
+    oraclePubkeys: ['oracle1', 'oracle2'],
   });
 
   const orchestrator = new EventRefreshOrchestrator({
@@ -24,8 +25,9 @@ import { loadQueue } from '../src/scheduler/txScheduler.js';
   accountListener.on('account-update', ev => orchestrator.handleAccountUpdate(ev));
   priceListener.on('price-update', ev => orchestrator.handlePriceUpdate(ev));
 
-  await accountListener.start();
-  await priceListener.start();
+  // No need to await start() in test mode - we simulate events directly
+  // await accountListener.start();
+  // await priceListener.start();
 
   const before = loadQueue().find(p => p.key === 'kgpZaovQNKALCNyxUFuoPj4kSqm6YQz5H4qXgM5p61d');
   console.log('Before refresh (top obligation):', before ? { key: before.key, ev: before.ev, ttlMin: before.ttlMin, hazard: before.hazard } : 'not-found');
@@ -40,11 +42,15 @@ import { loadQueue } from '../src/scheduler/txScheduler.js';
 
   // Simulate price update: SOL -2%
   priceListener.simulatePriceUpdate({
-    assetMint: 'So11111111111111111111111111111111111111112',
+    oraclePubkey: 'oracle1',
     slot: 124,
+    mint: 'So11111111111111111111111111111111111111112',
     price: 95,
     prevPrice: 96.94,
   });
+
+  // Wait a bit for async processing
+  await new Promise(resolve => setTimeout(resolve, 1000));
 
   // Read after updates
   const after = loadQueue().find(p => p.key === 'kgpZaovQNKALCNyxUFuoPj4kSqm6YQz5H4qXgM5p61d');
