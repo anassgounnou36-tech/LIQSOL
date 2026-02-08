@@ -81,11 +81,25 @@ export async function startBotStartupScheduler(): Promise<void> {
   }
 
   await cycleOnce();
-  setInterval(() => {
+  const intervalId = setInterval(() => {
     cycleOnce().catch(err => console.error('[Scheduler] Cycle error:', err));
   }, cfg.loopIntervalMs);
+
+  // Graceful shutdown handlers
+  const cleanup = () => {
+    console.log('\n[Scheduler] Shutting down...');
+    clearInterval(intervalId);
+    process.exit(0);
+  };
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
 }
 
 (async () => {
-  await startBotStartupScheduler();
+  try {
+    await startBotStartupScheduler();
+  } catch (err) {
+    console.error('[Scheduler] Failed to start:', err);
+    process.exit(1);
+  }
 })();

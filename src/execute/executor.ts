@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { buildKaminoFlashloanIxs } from '../flashloan/kaminoFlashloan.js';
 import { buildJupiterSwapIxs } from './swapBuilder.js';
@@ -165,8 +166,9 @@ export async function runDryExecutor(opts: ExecutorOptions = {}): Promise<Execut
   }
 }
 
-// CLI entry point
-if (import.meta.url === `file://${process.argv[1]}`) {
+// CLI entry point - check if this file is being run directly
+const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMainModule) {
   (async () => {
     const dry = process.argv.includes('--dryrun');
     await runDryExecutor({ dry });
