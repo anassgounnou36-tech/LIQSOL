@@ -1,5 +1,4 @@
 import { EventEmitter } from 'node:events';
-import { CommitmentLevel } from '@triton-one/yellowstone-grpc';
 import { PublicKey } from '@solana/web3.js';
 import { createYellowstoneClient, type YellowstoneClientInstance } from '../yellowstone/client.js';
 import { logger } from '../observability/logger.js';
@@ -18,6 +17,13 @@ export interface PriceListenerOptions {
   debounceMs?: number; // 100–250ms
   reconnectMs?: number;
 }
+
+// CommitmentLevel enum values from @triton-one/yellowstone-grpc
+const CommitmentLevel = {
+  PROCESSED: 0,
+  CONFIRMED: 1,
+  FINALIZED: 2,
+} as const;
 
 export class YellowstonePriceListener extends EventEmitter {
   private opts: PriceListenerOptions;

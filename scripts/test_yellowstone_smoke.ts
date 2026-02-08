@@ -1,6 +1,12 @@
 import { loadReadonlyEnv } from '../src/config/env.js';
 import { createYellowstoneClient } from '../src/yellowstone/client.js';
-import { CommitmentLevel } from '@triton-one/yellowstone-grpc';
+
+// CommitmentLevel enum values from @triton-one/yellowstone-grpc
+const CommitmentLevel = {
+  PROCESSED: 0,
+  CONFIRMED: 1,
+  FINALIZED: 2,
+} as const;
 
 async function main() {
   console.log('[Smoke] Starting Yellowstone SLOT stream test...');
