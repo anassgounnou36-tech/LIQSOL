@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey } from '@solana/web3.js';
 import { buildKaminoFlashloanIxs } from '../flashloan/kaminoFlashloan.js';
+import { loadEnv } from '../config/env.js';
+import { normalizeWslPath } from '../utils/path.js';
 
 interface Plan {
   key: string;
@@ -30,8 +32,11 @@ function getEnvNum(key: string, def: number): number {
 }
 
 (async () => {
+  // Load environment variables from .env
+  const env = loadEnv();
+  
   const dry = process.argv.includes('--dryrun');
-  const rpcUrl = process.env.RPC_PRIMARY || 'https://api.mainnet-beta.solana.com';
+  const rpcUrl = env.RPC_PRIMARY;
   const connection = new Connection(rpcUrl, 'confirmed');
 
   const minEv = getEnvNum('EXEC_MIN_EV', 0);
@@ -72,16 +77,18 @@ function getEnvNum(key: string, def: number): number {
     return;
   }
 
-  const kpPath = process.env.BOT_KEYPAIR_PATH;
-  if (!kpPath || !fs.existsSync(kpPath)) {
-    console.error('BOT_KEYPAIR_PATH missing or invalid.');
+  // Normalize keypair path for WSL compatibility (converts C:\... to /mnt/c/...)
+  const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
+  if (!fs.existsSync(kpPath)) {
+    console.error(`BOT_KEYPAIR_PATH does not exist: ${kpPath}`);
+    console.error(`Original path from env: ${env.BOT_KEYPAIR_PATH}`);
     return;
   }
   const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
   const signer = Keypair.fromSecretKey(Uint8Array.from(secret));
 
-  const market = new PublicKey(process.env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
-  const programId = new PublicKey(process.env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
+  const market = new PublicKey(env.KAMINO_MARKET_PUBKEY);
+  const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID);
 
   const mintValue = target.mint || 'USDC';
   if (mintValue !== 'USDC' && mintValue !== 'SOL') {
