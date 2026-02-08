@@ -36,6 +36,8 @@
     "audit:forecasts:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_audit_forecasts_wsl.ps1",
     "test:forecast-ttl-refresh": "npx tsx scripts/test_forecast_ttl_refresh.ts",
     "test:forecast-ttl-refresh:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_forecast_ttl_refresh_wsl.ps1",
+    "executor:dry": "tsx src/execute/executor.ts --dryrun",
+    "executor:dry:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_executor_dry_wsl.ps1",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
