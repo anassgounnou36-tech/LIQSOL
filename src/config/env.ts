@@ -63,6 +63,11 @@ export const EnvSchema = z.object({
 
   // PR12: Scheduler batch limit for refresh queue
   SCHED_REFRESH_BATCH_LIMIT: z.string().optional().default('25'),
+
+  // PR12: Execution thresholds for dry-run executor
+  EXEC_MIN_EV: z.string().optional().default('0'),
+  EXEC_MAX_TTL_MIN: z.string().optional().default('10'),
+  SCHEDULED_MIN_LIQUIDATION_DELAY_MS: z.string().optional().default('0'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

@@ -25,12 +25,6 @@ function loadPlans(): Plan[] {
   return [];
 }
 
-function getEnvNum(key: string, def: number): number {
-  const v = process.env[key];
-  const n = v ? Number(v) : NaN;
-  return Number.isFinite(n) ? n : def;
-}
-
 (async () => {
   // Load environment variables from .env
   const env = loadEnv();
@@ -39,9 +33,10 @@ function getEnvNum(key: string, def: number): number {
   const rpcUrl = env.RPC_PRIMARY;
   const connection = new Connection(rpcUrl, 'confirmed');
 
-  const minEv = getEnvNum('EXEC_MIN_EV', 0);
-  const maxTtlMin = getEnvNum('EXEC_MAX_TTL_MIN', 10);
-  const minDelayMs = getEnvNum('SCHEDULED_MIN_LIQUIDATION_DELAY_MS', 0);
+  // Parse execution thresholds from env
+  const minEv = Number(env.EXEC_MIN_EV ?? 0);
+  const maxTtlMin = Number(env.EXEC_MAX_TTL_MIN ?? 10);
+  const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
 
   const plans = loadPlans();
   if (!Array.isArray(plans) || plans.length === 0) {
