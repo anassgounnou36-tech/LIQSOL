@@ -32,9 +32,19 @@ function loadPlans(): Plan[] {
   return [];
 }
 
-(async () => {
+export interface ExecutorOptions {
+  dry?: boolean;
+}
+
+export interface ExecutorResult {
+  status: string;
+  plan?: Plan;
+  simulation?: any;
+}
+
+export async function runDryExecutor(opts: ExecutorOptions = {}): Promise<ExecutorResult> {
   const env = loadEnv();
-  const dry = process.argv.includes('--dryrun');
+  const dry = opts.dry ?? true;
   const rpcUrl = env.RPC_PRIMARY || 'https://api.mainnet-beta.solana.com';
   const connection = new Connection(rpcUrl, 'confirmed');
 
@@ -45,7 +55,7 @@ function loadPlans(): Plan[] {
   const plans = loadPlans();
   if (!Array.isArray(plans) || plans.length === 0) {
     console.log('No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
-    return;
+    return { status: 'no_plans' };
   }
 
   const candidates = plans
@@ -55,7 +65,7 @@ function loadPlans(): Plan[] {
 
   if (candidates.length === 0) {
     console.log('No eligible candidates based on EV/TTL thresholds.');
-    return;
+    return { status: 'no_candidates' };
   }
 
   const target = candidates[0];
@@ -64,13 +74,13 @@ function loadPlans(): Plan[] {
   const ageMs = createdAtMs ? (now - createdAtMs) : Infinity;
   if (minDelayMs > 0 && ageMs < minDelayMs) {
     console.log(`Skipping due to SCHEDULED_MIN_LIQUIDATION_DELAY_MS (${minDelayMs}ms). Age: ${ageMs}ms`);
-    return;
+    return { status: 'delayed', plan: target };
   }
 
   const kpPath = env.BOT_KEYPAIR_PATH;
   if (!kpPath || !fs.existsSync(kpPath)) {
     console.error('BOT_KEYPAIR_PATH missing or invalid.');
-    return;
+    return { status: 'keypair_missing' };
   }
   const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
   const signer = Keypair.fromSecretKey(Uint8Array.from(secret));
@@ -80,7 +90,7 @@ function loadPlans(): Plan[] {
   const okSol = await checkSolBalance(connection, signer.publicKey, minLamports);
   if (!okSol) {
     console.error(`Insufficient SOL balance. Need >= ${minLamports} lamports.`);
-    return;
+    return { status: 'insufficient_sol' };
   }
 
   // Preflight: ATAs for borrow and repay mints (assume USDC repay for now)
@@ -148,7 +158,17 @@ function loadPlans(): Plan[] {
   if (dry) {
     const sim = await connection.simulateTransaction(tx);
     console.log('Dry-run simulate result:', sim);
+    return { status: 'simulated', plan: target, simulation: sim };
   } else {
     console.log('Dry-run only mode; no broadcast.');
+    return { status: 'dry_only', plan: target };
   }
-})();
+}
+
+// CLI entry point
+if (import.meta.url === `file://${process.argv[1]}`) {
+  (async () => {
+    const dry = process.argv.includes('--dryrun');
+    await runDryExecutor({ dry });
+  })();
+}
