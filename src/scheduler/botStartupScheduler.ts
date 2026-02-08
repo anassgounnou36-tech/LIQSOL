@@ -12,7 +12,7 @@ function getEnvNum(key: string, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
-function loadCandidateSource(): any[] {
+function loadCandidateSource(): unknown[] {
   const candidatesPath = path.join(process.cwd(), 'data', 'candidates.json');
   if (!fs.existsSync(candidatesPath)) return [];
   try {

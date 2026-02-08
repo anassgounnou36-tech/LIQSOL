@@ -39,7 +39,7 @@ export interface ExecutorOptions {
 export interface ExecutorResult {
   status: string;
   plan?: Plan;
-  simulation?: any;
+  simulation?: unknown;
 }
 
 export async function runDryExecutor(opts: ExecutorOptions = {}): Promise<ExecutorResult> {
