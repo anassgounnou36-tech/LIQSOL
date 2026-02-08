@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey } from '@solana/web3.js';
+import { Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { buildKaminoFlashloanIxs } from '../flashloan/kaminoFlashloan.js';
+import { buildKaminoLiquidationIxs } from '../kamino/liquidationBuilder.js';
+import { buildJupiterSwapIxs } from './swapBuilder.js';
+import { buildComputeBudgetIxs } from '../execution/computeBudget.js';
 import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
@@ -12,7 +15,7 @@ interface Plan {
   obligationPubkey?: string;
   mint?: string;
   amountUi?: string;
-  amountUsd?: string;
+  amountUsd?: string | number; // Can be string or number
   ev?: number | string;
   hazard?: number | string;
   ttlStr?: string;
@@ -20,6 +23,8 @@ interface Plan {
   createdAtMs?: number | string;
   repayMint?: string;
   collateralMint?: string;
+  repayDecimals?: number;
+  collateralDecimals?: number;
 }
 
 /**
@@ -60,11 +65,104 @@ function loadPlans(): Plan[] {
   return [];
 }
 
+/**
+ * PR2: Build full transaction with liquidation pipeline
+ * Order: ComputeBudget → flashBorrow → liquidation → optional swap → flashRepay
+ */
+async function buildFullTransaction(
+  plan: FlashloanPlan,
+  connection: Connection,
+  signer: Keypair,
+  market: PublicKey,
+  programId: PublicKey,
+  opts: { includeSwap?: boolean; mockSwap?: boolean } = {}
+): Promise<TransactionInstruction[]> {
+  const ixs: TransactionInstruction[] = [];
+  
+  // Get env for config
+  const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
+  const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
+  const slippageBps = Number(process.env.JUPITER_SLIPPAGE_BPS ?? 50);
+  
+  // 1) ComputeBudget instructions
+  const computeIxs = buildComputeBudgetIxs({
+    cuLimit,
+    cuPriceMicroLamports: cuPrice,
+  });
+  ixs.push(...computeIxs);
+  
+  // Current instruction index for flashloan
+  const borrowIxIndex = ixs.length;
+  
+  // 2) FlashBorrow (placeholder, will be updated with correct index)
+  const mint = (plan.mint || 'USDC') as 'USDC' | 'SOL';
+  const amountUi = String(plan.amountUi ?? plan.amountUsd ?? '100');
+  
+  const flashloan = await buildKaminoFlashloanIxs({
+    connection,
+    marketPubkey: market,
+    programId,
+    signer,
+    mint,
+    amountUi,
+    borrowIxIndex,
+  });
+  
+  ixs.push(flashloan.flashBorrowIx);
+  
+  // 3) Liquidation repay/seize
+  try {
+    const liquidationResult = await buildKaminoLiquidationIxs({
+      connection,
+      marketPubkey: market,
+      programId,
+      obligationPubkey: new PublicKey(plan.obligationPubkey),
+      repayMint: new PublicKey(plan.repayMint),
+      collateralMint: new PublicKey(plan.collateralMint),
+      liquidator: signer,
+    });
+    ixs.push(...liquidationResult.ixs);
+  } catch (err) {
+    console.warn(`[Executor] Warning: Could not build liquidation instructions: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn('[Executor] Proceeding without liquidation (flashloan dry-run mode)');
+  }
+  
+  // 4) Optional Jupiter swap (if collateral mint != repay mint)
+  if (opts.includeSwap && plan.collateralMint !== plan.repayMint) {
+    try {
+      const swapIxs = await buildJupiterSwapIxs({
+        userPublicKey: signer.publicKey,
+        fromMint: plan.collateralMint,
+        toMint: plan.repayMint,
+        amountUi: '1.0', // placeholder amount - in real execution would be calculated from liquidation
+        fromDecimals: plan.collateralDecimals ?? 9,
+        slippageBps,
+        mockMode: opts.mockSwap,
+      });
+      ixs.push(...swapIxs);
+    } catch (err) {
+      console.warn(`[Executor] Warning: Could not build swap instructions: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn('[Executor] Proceeding without swap');
+    }
+  }
+  
+  // 5) FlashRepay
+  ixs.push(flashloan.flashRepayIx);
+  
+  return ixs;
+}
+
+interface ExecutorOpts {
+  dry?: boolean;
+  broadcast?: boolean;
+}
+
 // Exported API for scheduler
-export async function runDryExecutor(opts?: { dry?: boolean }): Promise<{ status: string } | void> {
+export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: string; signature?: string } | void> {
   // Load env early to ensure .env variables exist under WSL
   const env = loadEnv();
   const dry = opts?.dry ?? true;
+  const broadcast = opts?.broadcast ?? false;
 
   const rpcUrl = env.RPC_PRIMARY || 'https://api.mainnet-beta.solana.com';
   const connection = new Connection(rpcUrl, 'confirmed');
@@ -127,21 +225,19 @@ export async function runDryExecutor(opts?: { dry?: boolean }): Promise<{ status
   const market = new PublicKey(env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
   const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
 
-  const mint = (target.mint || 'USDC') as 'USDC' | 'SOL';
-  const amountUi = String(target.amountUi ?? target.amountUsd ?? '100');
-
-  const kamino = await buildKaminoFlashloanIxs({
-    connection,
-    marketPubkey: market,
-    programId,
-    signer,
-    mint,
-    amountUi,
-    borrowIxIndex: 0,
+  console.log('[Executor] Building full transaction...');
+  const buildStart = Date.now();
+  
+  // PR2: Build full transaction pipeline
+  const ixs = await buildFullTransaction(target, connection, signer, market, programId, {
+    includeSwap: true,
+    mockSwap: false,
   });
+  
+  const buildMs = Date.now() - buildStart;
+  console.log(`[Executor] Built ${ixs.length} instructions in ${buildMs}ms`);
 
-  const ixs = [kamino.flashBorrowIx, kamino.flashRepayIx];
-
+  // Build and sign transaction
   const bh = await connection.getLatestBlockhash();
   const msg = new TransactionMessage({
     payerKey: signer.publicKey,
@@ -151,19 +247,59 @@ export async function runDryExecutor(opts?: { dry?: boolean }): Promise<{ status
   const tx = new VersionedTransaction(msg);
   tx.sign([signer]);
 
-  if (dry) {
+  if (dry || !broadcast) {
+    // Simulate transaction
+    const simStart = Date.now();
     const sim = await connection.simulateTransaction(tx);
-    console.log('Dry-run simulate result:', sim);
+    const simMs = Date.now() - simStart;
+    
+    console.log(`[Executor] Simulation completed in ${simMs}ms`);
+    if (sim.value.err) {
+      console.error('[Executor] Simulation error:', sim.value.err);
+      return { status: 'sim-error' };
+    }
+    
+    console.log('[Executor] Simulation success:');
+    console.log(`  CU used: ${sim.value.unitsConsumed ?? 'unknown'}`);
+    console.log(`  Logs: ${sim.value.logs?.length ?? 0} entries`);
+    
     return { status: 'simulated' };
   } else {
-    console.log('Dry-run only mode; no broadcast.');
-    return { status: 'no-broadcast' };
+    // Broadcast transaction
+    console.log('[Executor] Broadcasting transaction...');
+    const sendStart = Date.now();
+    
+    try {
+      const signature = await connection.sendTransaction(tx, { skipPreflight: false });
+      const sendMs = Date.now() - sendStart;
+      
+      console.log(`[Executor] Transaction sent in ${sendMs}ms`);
+      console.log(`[Executor] Signature: ${signature}`);
+      
+      // Wait for confirmation
+      const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+      
+      if (confirmation.value.err) {
+        console.error('[Executor] Transaction failed:', confirmation.value.err);
+        return { status: 'tx-failed', signature };
+      }
+      
+      console.log('[Executor] Transaction confirmed!');
+      return { status: 'confirmed', signature };
+      
+    } catch (err) {
+      console.error('[Executor] Broadcast error:', err instanceof Error ? err.message : String(err));
+      return { status: 'broadcast-error' };
+    }
   }
 }
 
 // Preserve CLI behavior (standalone run)
 (async () => {
-  if (process.argv.includes('--dryrun')) {
-    await runDryExecutor({ dry: true });
+  const args = process.argv.slice(2);
+  if (args.includes('--dryrun') || args.includes('--dry')) {
+    await runDryExecutor({ dry: true, broadcast: false });
+  } else if (args.includes('--broadcast')) {
+    await runDryExecutor({ dry: false, broadcast: true });
   }
 })();

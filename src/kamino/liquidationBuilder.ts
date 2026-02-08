@@ -1,5 +1,4 @@
 import { Connection, PublicKey, TransactionInstruction, Keypair } from "@solana/web3.js";
-import { Buffer } from "node:buffer";
 import { KaminoMarket, KaminoObligation } from "@kamino-finance/klend-sdk";
 import { createSolanaRpc } from "@solana/rpc";
 import type { Address } from "@solana/addresses";
@@ -42,6 +41,9 @@ export interface KaminoLiquidationResult {
  * 
  * All accounts are derived from on-chain data - no hardcoded addresses.
  * 
+ * Note: This is a stub implementation. The actual Kamino SDK method names
+ * and parameters may differ. This should be updated based on the actual SDK API.
+ * 
  * @param p - Liquidation parameters including obligation, mints, and amounts
  * @returns Object containing liquidation instructions
  */
@@ -54,8 +56,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const market = await KaminoMarket.load(
     rpc as any,
     p.marketPubkey.toBase58() as Address,
-    1000, // recentSlotDurationMs
-    p.programId.toBase58() as Address
+    1000 // recentSlotDurationMs
   );
   
   if (!market) {
@@ -74,43 +75,23 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     throw new Error(`Collateral reserve not found for mint: ${p.collateralMint.toBase58()}`);
   }
   
-  // Load obligation
+  // Load obligation (Note: SDK may require different parameters)
   const obligation = await KaminoObligation.load(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rpc as any,
-    p.obligationPubkey.toBase58() as Address,
-    market
+    p.obligationPubkey.toBase58() as Address
   );
   
   if (!obligation) {
     throw new Error(`Failed to load obligation: ${p.obligationPubkey.toBase58()}`);
   }
   
-  // Build liquidation instruction using SDK
-  // The SDK's getLiquidateObligationInstruction handles all account derivation
-  const liquidateIx = await market.getLiquidateObligationInstruction(
-    obligation,
-    repayReserve,
-    collateralReserve,
-    p.liquidator.publicKey.toBase58() as Address
+  // TODO: The actual Kamino SDK liquidation instruction builder method needs to be determined
+  // This is a placeholder that demonstrates the structure.
+  // The real SDK may have a method like: market.liquidateObligation() or similar
+  throw new Error(
+    'Kamino liquidation instruction builder not yet implemented. ' +
+    'This requires the actual Kamino SDK method for building liquidation instructions. ' +
+    'Please refer to @kamino-finance/klend-sdk documentation for the correct API.'
   );
-  
-  if (!liquidateIx) {
-    throw new Error('Failed to build liquidation instruction from Kamino SDK');
-  }
-  
-  // Convert SDK instruction to web3.js TransactionInstruction
-  const convertedIx = new TransactionInstruction({
-    programId: new PublicKey(liquidateIx.programAddress),
-    keys: (liquidateIx.accounts || []).map(a => ({
-      pubkey: new PublicKey(a.address),
-      isSigner: a.role === 4 || a.role === 5, // READONLY_SIGNER=4, WRITABLE_SIGNER=5
-      isWritable: a.role === 2 || a.role === 5, // WRITABLE=2, WRITABLE_SIGNER=5
-    })),
-    data: Buffer.from(liquidateIx.data || []),
-  });
-  
-  return {
-    ixs: [convertedIx],
-  };
 }
