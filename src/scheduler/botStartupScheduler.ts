@@ -12,7 +12,7 @@ function getEnvNum(key: string, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
-function loadCandidateSource(): unknown[] {
+function loadCandidateSource(): any[] {
   const candidatesPath = path.join(process.cwd(), 'data', 'candidates.json');
   if (!fs.existsSync(candidatesPath)) return [];
   try {
@@ -26,6 +26,7 @@ function loadCandidateSource(): unknown[] {
 }
 
 export async function startBotStartupScheduler(): Promise<void> {
+  // Ensure env is loaded so scheduler flags are present
   loadEnv();
   const cfg = loadStartupSchedulerConfig();
 
@@ -57,7 +58,11 @@ export async function startBotStartupScheduler(): Promise<void> {
       console.log(`[Audit] Total: ${total} | Active: ${active} | Expired: ${expired}`);
       if (total > 0) {
         const top = [...queue]
-          .sort((a, b) => (Number(b.ev) - Number(a.ev)) || (Number(a.ttlMin) - Number(b.ttlMin)) || (Number(b.hazard) - Number(a.hazard)))
+          .sort((a, b) =>
+            (Number(b.ev) - Number(a.ev)) ||
+            (Number(a.ttlMin) - Number(b.ttlMin)) ||
+            (Number(b.hazard) - Number(a.hazard))
+          )
           .slice(0, 5)
           .map(p => ({ key: p.key, ev: Number(p.ev).toFixed(2), ttlMin: Number(p.ttlMin).toFixed(2), hazard: Number(p.hazard).toFixed(3) }));
         console.table(top);
@@ -81,25 +86,12 @@ export async function startBotStartupScheduler(): Promise<void> {
   }
 
   await cycleOnce();
-  const intervalId = setInterval(() => {
+  setInterval(() => {
     cycleOnce().catch(err => console.error('[Scheduler] Cycle error:', err));
   }, cfg.loopIntervalMs);
-
-  // Graceful shutdown handlers
-  const cleanup = () => {
-    console.log('\n[Scheduler] Shutting down...');
-    clearInterval(intervalId);
-    process.exit(0);
-  };
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
 }
 
+// CLI entry
 (async () => {
-  try {
-    await startBotStartupScheduler();
-  } catch (err) {
-    console.error('[Scheduler] Failed to start:', err);
-    process.exit(1);
-  }
+  await startBotStartupScheduler();
 })();
