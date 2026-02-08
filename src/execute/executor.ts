@@ -4,9 +4,12 @@ import { Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKe
 import { buildKaminoFlashloanIxs } from '../flashloan/kaminoFlashloan.js';
 import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
+import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 
 interface Plan {
+  planVersion?: number;
   key: string;
+  obligationPubkey?: string;
   mint?: string;
   amountUi?: string;
   amountUsd?: string;
@@ -15,6 +18,38 @@ interface Plan {
   ttlStr?: string;
   ttlMin?: number | string;
   createdAtMs?: number | string;
+  repayMint?: string;
+  collateralMint?: string;
+}
+
+/**
+ * PR2: Validate plan has required fields and correct version
+ * Fail-fast with clear error message if plan is outdated or incomplete
+ */
+function validatePlanVersion(plan: Plan): asserts plan is FlashloanPlan {
+  const planVersion = plan.planVersion ?? 0;
+  
+  if (planVersion < 2) {
+    throw new Error(
+      `ERROR: Plan version ${planVersion} is outdated (expected >= 2). ` +
+      `Please regenerate tx_queue.json with the latest scheduler. ` +
+      `Run: npm run snapshot:candidates to create fresh plans.`
+    );
+  }
+  
+  // Validate required PR2 fields
+  const missingFields: string[] = [];
+  if (!plan.obligationPubkey) missingFields.push('obligationPubkey');
+  if (!plan.repayMint) missingFields.push('repayMint');
+  if (!plan.collateralMint) missingFields.push('collateralMint');
+  
+  if (missingFields.length > 0) {
+    throw new Error(
+      `ERROR: Plan is missing required liquidation fields: ${missingFields.join(', ')}. ` +
+      `Please regenerate tx_queue.json with the latest scheduler. ` +
+      `Run: npm run snapshot:candidates to create fresh plans.`
+    );
+  }
 }
 
 function loadPlans(): Plan[] {
@@ -64,6 +99,15 @@ export async function runDryExecutor(opts?: { dry?: boolean }): Promise<{ status
   }
 
   const target = candidates[0];
+  
+  // PR2: Validate plan version and required fields
+  try {
+    validatePlanVersion(target);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return { status: 'invalid-plan' };
+  }
+  
   const now = Date.now();
   const createdAtMs = Number(target.createdAtMs ?? 0);
   const ageMs = createdAtMs ? (now - createdAtMs) : Infinity;
