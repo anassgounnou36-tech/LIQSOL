@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey } from '@solana/web3.js';
+import { Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { buildKaminoFlashloanIxs } from '../flashloan/kaminoFlashloan.js';
+import { buildJupiterSwapIxs } from './swapBuilder.js';
+import { checkSolBalance, checkATAExists, validateInstructions } from './preflight.js';
 import { loadEnv } from '../config/env.js';
-import { normalizeWslPath } from '../utils/path.js';
 
 interface Plan {
   key: string;
@@ -17,6 +18,12 @@ interface Plan {
   createdAtMs?: number | string;
 }
 
+function getEnvNum(key: string, def: number): number {
+  const v = process.env[key];
+  const n = v ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : def;
+}
+
 function loadPlans(): Plan[] {
   const qPath = path.join(process.cwd(), 'data', 'tx_queue.json');
   const pPath = path.join(process.cwd(), 'data', 'plans.forecast.json');
@@ -26,17 +33,14 @@ function loadPlans(): Plan[] {
 }
 
 (async () => {
-  // Load environment variables from .env
   const env = loadEnv();
-  
   const dry = process.argv.includes('--dryrun');
-  const rpcUrl = env.RPC_PRIMARY;
+  const rpcUrl = env.RPC_PRIMARY || 'https://api.mainnet-beta.solana.com';
   const connection = new Connection(rpcUrl, 'confirmed');
 
-  // Parse execution thresholds from env
-  const minEv = Number(env.EXEC_MIN_EV ?? 0);
-  const maxTtlMin = Number(env.EXEC_MAX_TTL_MIN ?? 10);
-  const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
+  const minEv = getEnvNum('EXEC_MIN_EV', 0);
+  const maxTtlMin = getEnvNum('EXEC_MAX_TTL_MIN', 10);
+  const minDelayMs = getEnvNum('SCHEDULED_MIN_LIQUIDATION_DELAY_MS', 0);
 
   const plans = loadPlans();
   if (!Array.isArray(plans) || plans.length === 0) {
@@ -46,17 +50,8 @@ function loadPlans(): Plan[] {
 
   const candidates = plans
     .filter(p => Number(p.ev ?? 0) > minEv)
-    .filter(p => {
-      const ttl = Number(p.ttlMin ?? Infinity);
-      return ttl > 0 && ttl <= maxTtlMin;
-    })
-    .sort((a, b) => {
-      const evDiff = Number(b.ev ?? 0) - Number(a.ev ?? 0);
-      if (evDiff !== 0) return evDiff;
-      const ttlDiff = Number(a.ttlMin ?? Infinity) - Number(b.ttlMin ?? Infinity);
-      if (ttlDiff !== 0) return ttlDiff;
-      return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
-    });
+    .filter(p => Number(p.ttlMin ?? Infinity) > 0 && Number(p.ttlMin ?? Infinity) <= maxTtlMin)
+    .sort((a, b) => (Number(b.ev) - Number(a.ev)) || (Number(a.ttlMin) - Number(b.ttlMin)) || (Number(b.hazard) - Number(a.hazard)));
 
   if (candidates.length === 0) {
     console.log('No eligible candidates based on EV/TTL thresholds.');
@@ -72,27 +67,39 @@ function loadPlans(): Plan[] {
     return;
   }
 
-  // Normalize keypair path for WSL compatibility (converts C:\... to /mnt/c/...)
-  const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
-  if (!fs.existsSync(kpPath)) {
-    console.error(`BOT_KEYPAIR_PATH does not exist: ${kpPath}`);
-    console.error(`Original path from env: ${env.BOT_KEYPAIR_PATH}`);
+  const kpPath = env.BOT_KEYPAIR_PATH;
+  if (!kpPath || !fs.existsSync(kpPath)) {
+    console.error('BOT_KEYPAIR_PATH missing or invalid.');
     return;
   }
   const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
   const signer = Keypair.fromSecretKey(Uint8Array.from(secret));
 
-  const market = new PublicKey(env.KAMINO_MARKET_PUBKEY);
-  const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID);
-
-  const mintValue = target.mint || 'USDC';
-  if (mintValue !== 'USDC' && mintValue !== 'SOL') {
-    console.error(`Unsupported mint: ${mintValue}. Must be 'USDC' or 'SOL'.`);
+  // Preflight: SOL fee buffer (e.g., ~0.01 SOL)
+  const minLamports = Math.floor(0.01 * 1e9);
+  const okSol = await checkSolBalance(connection, signer.publicKey, minLamports);
+  if (!okSol) {
+    console.error(`Insufficient SOL balance. Need >= ${minLamports} lamports.`);
     return;
   }
-  const mint = mintValue as 'USDC' | 'SOL';
-  const amountUi = String(target.amountUi ?? target.amountUsd ?? '100');
 
+  // Preflight: ATAs for borrow and repay mints (assume USDC repay for now)
+  const borrowMintStr = target.mint || 'USDC';
+  const repayMintStr = 'USDC'; // Future PR: derive from market state
+  const borrowMint = new PublicKey(borrowMintStr === 'USDC' ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' : 'So11111111111111111111111111111111111111112');
+  const repayMint = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+
+  const borrowAtaCheck = await checkATAExists(connection, signer.publicKey, borrowMint);
+  const repayAtaCheck = await checkATAExists(connection, signer.publicKey, repayMint);
+  if (!borrowAtaCheck.exists) console.warn(`Borrow ATA missing: ${borrowAtaCheck.ata.toBase58()} (dry-run continues)`);
+  if (!repayAtaCheck.exists) console.warn(`Repay ATA missing: ${repayAtaCheck.ata.toBase58()} (dry-run continues)`);
+
+  // Kamino flashloan instructions
+  const market = new PublicKey(env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
+  const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
+
+  const mint = (target.mint || 'USDC') as 'USDC' | 'SOL';
+  const amountUi = String(target.amountUi ?? target.amountUsd ?? '100');
   const kamino = await buildKaminoFlashloanIxs({
     connection,
     marketPubkey: market,
@@ -103,18 +110,42 @@ function loadPlans(): Plan[] {
     borrowIxIndex: 0,
   });
 
-  // TODO(PR13+): Insert swap instructions between borrow and repay using buildSwapIxs from swapBuilder.ts
-  const ixs = [kamino.flashBorrowIx, kamino.flashRepayIx];
+  // Build swap if tokens differ (e.g., SOL → USDC)
+  let swapIxs: TransactionInstruction[] = [];
+  const needSwap = borrowMintStr !== repayMintStr;
+  if (needSwap) {
+    try {
+      const fromDecimals = borrowMintStr === 'USDC' ? 6 : 9; // Simplified; future PR: fetch mint decimals dynamically
+      swapIxs = await buildJupiterSwapIxs({
+        userPublicKey: signer.publicKey,
+        fromMint: borrowMint.toBase58(),
+        toMint: repayMint.toBase58(),
+        amountUi,
+        fromDecimals,
+        slippageBps: 50,
+      });
+      if (!validateInstructions(swapIxs)) {
+        console.warn('Swap instructions invalid or empty; proceeding without swap.');
+        swapIxs = [];
+      }
+    } catch (e) {
+      console.warn(`Swap builder failed: ${(e as Error).message}. Proceeding without swap.`);
+      swapIxs = [];
+    }
+  }
+
+  const ixs = [kamino.flashBorrowIx, ...swapIxs, kamino.flashRepayIx];
+
+  const bh = await connection.getLatestBlockhash();
+  const msg = new TransactionMessage({
+    payerKey: signer.publicKey,
+    recentBlockhash: bh.blockhash,
+    instructions: ixs,
+  }).compileToLegacyMessage();
+  const tx = new VersionedTransaction(msg);
+  tx.sign([signer]);
 
   if (dry) {
-    const bh = await connection.getLatestBlockhash();
-    const msg = new TransactionMessage({
-      payerKey: signer.publicKey,
-      recentBlockhash: bh.blockhash,
-      instructions: ixs,
-    }).compileToLegacyMessage();
-    const tx = new VersionedTransaction(msg);
-    tx.sign([signer]);
     const sim = await connection.simulateTransaction(tx);
     console.log('Dry-run simulate result:', sim);
   } else {
