@@ -7,12 +7,12 @@ import { loadQueue } from '../src/scheduler/txScheduler.js';
   console.log('Starting real-time refresh test (simulated events)...');
 
   const accountListener = new YellowstoneAccountListener({
-    grpcEndpoint: 'simulated',
-    obligationPubkeys: ['kgpZaovQNKALCNyxUFuoPj4kSqm6YQz5H4qXgM5p61d'],
+    grpcUrl: 'simulated',
+    accountPubkeys: ['kgpZaovQNKALCNyxUFuoPj4kSqm6YQz5H4qXgM5p61d'],
   });
   const priceListener = new YellowstonePriceListener({
-    grpcEndpoint: 'simulated',
-    assetMints: ['So11111111111111111111111111111111111111112', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'],
+    grpcUrl: 'simulated',
+    oraclePubkeys: ['oracle1', 'oracle2'],
   });
 
   const orchestrator = new EventRefreshOrchestrator({
@@ -40,8 +40,9 @@ import { loadQueue } from '../src/scheduler/txScheduler.js';
 
   // Simulate price update: SOL -2%
   priceListener.simulatePriceUpdate({
-    assetMint: 'So11111111111111111111111111111111111111112',
+    oraclePubkey: 'oracle1',
     slot: 124,
+    mint: 'So11111111111111111111111111111111111111112',
     price: 95,
     prevPrice: 96.94,
   });
