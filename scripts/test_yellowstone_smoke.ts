@@ -1,5 +1,6 @@
 import { loadReadonlyEnv } from '../src/config/env.js';
 import { createYellowstoneClient } from '../src/yellowstone/client.js';
+import { PublicKey } from '@solana/web3.js';
 
 // CommitmentLevel enum values from @triton-one/yellowstone-grpc
 const CommitmentLevel = {
@@ -9,11 +10,12 @@ const CommitmentLevel = {
 } as const;
 
 async function main() {
-  console.log('[Smoke] Starting Yellowstone SLOT stream test...');
+  console.log('[Smoke] Starting Yellowstone SLOT + optional account stream test...');
 
   const env = loadReadonlyEnv();
   const url = env.YELLOWSTONE_GRPC_URL;
   const token = env.YELLOWSTONE_X_TOKEN;
+  const accountPubkey = process.env.SMOKE_TEST_ACCOUNT_PUBKEY || '';
 
   if (!url) {
     console.error('[Smoke] ERROR: Missing YELLOWSTONE_GRPC_URL');
@@ -21,6 +23,9 @@ async function main() {
   }
 
   console.log('[Smoke] Connecting to Yellowstone gRPC:', url);
+  if (accountPubkey) {
+    console.log('[Smoke] Will also test account subscription for:', accountPubkey);
+  }
 
   let client;
   try {
@@ -31,10 +36,40 @@ async function main() {
     process.exit(1);
   }
 
-  // Subscribe to slots stream
-  console.log('[Smoke] Subscribing to SLOT stream...');
+  const timeoutMs = 10000;
+  let resolved = false;
+  let slotReceived = false;
+  let accountReceived = false;
 
-  const request = {
+  const timer = setTimeout(() => {
+    if (resolved) return;
+    resolved = true;
+    console.error('[Smoke] ERROR: Timeout - no updates received within 10s');
+    process.exit(1);
+  }, timeoutMs);
+
+  function checkSuccess() {
+    if (resolved) return;
+    // Succeed if we got a slot update (primary test)
+    // Account test is optional - if pubkey provided and we got it, great; if not provided, slot is enough
+    if (slotReceived) {
+      resolved = true;
+      clearTimeout(timer);
+      if (accountPubkey && accountReceived) {
+        console.log('[Smoke] ✓ Received both slot and account updates. Test PASSED.');
+      } else if (accountPubkey && !accountReceived) {
+        console.log('[Smoke] ✓ Received slot update (account not yet received but test passes on slot alone). Test PASSED.');
+      } else {
+        console.log('[Smoke] ✓ Received slot update. Test PASSED.');
+      }
+      process.exit(0);
+    }
+  }
+
+  // Subscribe to slots stream (deterministic frequent updates)
+  console.log('[Smoke] Subscribing to SLOT stream...');
+  
+  const slotRequest = {
     commitment: CommitmentLevel.CONFIRMED,
     accounts: {},
     slots: {
@@ -48,60 +83,79 @@ async function main() {
     entry: {},
   };
 
-  let stream;
+  let slotStream;
   try {
-    stream = await client.subscribe();
+    slotStream = await client.subscribe();
+    
+    slotStream.on('data', (data: any) => {
+      if (data.slot) {
+        console.log('[Smoke] Received slot:', data.slot.slot);
+        slotReceived = true;
+        checkSuccess();
+      }
+    });
+
+    slotStream.on('error', (err: Error) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      console.error('[Smoke] ERROR: Slot stream error:', err.message);
+      process.exit(1);
+    });
+
+    slotStream.write(slotRequest);
+    console.log('[Smoke] Slot subscription request sent');
   } catch (err) {
-    console.error('[Smoke] ERROR: Failed to create stream:', err instanceof Error ? err.message : String(err));
+    console.error('[Smoke] ERROR: Failed to create slot stream:', err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
 
-  const timeoutMs = 10000;
-  let resolved = false;
+  // Optionally subscribe to one explicit account pubkey to validate account pipeline
+  if (accountPubkey) {
+    console.log('[Smoke] Subscribing to account:', accountPubkey);
+    
+    try {
+      // Validate pubkey format
+      new PublicKey(accountPubkey);
+      
+      const accountRequest = {
+        commitment: CommitmentLevel.CONFIRMED,
+        accounts: {
+          test_account: {
+            account: [accountPubkey],
+          },
+        },
+        slots: {},
+        accountsDataSlice: [],
+        transactions: {},
+        transactionsStatus: {},
+        blocks: {},
+        blocksMeta: {},
+        entry: {},
+      };
 
-  const timer = setTimeout(() => {
-    if (resolved) return;
-    resolved = true;
-    console.error('[Smoke] ERROR: Timeout - no slot update received within 10s');
-    stream.destroy();
-    process.exit(1);
-  }, timeoutMs);
+      const accountStream = await client.subscribe();
+      
+      accountStream.on('data', (data: any) => {
+        if (data.account) {
+          console.log('[Smoke] Received account update at slot:', Number(data.account.slot ?? 0));
+          accountReceived = true;
+          checkSuccess();
+        }
+      });
 
-  function success() {
-    if (resolved) return;
-    resolved = true;
-    clearTimeout(timer);
-    console.log('[Smoke] ✓ Received slot update. Test PASSED.');
-    stream.destroy();
-    process.exit(0);
-  }
+      accountStream.on('error', (err: Error) => {
+        console.error('[Smoke] WARNING: Account stream error (non-fatal):', err.message);
+        // Don't fail the whole test - slot stream is primary
+      });
 
-  stream.on('data', (data: any) => {
-    if (data.slot) {
-      console.log('[Smoke] Received slot:', data.slot.slot);
-      success();
+      accountStream.write(accountRequest);
+      console.log('[Smoke] Account subscription request sent');
+    } catch (err) {
+      console.error('[Smoke] WARNING: Failed to setup account stream (non-fatal):', err instanceof Error ? err.message : String(err));
+      // Don't fail - slot test is sufficient
     }
-  });
-
-  stream.on('error', (err: Error) => {
-    if (resolved) return;
-    resolved = true;
-    clearTimeout(timer);
-    console.error('[Smoke] ERROR: Stream error:', err.message);
-    process.exit(1);
-  });
-
-  stream.on('end', () => {
-    if (resolved) return;
-    resolved = true;
-    clearTimeout(timer);
-    console.error('[Smoke] ERROR: Stream ended before receiving slot update');
-    process.exit(1);
-  });
-
-  // Write subscription request
-  stream.write(request);
-  console.log('[Smoke] Subscription request sent, waiting for slot...');
+  }
 }
 
 main().catch(err => {

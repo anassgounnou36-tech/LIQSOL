@@ -31,7 +31,10 @@ export class YellowstonePriceListener extends EventEmitter {
   private reconnectCount = 0;
   private messagesReceived = 0;
   private lastMessageAt = 0;
-  private dedupe = new Set<string>(); // `${oraclePubkey}:${slot}`
+  
+  // Dedupe eviction: last slot per oracle pubkey (no memory leak)
+  private lastSlotByOracle = new Map<string, number>();
+  
   private pending: PriceUpdateEvent[] = [];
   private debounceTimer: NodeJS.Timeout | null = null;
   private client: YellowstoneClientInstance | null = null;
@@ -53,6 +56,9 @@ export class YellowstonePriceListener extends EventEmitter {
     const { grpcUrl, authToken, oraclePubkeys } = this.opts;
 
     try {
+      // Clean up existing stream before creating new one
+      this.cleanupStream();
+
       // Create Yellowstone client
       this.client = await createYellowstoneClient(grpcUrl, authToken ?? '');
 
@@ -130,9 +136,17 @@ export class YellowstonePriceListener extends EventEmitter {
   private onMessage(oraclePubkey: string, msg: { slot: number }) {
     if (!this.running) return;
     const slot = Number(msg.slot ?? 0);
-    const key = `${oraclePubkey}:${slot}`;
-    if (this.dedupe.has(key)) return;
-    this.dedupe.add(key);
+    
+    // Dedupe eviction: ignore stale/duplicate slots per oracle
+    const last = this.lastSlotByOracle.get(oraclePubkey) ?? 0;
+    if (!(slot > last)) return;
+    this.lastSlotByOracle.set(oraclePubkey, slot);
+
+    // Reset reconnect backoff after first successful message
+    if (this.messagesReceived === 0) {
+      this.reconnectCount = 0;
+    }
+
     this.messagesReceived++;
     this.lastMessageAt = Date.now();
     this.pending.push({ oraclePubkey, slot });
@@ -159,12 +173,29 @@ export class YellowstonePriceListener extends EventEmitter {
     this.reconnect();
   }
 
+  private cleanupStream() {
+    // Best-effort destroy/close old stream to avoid leaks
+    try {
+      if (this.stream) {
+        if (typeof this.stream.destroy === 'function') {
+          this.stream.destroy();
+        }
+        this.stream = null;
+      }
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+
   private reconnect() {
     if (!this.running) return;
-    this.reconnectCount++;
     const base = this.opts.reconnectMs ?? 1000;
+    // Exponential backoff capped to 30s (increment happens before delay calculation)
     const delay = Math.min(30000, base * Math.pow(2, this.reconnectCount));
+    this.reconnectCount++;
     logger.info({ reconnectCount: this.reconnectCount, delayMs: delay }, 'Reconnecting price listener');
+    // Cleanup before resubscribe
+    this.cleanupStream();
     setTimeout(() => this.subscribe(), delay);
   }
 
@@ -173,11 +204,8 @@ export class YellowstonePriceListener extends EventEmitter {
     this.emit('stopped');
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.pending = [];
-    this.dedupe.clear();
-    if (this.stream) {
-      this.stream.destroy();
-      this.stream = null;
-    }
+    this.lastSlotByOracle.clear();
+    this.cleanupStream();
     this.client = null;
   }
 

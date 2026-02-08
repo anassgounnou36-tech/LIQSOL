@@ -27,6 +27,11 @@ export class EventRefreshOrchestrator {
     this.mintToKeys = mapping.mintToKeys;
     this.keyToMints = mapping.keyToMints;
 
+    // Fail-fast to avoid silently doing nothing
+    if (!this.mintToKeys || this.mintToKeys.size === 0) {
+      throw new Error('Mint→obligation mapping is empty. Ensure data/tx_queue.json or data/candidates.json exists.');
+    }
+
     logger.info(
       { uniqueMints: this.mintToKeys.size, totalObligations: this.keyToMints.size },
       'EventRefreshOrchestrator initialized with mint→obligation mapping'
