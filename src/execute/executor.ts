@@ -3,11 +3,23 @@ import path from 'node:path';
 import { Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey } from '@solana/web3.js';
 import { buildKaminoFlashloanIxs } from '../flashloan/kaminoFlashloan.js';
 
-function loadPlans(): any[] {
+interface Plan {
+  key: string;
+  mint?: string;
+  amountUi?: string;
+  amountUsd?: string;
+  ev?: number | string;
+  hazard?: number | string;
+  ttlStr?: string;
+  ttlMin?: number | string;
+  createdAtMs?: number | string;
+}
+
+function loadPlans(): Plan[] {
   const qPath = path.join(process.cwd(), 'data', 'tx_queue.json');
   const pPath = path.join(process.cwd(), 'data', 'plans.forecast.json');
-  if (fs.existsSync(qPath)) return JSON.parse(fs.readFileSync(qPath, 'utf8'));
-  if (fs.existsSync(pPath)) return JSON.parse(fs.readFileSync(pPath, 'utf8'));
+  if (fs.existsSync(qPath)) return JSON.parse(fs.readFileSync(qPath, 'utf8')) as Plan[];
+  if (fs.existsSync(pPath)) return JSON.parse(fs.readFileSync(pPath, 'utf8')) as Plan[];
   return [];
 }
 
@@ -34,8 +46,17 @@ function getEnvNum(key: string, def: number): number {
 
   const candidates = plans
     .filter(p => Number(p.ev ?? 0) > minEv)
-    .filter(p => Number(p.ttlMin ?? Infinity) > 0 && Number(p.ttlMin ?? Infinity) <= maxTtlMin)
-    .sort((a, b) => (Number(b.ev) - Number(a.ev)) || (Number(a.ttlMin) - Number(b.ttlMin)) || (Number(b.hazard) - Number(a.hazard)));
+    .filter(p => {
+      const ttl = Number(p.ttlMin ?? Infinity);
+      return ttl > 0 && ttl <= maxTtlMin;
+    })
+    .sort((a, b) => {
+      const evDiff = Number(b.ev ?? 0) - Number(a.ev ?? 0);
+      if (evDiff !== 0) return evDiff;
+      const ttlDiff = Number(a.ttlMin ?? Infinity) - Number(b.ttlMin ?? Infinity);
+      if (ttlDiff !== 0) return ttlDiff;
+      return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
+    });
 
   if (candidates.length === 0) {
     console.log('No eligible candidates based on EV/TTL thresholds.');
@@ -62,7 +83,12 @@ function getEnvNum(key: string, def: number): number {
   const market = new PublicKey(process.env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
   const programId = new PublicKey(process.env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
 
-  const mint = (target.mint || 'USDC') as 'USDC' | 'SOL';
+  const mintValue = target.mint || 'USDC';
+  if (mintValue !== 'USDC' && mintValue !== 'SOL') {
+    console.error(`Unsupported mint: ${mintValue}. Must be 'USDC' or 'SOL'.`);
+    return;
+  }
+  const mint = mintValue as 'USDC' | 'SOL';
   const amountUi = String(target.amountUi ?? target.amountUsd ?? '100');
 
   const kamino = await buildKaminoFlashloanIxs({
@@ -75,7 +101,8 @@ function getEnvNum(key: string, def: number): number {
     borrowIxIndex: 0,
   });
 
-  const ixs = [kamino.flashBorrowIx /* swapIxs to be inserted here later */, kamino.flashRepayIx];
+  // TODO(PR13+): Insert swap instructions between borrow and repay using buildSwapIxs from swapBuilder.ts
+  const ixs = [kamino.flashBorrowIx, kamino.flashRepayIx];
 
   if (dry) {
     const bh = await connection.getLatestBlockhash();
