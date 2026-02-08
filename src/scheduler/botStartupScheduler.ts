@@ -37,9 +37,9 @@ async function initRealtime(): Promise<EventRefreshOrchestrator> {
   const accountListener = new YellowstoneAccountListener({ grpcEndpoint, obligationPubkeys, reconnectMs: 5000 });
   const priceListener = new YellowstonePriceListener({ grpcEndpoint, assetMints, reconnectMs: 5000 });
   const orchestrator = new EventRefreshOrchestrator({
-    minPricePctChange: Number(process.env.MIN_PRICE_PCT_CHANGE ?? 1.0),
-    minHealthDelta: Number(process.env.MIN_HEALTH_DELTA ?? 0.01),
-    minRefreshIntervalMs: Number(process.env.EVENT_MIN_REFRESH_INTERVAL_MS ?? 3000),
+    minPricePctChange: parseFloat(process.env.MIN_PRICE_PCT_CHANGE || '1.0'),
+    minHealthDelta: parseFloat(process.env.MIN_HEALTH_DELTA || '0.01'),
+    minRefreshIntervalMs: parseInt(process.env.EVENT_MIN_REFRESH_INTERVAL_MS || '3000', 10),
   });
 
   accountListener.on('ready', info => console.log(`[Realtime] Account listener ready:`, info));

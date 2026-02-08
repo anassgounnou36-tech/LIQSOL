@@ -50,8 +50,11 @@ export class EventRefreshOrchestrator {
   // Account updates typically include before/after health ratios, collateral/borrow deltas.
   handleAccountUpdate(ev: { pubkey: string; slot: number; before?: any; after?: any }): void {
     const key = ev.pubkey; // assuming pubkey equals plan.key (adjust if different)
+    
+    // Check throttle first
+    if (!this.canRefresh(key)) return;
+    
     let significant = false;
-
     const beforeHealth = Number(ev.before?.health ?? ev.before?.healthRatio ?? NaN);
     const afterHealth = Number(ev.after?.health ?? ev.after?.healthRatio ?? NaN);
     if (Number.isFinite(beforeHealth) && Number.isFinite(afterHealth)) {
@@ -59,13 +62,12 @@ export class EventRefreshOrchestrator {
       if (delta >= this.cfg.minHealthDelta) significant = true;
     }
 
-    // If we don't have fields, still allow refresh under throttle
-    if (!significant && !this.canRefresh(key)) return;
-    if (!this.canRefresh(key)) return;
-
     const res = refreshObligation(key, ev.after, 'account-change');
     if (res.changed) {
-      console.log(`[Orchestrator] Account-triggered refresh ${key} changed: EV ${Number(res.before?.ev ?? 0)} → ${Number(res.after?.ev ?? 0)}, TTL ${Number(res.before?.ttlMin ?? Infinity)} → ${Number(res.after?.ttlMin ?? Infinity)}, hazard ${Number(res.before?.hazard ?? 0)} → ${Number(res.after?.hazard ?? 0)}`);
+      console.log(`[Orchestrator] Account-triggered refresh ${key} changed:`);
+      console.log(`  EV: ${Number(res.before?.ev ?? 0)} → ${Number(res.after?.ev ?? 0)}`);
+      console.log(`  TTL: ${Number(res.before?.ttlMin ?? Infinity)} → ${Number(res.after?.ttlMin ?? Infinity)}`);
+      console.log(`  Hazard: ${Number(res.before?.hazard ?? 0)} → ${Number(res.after?.hazard ?? 0)}`);
     } else {
       console.log(`[Orchestrator] Account-triggered refresh ${key} no significant change (${res.reason ?? 'ok'})`);
     }
@@ -89,7 +91,10 @@ export class EventRefreshOrchestrator {
     const results = refreshSubset(refreshable, undefined, `price-change ${pct.toFixed(2)}%`);
     for (const r of results) {
       if (r.changed) {
-        console.log(`[Orchestrator] Price-triggered refresh ${r.key} changed: EV ${Number(r.before?.ev ?? 0)} → ${Number(r.after?.ev ?? 0)}, TTL ${Number(r.before?.ttlMin ?? Infinity)} → ${Number(r.after?.ttlMin ?? Infinity)}, hazard ${Number(r.before?.hazard ?? 0)} → ${Number(r.after?.hazard ?? 0)}`);
+        console.log(`[Orchestrator] Price-triggered refresh ${r.key} changed:`);
+        console.log(`  EV: ${Number(r.before?.ev ?? 0)} → ${Number(r.after?.ev ?? 0)}`);
+        console.log(`  TTL: ${Number(r.before?.ttlMin ?? Infinity)} → ${Number(r.after?.ttlMin ?? Infinity)}`);
+        console.log(`  Hazard: ${Number(r.before?.hazard ?? 0)} → ${Number(r.after?.hazard ?? 0)}`);
       } else {
         console.log(`[Orchestrator] Price-triggered refresh ${r.key} no significant change (${r.reason ?? 'ok'})`);
       }
