@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { loadStartupSchedulerConfig } from './config/startupSchedulerConfig.js';
 import { loadEnv } from '../config/env.js';
 import { refreshQueue, loadQueue } from './txScheduler.js';
@@ -13,19 +11,6 @@ function getEnvNum(key: string, def: number): number {
   const v = process.env[key];
   const n = v ? Number(v) : NaN;
   return Number.isFinite(n) ? n : def;
-}
-
-function loadCandidateSource(): any[] {
-  const candidatesPath = path.join(process.cwd(), 'data', 'candidates.json');
-  if (!fs.existsSync(candidatesPath)) return [];
-  try {
-    const raw = JSON.parse(fs.readFileSync(candidatesPath, 'utf8'));
-    if (Array.isArray(raw)) return raw;
-    if (Array.isArray(raw.candidates)) return raw.candidates;
-    return Object.values(raw);
-  } catch {
-    return [];
-  }
 }
 
 // Initialize listeners and orchestrator for event-driven refresh
@@ -57,7 +42,7 @@ async function initRealtime(): Promise<EventRefreshOrchestrator> {
 export async function startBotStartupScheduler(): Promise<void> {
   // Ensure env is loaded so scheduler flags are present
   loadEnv();
-  const cfg = loadStartupSchedulerConfig();
+  loadStartupSchedulerConfig(); // load flags/env; no local assignment needed
 
   const ttlParams: TtlManagerParams = {
     forecastMaxAgeMs: getEnvNum('FORECAST_MAX_AGE_MS', 300_000),
@@ -67,17 +52,15 @@ export async function startBotStartupScheduler(): Promise<void> {
     minEv: getEnvNum('SCHED_MIN_EV', 0),
   };
 
-  const candidateSource = loadCandidateSource();
-
-  // Initialize event-driven refresh
-  const orchestrator = await initRealtime();
+  // Initialize event-driven refresh (listeners + orchestrator). No local variable needed.
+  await initRealtime();
 
   async function cycleOnce(): Promise<void> {
     console.log('\n[Scheduler] Cycle start');
 
     // Optional: keep a very infrequent periodic refresh as safety (disabled by default)
     if ((process.env.SCHEDULER_ENABLE_REFRESH ?? 'false') === 'true') {
-      const updated = refreshQueue(ttlParams, candidateSource);
+      const updated = refreshQueue(ttlParams, []);
       console.log(`[Scheduler] Refresh complete: queue size ${updated.length}`);
     } else {
       console.log('[Scheduler] Event-driven refresh enabled (cron refresh disabled).');
@@ -118,7 +101,7 @@ export async function startBotStartupScheduler(): Promise<void> {
   await cycleOnce();
 
   // Keep a very slow heartbeat cycle for audit/logging (optional)
-  const heartbeatMs = parseInt(process.env.SCHED_HEARTBEAT_INTERVAL_MS || '60000', 10);
+  const heartbeatMs = Number(process.env.SCHED_HEARTBEAT_INTERVAL_MS ?? 60000);
   setInterval(() => {
     cycleOnce().catch(err => console.error('[Scheduler] Cycle error:', err));
   }, heartbeatMs);

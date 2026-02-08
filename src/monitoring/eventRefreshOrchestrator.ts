@@ -50,24 +50,26 @@ export class EventRefreshOrchestrator {
   // Account updates typically include before/after health ratios, collateral/borrow deltas.
   handleAccountUpdate(ev: { pubkey: string; slot: number; before?: any; after?: any }): void {
     const key = ev.pubkey; // assuming pubkey equals plan.key (adjust if different)
-    
-    // Check throttle first
+
+    const beforeHealth = Number(ev.before?.health ?? ev.before?.healthRatio ?? NaN);
+    const afterHealth = Number(ev.after?.health ?? ev.after?.healthRatio ?? NaN);
+    const hasHealth = Number.isFinite(beforeHealth) && Number.isFinite(afterHealth);
+    const delta = hasHealth ? Math.abs(afterHealth - beforeHealth) : 0;
+    const isSignificant = hasHealth && delta >= this.cfg.minHealthDelta;
+
+    // If not significant, only proceed if throttle allows; otherwise return early
+    if (!isSignificant && !this.canRefresh(key)) return;
+    // Always enforce per-obligation throttle
     if (!this.canRefresh(key)) return;
-    
-    let significant = false;
-    const beforeHealth = parseFloat(String(ev.before?.health ?? ev.before?.healthRatio ?? NaN));
-    const afterHealth = parseFloat(String(ev.after?.health ?? ev.after?.healthRatio ?? NaN));
-    if (Number.isFinite(beforeHealth) && Number.isFinite(afterHealth)) {
-      const delta = Math.abs(afterHealth - beforeHealth);
-      if (delta >= this.cfg.minHealthDelta) significant = true;
-    }
 
     const res = refreshObligation(key, ev.after, 'account-change');
     if (res.changed) {
-      console.log(`[Orchestrator] Account-triggered refresh ${key} changed:`);
-      console.log(`  EV: ${Number(res.before?.ev ?? 0)} → ${Number(res.after?.ev ?? 0)}`);
-      console.log(`  TTL: ${Number(res.before?.ttlMin ?? Infinity)} → ${Number(res.after?.ttlMin ?? Infinity)}`);
-      console.log(`  Hazard: ${Number(res.before?.hazard ?? 0)} → ${Number(res.after?.hazard ?? 0)}`);
+      console.log(
+        `[Orchestrator] Account-triggered refresh ${key} changed: ` +
+        `EV ${Number(res.before?.ev ?? 0)} → ${Number(res.after?.ev ?? 0)}, ` +
+        `TTL ${Number(res.before?.ttlMin ?? Infinity)} → ${Number(res.after?.ttlMin ?? Infinity)}, ` +
+        `hazard ${Number(res.before?.hazard ?? 0)} → ${Number(res.after?.hazard ?? 0)}`
+      );
     } else {
       console.log(`[Orchestrator] Account-triggered refresh ${key} no significant change (${res.reason ?? 'ok'})`);
     }
