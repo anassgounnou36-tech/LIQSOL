@@ -1,4 +1,5 @@
 import { PublicKey, TransactionInstruction } from '@solana/web3.js';
+import { Buffer } from 'node:buffer';
 
 type JupiterAccountMeta = { pubkey: string; isSigner: boolean; isWritable: boolean };
 
