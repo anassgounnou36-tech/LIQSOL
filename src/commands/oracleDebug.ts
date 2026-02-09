@@ -4,7 +4,8 @@ import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { loadReserves, scopeMintChainMap } from "../cache/reserveCache.js";
 import { loadOracles } from "../cache/oracleCache.js";
-import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
+import { SOL_MINT, USDC_MINT, USDT_MINT } from "../constants/mints.js";
+import { uiPriceFromMantissa } from "../utils/priceConversion.js";
 
 /**
  * CLI tool for debugging oracle configuration and chain selection
@@ -26,27 +27,6 @@ import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
  * - Raw value + exponent
  * - Computed UI price
  */
-
-/**
- * Helper to convert oracle price mantissa and exponent to UI price
- */
-function uiPriceFromMantissa(price: bigint, exponent: number): number | null {
-  try {
-    if (!Number.isFinite(exponent)) {
-      return null;
-    }
-    
-    const uiPrice = Number(price) * Math.pow(10, exponent);
-    
-    if (!Number.isFinite(uiPrice)) {
-      return null;
-    }
-    
-    return uiPrice;
-  } catch {
-    return null;
-  }
-}
 
 async function main() {
   logger.info("Starting oracle debug inspection...");
@@ -174,9 +154,7 @@ async function main() {
           console.log(`  ⚠️  WARNING: SOL price outside expected range [5, 2000] USD`);
         }
 
-        const isStablecoin = 
-          mint === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" || // USDC
-          mint === "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"; // USDT
+        const isStablecoin = mint === USDC_MINT || mint === USDT_MINT;
 
         if (isStablecoin && (uiPrice < 0.95 || uiPrice > 1.05)) {
           console.log(`  ⚠️  WARNING: Stablecoin price outside expected range [0.95, 1.05] USD`);

@@ -5,6 +5,8 @@ import type { ReserveCache } from "./reserveCache.js";
 import { scopeMintChainMap, getMintsByOracle } from "./reserveCache.js";
 import { parsePriceData } from "@pythnetwork/client";
 import { OraclePrices } from "@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js";
+import { SOL_MINT, USDC_MINT, USDT_MINT } from "../constants/mints.js";
+import { uiPriceFromMantissa } from "../utils/priceConversion.js";
 
 /**
  * Pyth Oracle Program ID (Solana mainnet)
@@ -213,6 +215,12 @@ function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
  * This shorter list ensures deterministic behavior and faster fallback for small allowlists
  */
 const FALLBACK_CHAIN_CANDIDATES = [0, 3, 13, 2, 4, 6];
+
+/**
+ * Threshold for small allowlist auto-scan mode
+ * When allowlist size <= this threshold, bounded curated scan is automatically enabled
+ */
+const SMALL_ALLOWLIST_THRESHOLD = 5;
 
 /**
  * Helper function to check if a price entry is usable (non-zero, finite exponent, magnitude sanity checks)
@@ -482,34 +490,6 @@ function applyStablecoinClamp(price: bigint, exponent: number, mint: string): bi
 }
 
 /**
- * Converts oracle price mantissa and exponent to UI price (human-readable)
- * 
- * @param price - Price mantissa (bigint)
- * @param exponent - Price exponent (negative for division)
- * @returns UI price as number, or null if invalid
- */
-function uiPriceFromMantissa(price: bigint, exponent: number): number | null {
-  try {
-    if (!Number.isFinite(exponent)) {
-      return null;
-    }
-    
-    // UI price = mantissa × 10^exponent
-    const uiPrice = Number(price) * Math.pow(10, exponent);
-    
-    // Guard against non-finite results (overflow, underflow, NaN)
-    if (!Number.isFinite(uiPrice)) {
-      return null;
-    }
-    
-    return uiPrice;
-  } catch (error) {
-    logger.debug({ price: price.toString(), exponent, error }, "Failed to convert mantissa to UI price");
-    return null;
-  }
-}
-
-/**
  * Performs oracle sanity checks after cache is loaded
  * Prevents false positives from bad oracle data (wrong SOL price, stale data, etc.)
  * 
@@ -521,10 +501,6 @@ function performOracleSanityChecks(
   cache: OracleCache,
   allowedLiquidityMints?: Set<string>
 ): void {
-  const solMint = "So11111111111111111111111111111111111111112";
-  const usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-  const usdtMint = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
-  
   // Check 1: Fail fast if oracle cache is empty in allowlist mode
   if (allowedLiquidityMints && allowedLiquidityMints.size > 0 && cache.size === 0) {
     throw new Error(
@@ -533,8 +509,8 @@ function performOracleSanityChecks(
   }
   
   // Check 2: SOL price sanity check (critical for preventing false positives)
-  if (allowedLiquidityMints?.has(solMint)) {
-    const solPrice = cache.get(solMint);
+  if (allowedLiquidityMints?.has(SOL_MINT)) {
+    const solPrice = cache.get(SOL_MINT);
     const solUiPrice = solPrice ? uiPriceFromMantissa(solPrice.price, solPrice.exponent) : null;
     
     if (!solUiPrice || solUiPrice < 5 || solUiPrice > 2000) {
@@ -544,7 +520,7 @@ function performOracleSanityChecks(
       
       logger.error(
         { 
-          solMint,
+          solMint: SOL_MINT,
           solPrice: solPrice ? { price: solPrice.price.toString(), exponent: solPrice.exponent } : null,
           solUiPrice,
           allowedRange: { min: 5, max: 2000 }
@@ -556,13 +532,13 @@ function performOracleSanityChecks(
     }
     
     logger.info(
-      { solMint, solUiPrice: solUiPrice.toFixed(2) },
+      { solMint: SOL_MINT, solUiPrice: solUiPrice.toFixed(2) },
       "SOL price sanity check passed"
     );
   }
   
   // Check 3: Stablecoin price sanity checks (warn only, don't fail)
-  for (const stableMint of [usdcMint, usdtMint]) {
+  for (const stableMint of [USDC_MINT, USDT_MINT]) {
     if (!allowedLiquidityMints || allowedLiquidityMints.has(stableMint)) {
       const stablePrice = cache.get(stableMint);
       const stableUiPrice = stablePrice ? uiPriceFromMantissa(stablePrice.price, stablePrice.exponent) : null;
@@ -609,13 +585,13 @@ export async function loadOracles(
   logger.info("Loading oracle data for all reserves...");
 
   // Detect small allowlist mode for bounded curated scan
-  // Enable bounded scan when allowlist is present AND has <= 5 mints
-  const allowlistBoundedScan = !!(allowedLiquidityMints && allowedLiquidityMints.size > 0 && allowedLiquidityMints.size <= 5);
+  // Enable bounded scan when allowlist is present AND has <= SMALL_ALLOWLIST_THRESHOLD mints
+  const allowlistBoundedScan = !!(allowedLiquidityMints && allowedLiquidityMints.size > 0 && allowedLiquidityMints.size <= SMALL_ALLOWLIST_THRESHOLD);
   
   if (allowlistBoundedScan) {
     logger.info(
-      { allowlistSize: allowedLiquidityMints!.size },
-      "Small allowlist detected (<=5 mints) - enabling bounded curated chain scan for Scope oracles"
+      { allowlistSize: allowedLiquidityMints!.size, threshold: SMALL_ALLOWLIST_THRESHOLD },
+      "Small allowlist detected - enabling bounded curated chain scan for Scope oracles"
     );
   }
 
