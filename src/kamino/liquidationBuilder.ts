@@ -4,7 +4,7 @@ import { createSolanaRpc } from "@solana/rpc";
 import { createKeyPairSignerFromBytes } from "@solana/signers";
 import { AccountRole } from "@solana/instructions";
 import type { Address } from "@solana/addresses";
-import { none } from "@solana/options";
+import { none, some } from "@solana/options";
 import { Buffer } from "node:buffer";
 import BN from "bn.js";
 
@@ -140,18 +140,23 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   // D) Build refresh instructions
   // 1. Refresh repay reserve
+  const DEFAULT_PUBKEY = "11111111111111111111111111111111";
   const repayReserveState = repayReserve.state;
   const repayRefreshIx = refreshReserve({
     reserve: repayReserve.address,
     lendingMarket: p.marketPubkey.toBase58() as Address,
-    pythOracle: repayReserveState.config.tokenInfo.pythConfiguration.price ? 
-      repayReserveState.config.tokenInfo.pythConfiguration.price : none(),
-    switchboardPriceOracle: repayReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator ? 
-      repayReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator : none(),
-    switchboardTwapOracle: repayReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator ?
-      repayReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator : none(),
-    scopePrices: repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed ?
-      repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed : none(),
+    pythOracle: (repayReserveState.config.tokenInfo.pythConfiguration.price && 
+                 repayReserveState.config.tokenInfo.pythConfiguration.price !== DEFAULT_PUBKEY) ? 
+      some(repayReserveState.config.tokenInfo.pythConfiguration.price) : none(),
+    switchboardPriceOracle: (repayReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator &&
+                             repayReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator !== DEFAULT_PUBKEY) ?
+      some(repayReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator) : none(),
+    switchboardTwapOracle: (repayReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator &&
+                           repayReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator !== DEFAULT_PUBKEY) ?
+      some(repayReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator) : none(),
+    scopePrices: (repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed &&
+                 repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed !== DEFAULT_PUBKEY) ?
+      some(repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed) : none(),
   }, [], p.programId.toBase58() as Address);
   
   refreshIxs.push(new TransactionInstruction({
@@ -165,14 +170,18 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const collateralRefreshIx = refreshReserve({
     reserve: collateralReserve.address,
     lendingMarket: p.marketPubkey.toBase58() as Address,
-    pythOracle: collateralReserveState.config.tokenInfo.pythConfiguration.price ?
-      collateralReserveState.config.tokenInfo.pythConfiguration.price : none(),
-    switchboardPriceOracle: collateralReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator ?
-      collateralReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator : none(),
-    switchboardTwapOracle: collateralReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator ?
-      collateralReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator : none(),
-    scopePrices: collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed ?
-      collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed : none(),
+    pythOracle: (collateralReserveState.config.tokenInfo.pythConfiguration.price &&
+                 collateralReserveState.config.tokenInfo.pythConfiguration.price !== DEFAULT_PUBKEY) ?
+      some(collateralReserveState.config.tokenInfo.pythConfiguration.price) : none(),
+    switchboardPriceOracle: (collateralReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator &&
+                             collateralReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator !== DEFAULT_PUBKEY) ?
+      some(collateralReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator) : none(),
+    switchboardTwapOracle: (collateralReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator &&
+                           collateralReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator !== DEFAULT_PUBKEY) ?
+      some(collateralReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator) : none(),
+    scopePrices: (collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed &&
+                 collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed !== DEFAULT_PUBKEY) ?
+      some(collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed) : none(),
   }, [], p.programId.toBase58() as Address);
   
   refreshIxs.push(new TransactionInstruction({
