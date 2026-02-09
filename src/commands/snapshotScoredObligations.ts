@@ -93,7 +93,7 @@ async function main() {
 
     // Load oracles
     logger.info("Loading oracles...");
-    const oracleCache = await loadOracles(connection, reserveCache);
+    const oracleCache = await loadOracles(connection, reserveCache, allowedLiquidityMints);
     logger.info({ oracleCount: oracleCache.size }, "Oracles loaded");
 
     // Create indexer with caches but without Yellowstone (bootstrap only)
