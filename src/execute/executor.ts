@@ -110,22 +110,19 @@ async function buildFullTransaction(
   
   ixs.push(flashloan.flashBorrowIx);
   
-  // 3) Liquidation repay/seize
-  try {
-    const liquidationResult = await buildKaminoLiquidationIxs({
-      connection,
-      marketPubkey: market,
-      programId,
-      obligationPubkey: new PublicKey(plan.obligationPubkey),
-      repayMint: new PublicKey(plan.repayMint),
-      collateralMint: new PublicKey(plan.collateralMint),
-      liquidator: signer,
-    });
-    ixs.push(...liquidationResult.ixs);
-  } catch (err) {
-    console.warn(`[Executor] Warning: Could not build liquidation instructions: ${err instanceof Error ? err.message : String(err)}`);
-    console.warn('[Executor] Proceeding without liquidation (flashloan dry-run mode)');
-  }
+  // 3) Liquidation refresh + repay/seize (PR2: fail fast, no try-catch)
+  const liquidationResult = await buildKaminoLiquidationIxs({
+    connection,
+    marketPubkey: market,
+    programId,
+    obligationPubkey: new PublicKey(plan.obligationPubkey),
+    repayMint: new PublicKey(plan.repayMint),
+    collateralMint: new PublicKey(plan.collateralMint),
+    liquidator: signer,
+    repayAmountUi: plan.amountUi,
+  });
+  ixs.push(...liquidationResult.refreshIxs);
+  ixs.push(...liquidationResult.liquidationIxs);
   
   // 4) Optional Jupiter swap (if collateral mint != repay mint)
   if (opts.includeSwap && plan.collateralMint !== plan.repayMint) {

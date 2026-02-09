@@ -121,9 +121,12 @@ async function main() {
       repayMint: new PublicKey(plan.repayMint!),
       collateralMint: new PublicKey(plan.collateralMint!),
       liquidator: signer,
+      repayAmountUi: amountUi,
     });
-    allIxs.push(...liquidationResult.ixs);
-    console.log(`[Test]   ✓ Added ${liquidationResult.ixs.length} Liquidation instruction(s)`);
+    allIxs.push(...liquidationResult.refreshIxs);
+    allIxs.push(...liquidationResult.liquidationIxs);
+    console.log(`[Test]   ✓ Added ${liquidationResult.refreshIxs.length} Refresh instruction(s)`);
+    console.log(`[Test]   ✓ Added ${liquidationResult.liquidationIxs.length} Liquidation instruction(s)`);
     
     // 4) Optional Swap (mocked for testing)
     console.log('[Test] 4/5: Building Swap instructions (mocked)...');

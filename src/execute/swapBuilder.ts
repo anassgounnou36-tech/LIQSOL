@@ -33,6 +33,28 @@ export interface SwapParams {
 }
 
 /**
+ * PR2: Helper to convert UI amount string to base units (u64) with exact string→integer conversion (no float math)
+ * @param amountUi - Amount in UI units as a string (e.g., "100.50")
+ * @param decimals - Number of decimals for the mint
+ * @returns Amount in base units as bigint
+ */
+export function parseUiAmountToBaseUnits(amountUi: string, decimals: number): bigint {
+  // Split into integer and fractional parts
+  const parts = amountUi.split('.');
+  const integerPart = parts[0] || '0';
+  const fractionalPart = parts[1] || '';
+  
+  // Pad or truncate fractional part to match decimals
+  const paddedFractional = fractionalPart.padEnd(decimals, '0').slice(0, decimals);
+  
+  // Combine into a single integer string
+  const baseUnitsStr = integerPart + paddedFractional;
+  
+  // Convert to bigint (handles large numbers correctly)
+  return BigInt(baseUnitsStr);
+}
+
+/**
  * Fetch best route from Jupiter and build swap instructions for dry-run simulation.
  * Requires network access to https://quote-api.jup.ag (unless mockMode is enabled).
  * Returns setup + swap + cleanup instructions as TransactionInstruction[].
@@ -47,7 +69,8 @@ export async function buildJupiterSwapIxs(p: SwapParams): Promise<TransactionIns
     return [];
   }
   
-  const amountBaseUnits = BigInt(Math.round(parseFloat(p.amountUi) * Math.pow(10, p.fromDecimals)));
+  // PR2: Use exact string→integer conversion (no float math)
+  const amountBaseUnits = parseUiAmountToBaseUnits(p.amountUi, p.fromDecimals);
   const slippageBps = p.slippageBps ?? 50;
 
   // 1) Quote

@@ -82,12 +82,24 @@ async function main() {
       liquidator,
     });
     
-    console.log(`[Test] ✓ Successfully built ${result.ixs.length} instruction(s)`);
+    const totalIxs = result.refreshIxs.length + result.liquidationIxs.length;
+    console.log(`[Test] ✓ Successfully built ${totalIxs} instruction(s)`);
+    console.log(`[Test]   Refresh: ${result.refreshIxs.length} instruction(s)`);
+    console.log(`[Test]   Liquidation: ${result.liquidationIxs.length} instruction(s)`);
     
-    // Validate instructions
-    for (let i = 0; i < result.ixs.length; i++) {
-      const ix = result.ixs[i];
-      console.log(`[Test]   Instruction ${i + 1}:`);
+    // Validate refresh instructions
+    for (let i = 0; i < result.refreshIxs.length; i++) {
+      const ix = result.refreshIxs[i];
+      console.log(`[Test]   Refresh Instruction ${i + 1}:`);
+      console.log(`    Program: ${ix.programId.toBase58()}`);
+      console.log(`    Keys: ${ix.keys.length}`);
+      console.log(`    Data: ${ix.data.length} bytes`);
+    }
+    
+    // Validate liquidation instructions
+    for (let i = 0; i < result.liquidationIxs.length; i++) {
+      const ix = result.liquidationIxs[i];
+      console.log(`[Test]   Liquidation Instruction ${i + 1}:`);
       console.log(`    Program: ${ix.programId.toBase58()}`);
       console.log(`    Keys: ${ix.keys.length}`);
       console.log(`    Data: ${ix.data.length} bytes`);
@@ -99,7 +111,7 @@ async function main() {
       }
     }
     
-    if (result.ixs.length === 0) {
+    if (totalIxs === 0) {
       console.error('[Test] ERROR: No instructions returned');
       process.exit(1);
     }
