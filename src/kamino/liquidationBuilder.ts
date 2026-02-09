@@ -1,7 +1,6 @@
 import { Connection, PublicKey, TransactionInstruction, AddressLookupTableAccount, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { KaminoMarket, KaminoObligation, refreshReserve, refreshObligation, liquidateObligationAndRedeemReserveCollateral, getAssociatedTokenAddress } from "@kamino-finance/klend-sdk";
 import { createSolanaRpc } from "@solana/rpc";
-import { createTransactionSigner } from "@solana/signers";
 import { AccountRole } from "@solana/instructions";
 import type { Address } from "@solana/addresses";
 import { none, some } from "@solana/options";
@@ -109,9 +108,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // 2) Select repay reserve from obligation borrows
   // Strategy: If repayMintPreference is set, use it; otherwise use highest USD value borrow
   let repayReserve;
-  let repayMint: PublicKey;
+  let repayMint: PublicKey | null = null;
   
-  const borrows = obligation.state.borrows.filter(b => b.borrowReserve.toString() !== PublicKey.default.toString());
+  const borrows = obligation.state.borrows.filter((b: any) => b.borrowReserve.toString() !== PublicKey.default.toString());
   
   if (borrows.length === 0) {
     throw new Error(`Obligation ${p.obligationPubkey.toBase58()} has no active borrows`);
@@ -165,9 +164,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // 3) Select collateral reserve from obligation deposits
   // Strategy: Select deposit with highest USD value (or first non-zero)
   let collateralReserve;
-  let collateralMint: PublicKey;
+  let collateralMint: PublicKey | null = null;
   
-  const deposits = obligation.state.deposits.filter(d => d.depositReserve.toString() !== PublicKey.default.toString());
+  const deposits = obligation.state.deposits.filter((d: any) => d.depositReserve.toString() !== PublicKey.default.toString());
   
   if (deposits.length === 0) {
     throw new Error(`Obligation ${p.obligationPubkey.toBase58()} has no active deposits`);
@@ -196,6 +195,14 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   if (!collateralReserve) {
     throw new Error(`Could not select collateral reserve from obligation deposits`);
+  }
+  
+  // Ensure mints are definitely assigned before use
+  if (!repayMint) {
+    throw new Error('[LiqBuilder] Could not determine repayMint from obligation borrows');
+  }
+  if (!collateralMint) {
+    throw new Error('[LiqBuilder] Could not determine collateralMint from obligation deposits');
   }
   
   console.log(`[LiqBuilder] Selected repay: ${repayMint.toBase58()}, collateral: ${collateralMint.toBase58()}`);
@@ -334,10 +341,12 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // Get market authority
   const lendingMarketAuthority = await market.getLendingMarketAuthority();
   
-  // Create liquidator signer from public key
-  const liquidatorSigner = await createTransactionSigner({
+  // Create a minimal signer object for the SDK instruction builder
+  // The SDK only needs the address to build the instruction; actual signing happens later
+  // We use 'as any' here because we're just building instructions, not actually signing
+  const liquidatorSigner = {
     address: p.liquidatorPubkey.toBase58() as Address,
-  });
+  } as any;
   
   // Get token programs
   const repayTokenProgram = repayReserve.getLiquidityTokenProgram();
