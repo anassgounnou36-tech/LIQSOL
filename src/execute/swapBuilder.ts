@@ -1,5 +1,6 @@
 import { PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { Buffer } from 'node:buffer';
+import { parseUiAmountToBaseUnits } from './amount.js';
 
 type JupiterAccountMeta = { pubkey: string; isSigner: boolean; isWritable: boolean };
 
@@ -33,6 +34,17 @@ export interface SwapParams {
 }
 
 /**
+ * PR62: Helper to convert UI amount string to base units (u64) with exact string→integer conversion (no float math)
+ * DEPRECATED: Use parseUiAmountToBaseUnits from './amount.js' instead
+ * @param amountUi - Amount in UI units as a string (e.g., "100.50")
+ * @param decimals - Number of decimals for the mint
+ * @returns Amount in base units as bigint
+ */
+export function parseUiAmountToBaseUnitsDeprecated(amountUi: string, decimals: number): bigint {
+  return parseUiAmountToBaseUnits(amountUi, decimals);
+}
+
+/**
  * Fetch best route from Jupiter and build swap instructions for dry-run simulation.
  * Requires network access to https://quote-api.jup.ag (unless mockMode is enabled).
  * Returns setup + swap + cleanup instructions as TransactionInstruction[].
@@ -47,7 +59,8 @@ export async function buildJupiterSwapIxs(p: SwapParams): Promise<TransactionIns
     return [];
   }
   
-  const amountBaseUnits = BigInt(Math.round(parseFloat(p.amountUi) * Math.pow(10, p.fromDecimals)));
+  // PR2: Use exact string→integer conversion (no float math)
+  const amountBaseUnits = parseUiAmountToBaseUnits(p.amountUi, p.fromDecimals);
   const slippageBps = p.slippageBps ?? 50;
 
   // 1) Quote
