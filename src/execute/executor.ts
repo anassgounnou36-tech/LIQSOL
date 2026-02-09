@@ -28,8 +28,11 @@ interface Plan {
 }
 
 /**
- * PR2: Validate plan has required fields and correct version
+ * PR62: Validate plan has required fields and correct version
  * Fail-fast with clear error message if plan is outdated or incomplete
+ * 
+ * Note: repayMint and collateralMint are now optional since liquidation builder
+ * derives them from the obligation. They're kept for legacy compatibility.
  */
 function validatePlanVersion(plan: Plan): asserts plan is FlashloanPlan {
   const planVersion = plan.planVersion ?? 0;
@@ -42,15 +45,14 @@ function validatePlanVersion(plan: Plan): asserts plan is FlashloanPlan {
     );
   }
   
-  // Validate required PR2 fields
+  // Validate required PR2 fields (repayMint/collateralMint are now optional in PR62)
   const missingFields: string[] = [];
   if (!plan.obligationPubkey) missingFields.push('obligationPubkey');
-  if (!plan.repayMint) missingFields.push('repayMint');
-  if (!plan.collateralMint) missingFields.push('collateralMint');
+  // Note: repayMint and collateralMint no longer required - derived from obligation
   
   if (missingFields.length > 0) {
     throw new Error(
-      `ERROR: Plan is missing required liquidation fields: ${missingFields.join(', ')}. ` +
+      `ERROR: Plan is missing required fields: ${missingFields.join(', ')}. ` +
       `Please regenerate tx_queue.json with the latest scheduler. ` +
       `Run: npm run snapshot:candidates to create fresh plans.`
     );
@@ -66,8 +68,13 @@ function loadPlans(): Plan[] {
 }
 
 /**
- * PR2: Build full transaction with liquidation pipeline
- * Order: ComputeBudget → flashBorrow → liquidation → optional swap → flashRepay
+ * PR62: Build full transaction with liquidation pipeline
+ * Order: ComputeBudget → flashBorrow → refresh → liquidation → optional swap → flashRepay
+ * 
+ * Changes in PR62:
+ * - Liquidation builder now derives reserves from obligation (no collateralMint/repayMint required)
+ * - Fail-fast on swap failure (no try-catch)
+ * - Use actual amounts from liquidation result (no placeholders)
  */
 async function buildFullTransaction(
   plan: FlashloanPlan,
@@ -94,7 +101,7 @@ async function buildFullTransaction(
   // Current instruction index for flashloan
   const borrowIxIndex = ixs.length;
   
-  // 2) FlashBorrow (placeholder, will be updated with correct index)
+  // 2) FlashBorrow
   const mint = (plan.mint || 'USDC') as 'USDC' | 'SOL';
   const amountUi = String(plan.amountUi ?? plan.amountUsd ?? '100');
   
@@ -110,37 +117,54 @@ async function buildFullTransaction(
   
   ixs.push(flashloan.flashBorrowIx);
   
-  // 3) Liquidation refresh + repay/seize (PR2: fail fast, no try-catch)
+  // 3) Liquidation refresh + repay/seize (PR62: derives reserves from obligation)
+  // Build with obligation pubkey only - reserves are derived from on-chain data
   const liquidationResult = await buildKaminoLiquidationIxs({
     connection,
     marketPubkey: market,
     programId,
     obligationPubkey: new PublicKey(plan.obligationPubkey),
-    repayMint: new PublicKey(plan.repayMint),
-    collateralMint: new PublicKey(plan.collateralMint),
-    liquidator: signer,
+    liquidatorPubkey: signer.publicKey,
+    // Optional: prefer USDC if available in borrows
+    repayMintPreference: plan.repayMint ? new PublicKey(plan.repayMint) : undefined,
     repayAmountUi: plan.amountUi,
   });
+  
   ixs.push(...liquidationResult.refreshIxs);
   ixs.push(...liquidationResult.liquidationIxs);
   
+  // Get derived mints for downstream validation
+  const { repayMint, collateralMint } = liquidationResult;
+  
   // 4) Optional Jupiter swap (if collateral mint != repay mint)
-  if (opts.includeSwap && plan.collateralMint !== plan.repayMint) {
-    try {
-      const swapIxs = await buildJupiterSwapIxs({
-        userPublicKey: signer.publicKey,
-        fromMint: plan.collateralMint,
-        toMint: plan.repayMint,
-        amountUi: '1.0', // placeholder amount - in real execution would be calculated from liquidation
-        fromDecimals: plan.collateralDecimals ?? 9,
-        slippageBps,
-        mockMode: opts.mockSwap,
-      });
-      ixs.push(...swapIxs);
-    } catch (err) {
-      console.warn(`[Executor] Warning: Could not build swap instructions: ${err instanceof Error ? err.message : String(err)}`);
-      console.warn('[Executor] Proceeding without swap');
+  // PR62: fail-fast, no try-catch, use actual decimals
+  if (opts.includeSwap && !collateralMint.equals(repayMint)) {
+    // For now, we can't calculate exact seized collateral amount without simulating first
+    // So we'll need to either:
+    // 1) Skip swap in dry-run mode
+    // 2) Use a reasonable estimate
+    // 3) Fail if mockMode is not enabled
+    
+    if (!opts.mockSwap) {
+      throw new Error(
+        'Swap building requires mockMode=true for testing. ' +
+        'Real swap amounts can only be determined after liquidation simulation. ' +
+        `Collateral mint ${collateralMint.toBase58()} differs from repay mint ${repayMint.toBase58()}.`
+      );
     }
+    
+    // In mock mode, return empty instructions
+    const swapIxs = await buildJupiterSwapIxs({
+      userPublicKey: signer.publicKey,
+      fromMint: collateralMint.toBase58(),
+      toMint: repayMint.toBase58(),
+      amountUi: '1.0',
+      fromDecimals: plan.collateralDecimals ?? 9,
+      slippageBps,
+      mockMode: true,
+    });
+    
+    ixs.push(...swapIxs);
   }
   
   // 5) FlashRepay

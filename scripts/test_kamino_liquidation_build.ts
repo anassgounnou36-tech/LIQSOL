@@ -8,13 +8,15 @@ import { normalizeWslPath } from '../src/utils/path.js';
 interface TestPlan {
   planVersion?: number;
   obligationPubkey?: string;
+  key?: string;
+  // PR62: repayMint and collateralMint are now optional - derived from obligation
   repayMint?: string;
   collateralMint?: string;
-  key?: string;
 }
 
 async function main() {
   console.log('[Test] Kamino Liquidation Builder - Starting...');
+  console.log('[Test] PR62: Testing obligation-based reserve derivation');
   
   const env = loadEnv();
   const rpcUrl = env.RPC_PRIMARY || 'https://api.mainnet-beta.solana.com';
@@ -27,8 +29,10 @@ async function main() {
   let plans: TestPlan[] = [];
   if (fs.existsSync(queuePath)) {
     plans = JSON.parse(fs.readFileSync(queuePath, 'utf8')) as TestPlan[];
+    console.log(`[Test] Loaded ${plans.length} plans from tx_queue.json`);
   } else if (fs.existsSync(candidatesPath)) {
     plans = JSON.parse(fs.readFileSync(candidatesPath, 'utf8')) as TestPlan[];
+    console.log(`[Test] Loaded ${plans.length} plans from candidates.json`);
   }
   
   if (plans.length === 0) {
@@ -37,25 +41,21 @@ async function main() {
     process.exit(1);
   }
   
-  // Find first plan with liquidation fields
-  const plan = plans.find(p => 
-    p.planVersion && 
-    p.obligationPubkey && 
-    p.repayMint && 
-    p.collateralMint
-  );
+  // PR62: Find first plan with obligationPubkey (no longer requires repayMint/collateralMint)
+  const plan = plans.find(p => p.obligationPubkey);
   
   if (!plan) {
-    console.error('[Test] ERROR: No plan with required liquidation fields found');
-    console.log('[Test] Plans must have: planVersion, obligationPubkey, repayMint, collateralMint');
+    console.error('[Test] ERROR: No plan with obligationPubkey found');
+    console.log('[Test] Plans must have: obligationPubkey');
     console.log('[Test] Regenerate plans with: npm run snapshot:candidates');
     process.exit(1);
   }
   
   console.log('[Test] Using plan:');
   console.log(`  Obligation: ${plan.obligationPubkey}`);
-  console.log(`  Repay Mint: ${plan.repayMint}`);
-  console.log(`  Collateral Mint: ${plan.collateralMint}`);
+  if (plan.repayMint) console.log(`  Repay Mint (preference): ${plan.repayMint}`);
+  if (plan.collateralMint) console.log(`  Collateral Mint (hint): ${plan.collateralMint}`);
+  console.log('[Test] Builder will derive reserves from obligation...');
   
   // Load keypair (needed as liquidator)
   const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
@@ -72,20 +72,23 @@ async function main() {
   console.log('[Test] Building liquidation instructions...');
   
   try {
+    // PR62: New API - only obligationPubkey required, reserves derived from obligation
     const result = await buildKaminoLiquidationIxs({
       connection,
       marketPubkey: market,
       programId,
       obligationPubkey: new PublicKey(plan.obligationPubkey!),
-      repayMint: new PublicKey(plan.repayMint!),
-      collateralMint: new PublicKey(plan.collateralMint!),
-      liquidator,
+      liquidatorPubkey: liquidator.publicKey,
+      // Optional: prefer specific repay mint if provided
+      repayMintPreference: plan.repayMint ? new PublicKey(plan.repayMint) : undefined,
     });
     
     const totalIxs = result.refreshIxs.length + result.liquidationIxs.length;
     console.log(`[Test] ✓ Successfully built ${totalIxs} instruction(s)`);
     console.log(`[Test]   Refresh: ${result.refreshIxs.length} instruction(s)`);
     console.log(`[Test]   Liquidation: ${result.liquidationIxs.length} instruction(s)`);
+    console.log(`[Test]   Derived repay mint: ${result.repayMint.toBase58()}`);
+    console.log(`[Test]   Derived collateral mint: ${result.collateralMint.toBase58()}`);
     
     // Validate refresh instructions
     for (let i = 0; i < result.refreshIxs.length; i++) {
@@ -117,6 +120,7 @@ async function main() {
     }
     
     console.log('[Test] ✓ All validations passed');
+    console.log('[Test] ✓ Reserves successfully derived from obligation');
     console.log('[Test] Test PASSED');
     process.exit(0);
     

@@ -1,5 +1,6 @@
 import { PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { Buffer } from 'node:buffer';
+import { parseUiAmountToBaseUnits } from './amount.js';
 
 type JupiterAccountMeta = { pubkey: string; isSigner: boolean; isWritable: boolean };
 
@@ -33,25 +34,14 @@ export interface SwapParams {
 }
 
 /**
- * PR2: Helper to convert UI amount string to base units (u64) with exact string→integer conversion (no float math)
+ * PR62: Helper to convert UI amount string to base units (u64) with exact string→integer conversion (no float math)
+ * DEPRECATED: Use parseUiAmountToBaseUnits from './amount.js' instead
  * @param amountUi - Amount in UI units as a string (e.g., "100.50")
  * @param decimals - Number of decimals for the mint
  * @returns Amount in base units as bigint
  */
-export function parseUiAmountToBaseUnits(amountUi: string, decimals: number): bigint {
-  // Split into integer and fractional parts
-  const parts = amountUi.split('.');
-  const integerPart = parts[0] || '0';
-  const fractionalPart = parts[1] || '';
-  
-  // Pad or truncate fractional part to match decimals
-  const paddedFractional = fractionalPart.padEnd(decimals, '0').slice(0, decimals);
-  
-  // Combine into a single integer string
-  const baseUnitsStr = integerPart + paddedFractional;
-  
-  // Convert to bigint (handles large numbers correctly)
-  return BigInt(baseUnitsStr);
+export function parseUiAmountToBaseUnitsDeprecated(amountUi: string, decimals: number): bigint {
+  return parseUiAmountToBaseUnits(amountUi, decimals);
 }
 
 /**
