@@ -34,6 +34,8 @@
     "test:scheduler:forecast:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_scheduler_forecast_wsl.ps1",
     "audit:forecasts": "npx tsx src/commands/auditForecasts.ts",
     "audit:forecasts:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_audit_forecasts_wsl.ps1",
+    "audit:pipeline": "npx tsx src/commands/auditPipeline.ts",
+    "audit:pipeline:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_audit_pipeline_wsl.ps1",
     "test:forecast-ttl-refresh": "npx tsx scripts/test_forecast_ttl_refresh.ts",
     "test:forecast-ttl-refresh:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_forecast_ttl_refresh_wsl.ps1",
     "executor:dry": "tsx src/execute/executor.ts --dryrun",

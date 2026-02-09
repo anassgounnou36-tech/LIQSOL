@@ -36,6 +36,45 @@ The live indexer:
 
 See [PR5_IMPLEMENTATION.md](./PR5_IMPLEMENTATION.md) for full documentation.
 
+## Configuration
+
+### Environment Variables
+
+The bot uses environment variables for configuration. Copy `.env.example` to `.env` and configure the following:
+
+#### Core Settings
+- `RPC_PRIMARY`: Primary Solana RPC endpoint URL
+- `BOT_KEYPAIR_PATH`: Path to bot keypair JSON file
+- `KAMINO_MARKET_PUBKEY`: Kamino market public key
+- `KAMINO_KLEND_PROGRAM_ID`: Kamino lending program ID
+
+#### Scheduler Configuration
+- `SCHED_MIN_EV`: Minimum expected value (EV) for candidates (default: 0)
+- `SCHED_MAX_TTL_MIN`: Maximum time-to-liquidation in minutes (default: 10)
+- `SCHED_MIN_HAZARD`: Minimum hazard score threshold (default: 0.05)
+- `SCHED_MAX_QUEUE_SIZE`: Maximum size of transaction queue (default: 100)
+- `SCHED_REFRESH_INTERVAL_MS`: Queue refresh interval in milliseconds (default: 30000)
+- `SCHED_REFRESH_BATCH_LIMIT`: Maximum items to refresh per batch (default: 25)
+
+#### Candidate Selection Tuning
+- `CAND_TOP`: Maximum number of top candidates to select (default: 50)
+- `CAND_NEAR`: Near-liquidation health ratio threshold (default: 1.02)
+- `CAND_VALIDATE_SAMPLES`: Number of candidates to validate with detailed breakdown (default: 0)
+
+#### Executor Configuration
+- `EXEC_MIN_EV`: Minimum EV for execution (default: 0)
+- `EXEC_MAX_TTL_MIN`: Maximum TTL for execution in minutes (default: 10)
+- `EXEC_CU_LIMIT`: Compute unit limit per transaction (default: 600000)
+- `EXEC_CU_PRICE`: Compute unit price in micro-lamports (default: 0)
+
+#### EV Calculation Parameters
+- `EV_CLOSE_FACTOR`: Liquidation close factor (default: 0.5)
+- `EV_LIQUIDATION_BONUS_PCT`: Liquidation bonus percentage (default: 0.05)
+- `EV_FLASHLOAN_FEE_PCT`: Flashloan fee percentage (default: 0.002)
+- `EV_FIXED_GAS_USD`: Fixed gas cost in USD (default: 0.5)
+
+See `.env.example` for all available configuration options.
+
 ## Prerequisites
 
 - Node.js >= 18.0.0

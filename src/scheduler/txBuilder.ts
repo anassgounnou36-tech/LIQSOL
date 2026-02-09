@@ -33,6 +33,7 @@ export interface FlashloanPlan {
   ttlStr?: string;
   createdAtMs: number;
   prevEv?: number; // optional: previous EV for audit
+  liquidationEligible?: boolean; // PR10+: whether obligation is currently liquidatable
 }
 
 export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'USDC'): FlashloanPlan {
@@ -64,6 +65,7 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
     ttlMin: Number(c.ttlMin ?? Infinity),
     ttlStr: c.ttlStr ?? c.ttl,
     createdAtMs: Date.now(),
+    liquidationEligible: c.liquidationEligible ?? false,
   };
 }
 
@@ -116,6 +118,7 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     collateralDecimals: candidateLike.collateralDecimals ?? plan.collateralDecimals,
     repayReservePubkey: candidateLike.repayReservePubkey ?? plan.repayReservePubkey,
     collateralReservePubkey: candidateLike.collateralReservePubkey ?? plan.collateralReservePubkey,
+    liquidationEligible: candidateLike.liquidationEligible ?? plan.liquidationEligible ?? false,
   };
 }
 
