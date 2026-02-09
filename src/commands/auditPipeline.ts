@@ -116,7 +116,7 @@ function main() {
     ttlMaxDropPct: getEnvNum('TTL_MAX_DROP_PCT', 20),
   };
 
-  const { filtered, stats } = filterCandidatesWithStats(candidates, filterParams);
+  const { stats } = filterCandidatesWithStats(candidates, filterParams);
 
   console.log(`  Total candidates:           ${stats.total}`);
   console.log(`  Filtered (passed):          ${stats.filtered}`);

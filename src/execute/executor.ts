@@ -25,6 +25,7 @@ interface Plan {
   collateralMint?: string;
   repayDecimals?: number;
   collateralDecimals?: number;
+  liquidationEligible?: boolean;
 }
 
 /**
