@@ -205,10 +205,19 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
       return ttl > 0 && ttl <= maxTtlMin;
     })
     .sort((a, b) => {
+      // Primary: liquidationEligible (true first)
+      const liqDiff = (b.liquidationEligible ? 1 : 0) - (a.liquidationEligible ? 1 : 0);
+      if (liqDiff !== 0) return liqDiff;
+      
+      // Secondary: EV desc
       const evDiff = Number(b.ev ?? 0) - Number(a.ev ?? 0);
       if (evDiff !== 0) return evDiff;
+      
+      // Tertiary: TTL asc
       const ttlDiff = Number(a.ttlMin ?? Infinity) - Number(b.ttlMin ?? Infinity);
       if (ttlDiff !== 0) return ttlDiff;
+      
+      // Quaternary: hazard desc
       return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
     });
 

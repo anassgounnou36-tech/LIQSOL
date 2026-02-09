@@ -25,7 +25,22 @@ export function enqueuePlans(plans: FlashloanPlan[]): FlashloanPlan[] {
   for (const p of existing) map.set(p.key, p);
   for (const p of plans) map.set(p.key, p);
   const all = Array.from(map.values())
-    .sort((a, b) => (Number(b.ev) - Number(a.ev)) || (Number(a.ttlMin) - Number(b.ttlMin)) || (Number(b.hazard) - Number(a.hazard)));
+    .sort((a, b) => {
+      // Primary: liquidationEligible (true first)
+      const liqDiff = (b.liquidationEligible ? 1 : 0) - (a.liquidationEligible ? 1 : 0);
+      if (liqDiff !== 0) return liqDiff;
+      
+      // Secondary: EV desc
+      const evDiff = Number(b.ev) - Number(a.ev);
+      if (evDiff !== 0) return evDiff;
+      
+      // Tertiary: TTL asc
+      const ttlDiff = Number(a.ttlMin) - Number(b.ttlMin);
+      if (ttlDiff !== 0) return ttlDiff;
+      
+      // Quaternary: hazard desc
+      return Number(b.hazard) - Number(a.hazard);
+    });
   saveQueue(all);
   return all;
 }
@@ -87,7 +102,22 @@ export function refreshQueue(params: TtlManagerParams, candidateSource?: any[]):
     return recomputePlanFields(plan, candidateLike);
   });
 
-  const sorted = refreshed.sort((a, b) => (Number(b.ev) - Number(a.ev)) || (Number(a.ttlMin) - Number(b.ttlMin)) || (Number(b.hazard) - Number(a.hazard)));
+  const sorted = refreshed.sort((a, b) => {
+    // Primary: liquidationEligible (true first)
+    const liqDiff = (b.liquidationEligible ? 1 : 0) - (a.liquidationEligible ? 1 : 0);
+    if (liqDiff !== 0) return liqDiff;
+    
+    // Secondary: EV desc
+    const evDiff = Number(b.ev) - Number(a.ev);
+    if (evDiff !== 0) return evDiff;
+    
+    // Tertiary: TTL asc
+    const ttlDiff = Number(a.ttlMin) - Number(b.ttlMin);
+    if (ttlDiff !== 0) return ttlDiff;
+    
+    // Quaternary: hazard desc
+    return Number(b.hazard) - Number(a.hazard);
+  });
   saveQueue(sorted);
   return sorted;
 }
