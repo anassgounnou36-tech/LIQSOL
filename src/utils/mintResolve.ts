@@ -4,7 +4,7 @@ import { PublicKey } from '@solana/web3.js';
  * Well-known Solana token mint addresses
  */
 
-/** Native SOL (wrapped SOL) */
+/** Native SOL (wrapped SOL token mint - WSOL) */
 export const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 /** USDC (USD Coin) */

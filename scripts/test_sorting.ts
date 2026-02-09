@@ -36,7 +36,7 @@ if (liquidatable.length === 0) {
   const lastLiqIdx = sorted.map((p: any, i: number) => p.liquidationEligible ? i : -1).filter((i: number) => i >= 0).pop();
   const firstNonLiqIdx = sorted.findIndex((p: any) => !p.liquidationEligible);
   
-  if (lastLiqIdx! < firstNonLiqIdx) {
+  if (lastLiqIdx !== undefined && lastLiqIdx < firstNonLiqIdx) {
     console.log('\n✓ PASS: All liquidatable obligations are sorted before non-liquidatable');
   } else {
     console.log('\n✗ FAIL: Liquidatable obligations are not properly sorted first');

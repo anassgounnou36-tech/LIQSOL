@@ -54,7 +54,8 @@ export function filterCandidates(raw: any[], p: FilterParams): any[] {
       const ttlStr = c.forecast?.timeToLiquidation ??
         estimateTtlString(c, { solDropPctPerMin: p.ttlDropPerMinPct, maxDropPct: p.ttlMaxDropPct });
       const ttlMin = parseTtlMinutes(ttlStr);
-      return { ...c, key: c.key ?? c.obligationPubkey ?? 'unknown', hazard, ev, ttlStr, ttlMin, borrowUsd };
+      const liquidationEligible = c.liquidationEligible ?? false;
+      return { ...c, key: c.key ?? c.obligationPubkey ?? 'unknown', hazard, ev, ttlStr, ttlMin, borrowUsd, liquidationEligible };
     })
     .filter((c) => c.ev > p.minEv && c.ttlMin <= p.maxTtlMin && c.hazard > p.minHazard);
 }

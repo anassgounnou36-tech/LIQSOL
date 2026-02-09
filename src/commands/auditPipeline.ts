@@ -103,7 +103,7 @@ function main() {
     liquidationBonusPct: getEnvNum('EV_LIQUIDATION_BONUS_PCT', 0.05),
     flashloanFeePct: getEnvNum('EV_FLASHLOAN_FEE_PCT', 0.002),
     fixedGasUsd: getEnvNum('EV_FIXED_GAS_USD', 0.5),
-    slippageBufferPct: process.env.EV_SLIPPAGE_BUFFER_PCT ? getEnvNum('EV_SLIPPAGE_BUFFER_PCT', 0) : undefined,
+    slippageBufferPct: process.env.EV_SLIPPAGE_BUFFER_PCT !== undefined ? getEnvNum('EV_SLIPPAGE_BUFFER_PCT', 0) : undefined,
   };
 
   const filterParams: FilterParams = {
