@@ -11,6 +11,8 @@
     "healthcheck": "tsx src/commands/healthcheck.ts",
     "decode:reserve": "tsx src/commands/decodeReserve.ts",
     "decode:obligation": "tsx src/commands/decodeObligation.ts",
+    "oracle:debug": "tsx src/commands/oracleDebug.ts",
+    "oracle:debug:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_oracle_debug_wsl.ps1",
     "snapshot:obligations": "tsx src/commands/snapshotObligations.ts",
     "snapshot:obligations:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_snapshot_wsl.ps1",
     "snapshot:scored": "tsx src/commands/snapshotScoredObligations.ts",
