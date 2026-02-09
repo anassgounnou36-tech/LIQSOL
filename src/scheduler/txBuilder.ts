@@ -4,11 +4,29 @@ import { estimateTtlString } from '../predict/ttlEstimator.js';
 import { parseTtlMinutes } from '../predict/forecastTTLManager.js';
 
 export interface FlashloanPlan {
-  key: string;
+  // PR2: Plan versioning and liquidation fields
+  planVersion: number; // Must be 2 for PR2+ executors
+  
+  // Obligation and liquidation details
+  key: string; // obligationPubkey
   ownerPubkey?: string;
+  obligationPubkey: string; // explicit obligation pubkey for liquidation
+  
+  // Flashloan parameters
   mint: 'USDC' | 'SOL' | string;
   amountUi?: string; // for USDC plans only; other mints convert at dispatch
   amountUsd: number;
+  
+  // Liquidation parameters (PR2 required fields)
+  repayMint: string; // mint pubkey of asset to repay
+  repayAmountBaseUnits?: string; // repay amount in base units (if known)
+  repayDecimals?: number; // decimals for repay mint
+  collateralMint: string; // mint pubkey of collateral to seize
+  collateralDecimals?: number; // decimals for collateral mint
+  repayReservePubkey?: string; // reserve pubkey for repay asset
+  collateralReservePubkey?: string; // reserve pubkey for collateral asset
+  
+  // Forecast and scoring
   ev: number;
   hazard: number;
   ttlMin: number;
@@ -21,12 +39,26 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
   const mint = c.borrowMint ?? c.primaryBorrowMint ?? defaultMint;
   const amountUsd = Number(c.borrowValueUsd ?? 0);
   const amountUi = mint === 'USDC' ? amountUsd.toFixed(2) : undefined;
+  const obligationPubkey = c.key ?? c.obligationPubkey ?? 'unknown';
+  
+  // PR2: Extract liquidation fields from candidate
+  const repayMint = c.primaryBorrowMint ?? c.borrowMint ?? mint;
+  const collateralMint = c.primaryCollateralMint ?? c.collateralMint ?? '';
+  
   return {
-    key: c.key ?? c.obligationPubkey ?? 'unknown',
+    planVersion: 2, // PR2 plan version
+    key: obligationPubkey,
+    obligationPubkey,
     ownerPubkey: c.ownerPubkey,
     mint,
     amountUi,
     amountUsd,
+    repayMint,
+    collateralMint,
+    repayDecimals: c.repayDecimals,
+    collateralDecimals: c.collateralDecimals,
+    repayReservePubkey: c.repayReservePubkey,
+    collateralReservePubkey: c.collateralReservePubkey,
     ev: Number(c.ev ?? 0),
     hazard: Number(c.hazard ?? 0),
     ttlMin: Number(c.ttlMin ?? Infinity),
@@ -63,8 +95,13 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
   // Parse TTL string into minutes using shared utility
   const ttlMin = parseTtlMinutes(ttlStr);
   
+  // PR2: Update liquidation fields from candidate if available
+  const repayMint = candidateLike.primaryBorrowMint ?? candidateLike.borrowMint ?? plan.repayMint;
+  const collateralMint = candidateLike.primaryCollateralMint ?? candidateLike.collateralMint ?? plan.collateralMint;
+  
   return {
     ...plan,
+    planVersion: 2, // Ensure plan version is updated
     prevEv: plan.ev,
     ev,
     hazard,
@@ -73,6 +110,12 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     createdAtMs: Date.now(),
     amountUi,
     amountUsd,
+    repayMint,
+    collateralMint,
+    repayDecimals: candidateLike.repayDecimals ?? plan.repayDecimals,
+    collateralDecimals: candidateLike.collateralDecimals ?? plan.collateralDecimals,
+    repayReservePubkey: candidateLike.repayReservePubkey ?? plan.repayReservePubkey,
+    collateralReservePubkey: candidateLike.collateralReservePubkey ?? plan.collateralReservePubkey,
   };
 }
 

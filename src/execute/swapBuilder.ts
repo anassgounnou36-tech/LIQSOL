@@ -26,27 +26,46 @@ export interface SwapParams {
   amountUi: string; // UI units string, e.g. "100"
   fromDecimals: number; // decimals for fromMint to convert UI → base units
   slippageBps?: number; // default 50 (0.5%)
+  // PR2: Mock mode support for testing
+  mockMode?: boolean; // if true, returns empty instructions (no network calls)
+  mockQuoteFn?: () => Promise<JupiterQuoteResponse>; // inject mock quote response
+  mockSwapFn?: () => Promise<JupiterSwapResponse>; // inject mock swap response
 }
 
 /**
  * Fetch best route from Jupiter and build swap instructions for dry-run simulation.
- * Requires network access to https://quote-api.jup.ag.
+ * Requires network access to https://quote-api.jup.ag (unless mockMode is enabled).
  * Returns setup + swap + cleanup instructions as TransactionInstruction[].
+ * 
+ * PR2: Supports mock mode for testing without network calls.
+ * When mockMode is true or mock functions are provided, network calls are skipped.
  */
 export async function buildJupiterSwapIxs(p: SwapParams): Promise<TransactionInstruction[]> {
+  // PR2: Mock mode - return empty instructions for testing
+  if (p.mockMode && !p.mockQuoteFn && !p.mockSwapFn) {
+    console.log('[Swap] Mock mode enabled - returning empty instructions');
+    return [];
+  }
+  
   const amountBaseUnits = BigInt(Math.round(parseFloat(p.amountUi) * Math.pow(10, p.fromDecimals)));
   const slippageBps = p.slippageBps ?? 50;
 
   // 1) Quote
-  const quoteUrl = new URL('https://quote-api.jup.ag/v6/quote');
-  quoteUrl.searchParams.set('inputMint', p.fromMint);
-  quoteUrl.searchParams.set('outputMint', p.toMint);
-  quoteUrl.searchParams.set('amount', amountBaseUnits.toString());
-  quoteUrl.searchParams.set('slippageBps', String(slippageBps));
-  quoteUrl.searchParams.set('onlyDirectRoutes', 'false');
-  const quoteResp = await fetch(quoteUrl.toString());
-  if (!quoteResp.ok) throw new Error(`Jupiter quote failed: ${quoteResp.statusText}`);
-  const quote = await quoteResp.json() as JupiterQuoteResponse;
+  let quote: JupiterQuoteResponse;
+  if (p.mockQuoteFn) {
+    quote = await p.mockQuoteFn();
+  } else {
+    const quoteUrl = new URL('https://quote-api.jup.ag/v6/quote');
+    quoteUrl.searchParams.set('inputMint', p.fromMint);
+    quoteUrl.searchParams.set('outputMint', p.toMint);
+    quoteUrl.searchParams.set('amount', amountBaseUnits.toString());
+    quoteUrl.searchParams.set('slippageBps', String(slippageBps));
+    quoteUrl.searchParams.set('onlyDirectRoutes', 'false');
+    const quoteResp = await fetch(quoteUrl.toString());
+    if (!quoteResp.ok) throw new Error(`Jupiter quote failed: ${quoteResp.statusText}`);
+    quote = await quoteResp.json() as JupiterQuoteResponse;
+  }
+  
   const route = quote?.data?.[0];
   if (!route) {
     console.warn('No Jupiter route available for requested swap.');
@@ -54,19 +73,24 @@ export async function buildJupiterSwapIxs(p: SwapParams): Promise<TransactionIns
   }
 
   // 2) Swap instructions (structured)
-  const swapResp = await fetch('https://quote-api.jup.ag/v6/swap-instructions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      quoteResponse: route,
-      userPublicKey: p.userPublicKey.toBase58(),
-      wrapUnwrapSol: true,
-      useTokenLedger: false,
-      asLegacyTransaction: true,
-    }),
-  });
-  if (!swapResp.ok) throw new Error(`Jupiter swap-instructions failed: ${swapResp.statusText}`);
-  const swapIxsJson = await swapResp.json() as JupiterSwapResponse;
+  let swapIxsJson: JupiterSwapResponse;
+  if (p.mockSwapFn) {
+    swapIxsJson = await p.mockSwapFn();
+  } else {
+    const swapResp = await fetch('https://quote-api.jup.ag/v6/swap-instructions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        quoteResponse: route,
+        userPublicKey: p.userPublicKey.toBase58(),
+        wrapUnwrapSol: true,
+        useTokenLedger: false,
+        asLegacyTransaction: true,
+      }),
+    });
+    if (!swapResp.ok) throw new Error(`Jupiter swap-instructions failed: ${swapResp.statusText}`);
+    swapIxsJson = await swapResp.json() as JupiterSwapResponse;
+  }
 
   function toIx(ix: JupiterInstruction) {
     const programId = new PublicKey(ix.programId);

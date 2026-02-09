@@ -1,0 +1,92 @@
+import { startBotStartupScheduler } from '../scheduler/botStartupScheduler.js';
+import { loadEnv } from '../config/env.js';
+import { logger } from '../observability/logger.js';
+
+/**
+ * PR2: Bot run entrypoint with continuous loop
+ * Integrates Yellowstone listeners, scheduler loop, and executor loop
+ * Dry-run by default; broadcasting only with --broadcast flag
+ */
+
+interface BotRunOptions {
+  broadcast?: boolean;
+  maxInflight?: number;
+  minEv?: number;
+  maxAttemptsPerCycle?: number;
+}
+
+function parseArgs(): BotRunOptions {
+  const args = process.argv.slice(2);
+  
+  return {
+    broadcast: args.includes('--broadcast') || process.env.LIQSOL_BROADCAST === 'true',
+    maxInflight: Number(process.env.BOT_MAX_INFLIGHT ?? 1),
+    minEv: Number(process.env.EXEC_MIN_EV ?? 0),
+    maxAttemptsPerCycle: Number(process.env.BOT_MAX_ATTEMPTS_PER_CYCLE ?? 10),
+  };
+}
+
+async function main() {
+  console.log('╔═══════════════════════════════════════════════╗');
+  console.log('║  LIQSOL Bot - Kamino Liquidation Executor    ║');
+  console.log('║  PR2: Real liquidation execution path        ║');
+  console.log('╚═══════════════════════════════════════════════╝\n');
+  
+  // Parse options
+  const opts = parseArgs();
+  
+  // Load environment
+  const env = loadEnv();
+  
+  // Display configuration
+  console.log('Configuration:');
+  console.log(`  RPC Endpoint: ${env.RPC_PRIMARY}`);
+  console.log(`  Kamino Market: ${env.KAMINO_MARKET_PUBKEY}`);
+  console.log(`  Yellowstone gRPC: ${env.YELLOWSTONE_GRPC_URL}`);
+  console.log(`  Mode: ${opts.broadcast ? 'BROADCAST (LIVE)' : 'DRY-RUN (SAFE)'}`);
+  console.log(`  Max Inflight: ${opts.maxInflight}`);
+  console.log(`  Min EV: ${opts.minEv}`);
+  console.log(`  Max Attempts/Cycle: ${opts.maxAttemptsPerCycle}`);
+  
+  if (!opts.broadcast) {
+    console.log('\n⚠️  DRY-RUN MODE: Transactions will be simulated, not broadcast');
+    console.log('   To enable broadcasting, use: npm run bot:run -- --broadcast');
+  } else {
+    console.log('\n🔴 BROADCAST MODE ENABLED: Transactions will be sent to the network!');
+  }
+  
+  // Set executor mode via env for scheduler to use
+  if (opts.broadcast) {
+    process.env.SCHEDULER_ENABLE_DRYRUN = 'false';
+    process.env.EXECUTOR_BROADCAST = 'true';
+  } else {
+    process.env.SCHEDULER_ENABLE_DRYRUN = 'true';
+    process.env.EXECUTOR_BROADCAST = 'false';
+  }
+  
+  console.log('\n[Bot] Starting bot with scheduler and listeners...\n');
+  
+  // Start the scheduler (which includes Yellowstone listeners and executor loop)
+  await startBotStartupScheduler();
+  
+  logger.info('Bot running - press Ctrl+C to stop');
+  
+  // Keep process alive
+  process.on('SIGINT', () => {
+    console.log('\n[Bot] Shutting down gracefully...');
+    process.exit(0);
+  });
+  
+  process.on('SIGTERM', () => {
+    console.log('\n[Bot] Shutting down gracefully...');
+    process.exit(0);
+  });
+}
+
+main().catch(err => {
+  console.error('[Bot] FATAL ERROR:', err instanceof Error ? err.message : String(err));
+  if (err instanceof Error && err.stack) {
+    console.error('[Bot] Stack:', err.stack);
+  }
+  process.exit(1);
+});
