@@ -337,7 +337,7 @@ export class Presubmitter {
       expectedSeized,
       expectedOut,
       ev: plan.ev,
-      ttl: plan.ttlMin,
+      ttl: plan.ttlMin ?? undefined,
       blockhash: bh.blockhash,
     };
   }

@@ -53,6 +53,7 @@ export const EnvSchema = z.object({
   SCHED_MIN_EV: z.string().optional().default('0'),
   SCHED_MAX_TTL_MIN: z.string().optional().default('10'),
   SCHED_MIN_HAZARD: z.string().optional().default('0.05'),
+  SCHED_FORCE_INCLUDE_LIQUIDATABLE: z.string().optional().default('true'),
 
   // PR11: Forecast TTL management and EV-based refresh thresholds
   FORECAST_MAX_AGE_MS: z.string().optional().default('300000'),
