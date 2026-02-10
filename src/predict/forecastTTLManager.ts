@@ -12,6 +12,8 @@ export interface ForecastEntry {
   ttlMin?: number | null;      // parsed minutes from ttlStr, null for unknown
   predictedLiquidationAtMs?: number | null; // absolute epoch timestamp
   forecastUpdatedAtMs: number; // when this forecast was produced
+  liquidationEligible?: boolean; // whether currently liquidatable (bypasses TTL expiry)
+  healthRatioRaw?: number; // optional health ratio for additional checks
 }
 
 export interface TtlManagerParams {
@@ -69,33 +71,42 @@ export function evaluateForecasts(
     let needsRecompute = false;
     let reason: string | undefined;
 
-    // Freshness expiry
-    if (ageMs > params.forecastMaxAgeMs) {
-      expired = true;
-      needsRecompute = true;
-      reason = 'age';
-    }
+    // RULE: Liquidatable obligations (liquidationEligible=true OR healthRatioRaw < 1.0) 
+    // are never expired due to TTL. They always pass.
+    const isLiquidatable = f.liquidationEligible === true || (f.healthRatioRaw !== null && f.healthRatioRaw !== undefined && f.healthRatioRaw < 1.0);
+    
+    if (!isLiquidatable) {
+      // Freshness expiry
+      if (ageMs > params.forecastMaxAgeMs) {
+        expired = true;
+        needsRecompute = true;
+        reason = 'age';
+      }
 
-    // TTL-based expiry using absolute timestamp + grace
-    if (ttlMin === null) {
-      // Unknown TTL
-      if (!ttlUnknownPasses) {
+      // TTL-based expiry using absolute timestamp + grace
+      if (ttlMin === null) {
+        // Unknown TTL
+        if (!ttlUnknownPasses) {
+          expired = true;
+          needsRecompute = true;
+          reason = reason ? `${reason},ttl_unknown` : 'ttl_unknown';
+        }
+      } else if (ttlMin < 0) {
+        // Negative TTL means already expired
         expired = true;
         needsRecompute = true;
-        reason = reason ? `${reason},ttl_unknown` : 'ttl_unknown';
+        reason = reason ? `${reason},ttl_negative` : 'ttl_negative';
+      } else if (f.predictedLiquidationAtMs != null) {
+        // Check if now > predictedLiquidationAtMs + grace
+        if (now > f.predictedLiquidationAtMs + ttlGraceMs) {
+          expired = true;
+          needsRecompute = true;
+          reason = reason ? `${reason},ttl_grace_exceeded` : 'ttl_grace_exceeded';
+        }
       }
-    } else if (ttlMin < 0) {
-      // Negative TTL means already expired
-      expired = true;
-      needsRecompute = true;
-      reason = reason ? `${reason},ttl_negative` : 'ttl_negative';
-    } else if (f.predictedLiquidationAtMs != null) {
-      // Check if now > predictedLiquidationAtMs + grace
-      if (now > f.predictedLiquidationAtMs + ttlGraceMs) {
-        expired = true;
-        needsRecompute = true;
-        reason = reason ? `${reason},ttl_grace_exceeded` : 'ttl_grace_exceeded';
-      }
+    } else {
+      // Liquidatable plans are never expired due to TTL
+      reason = 'liquidatable_bypass';
     }
 
     // EV-based triggers

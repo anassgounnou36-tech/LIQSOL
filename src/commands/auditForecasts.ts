@@ -31,13 +31,17 @@ function getEnvNum(key: string, def: number): number {
     hazard: Number(q.hazard ?? 0),
     ttlStr: q.ttl ?? q.ttlStr,
     ttlMin: q.ttlMin ?? parseTtlMinutes(q.ttl ?? q.ttlStr),
+    predictedLiquidationAtMs: q.predictedLiquidationAtMs ?? null,
     forecastUpdatedAtMs: Number(q.createdAtMs ?? q.forecastUpdatedAtMs ?? 0),
+    liquidationEligible: q.liquidationEligible ?? false,
+    healthRatioRaw: q.healthRatioRaw ?? q.healthRatio ?? undefined,
   }));
 
   const params: TtlManagerParams = {
     forecastMaxAgeMs: getEnvNum('FORECAST_MAX_AGE_MS', 300_000),
     minRefreshIntervalMs: getEnvNum('SCHED_MIN_REFRESH_INTERVAL_MS', 60_000),
-    ttlExpiredMarginMin: getEnvNum('SCHED_TTL_EXPIRED_MARGIN_MIN', 2),
+    ttlGraceMs: getEnvNum('TTL_GRACE_MS', 60_000),
+    ttlUnknownPasses: (process.env.TTL_UNKNOWN_PASSES ?? 'true') === 'true',
     evDropPct: getEnvNum('SCHED_EV_DROP_PCT', 0.15),
     minEv: getEnvNum('SCHED_MIN_EV', 0),
   };
@@ -61,25 +65,37 @@ function getEnvNum(key: string, def: number): number {
   console.log(`Expired: ${expired.length}`);
 
   console.log('\n[ACTIVE] Top 10:');
-  console.table(active.slice(0, 10).map(x => ({
-    key: x.key,
-    ev: Number(x.ev).toFixed(2),
-    hazard: Number(x.hazard).toFixed(3),
-    ttlMin: Number(x.ttlMin).toFixed(2),
-    ageMs: (Date.now() - x.forecastUpdatedAtMs),
-  })));
+  console.table(active.slice(0, 10).map(x => {
+    const predictedAt = x.predictedLiquidationAtMs 
+      ? new Date(x.predictedLiquidationAtMs).toISOString().slice(11, 19) // HH:MM:SS
+      : 'unknown';
+    return {
+      key: x.key.slice(0, 8),
+      ev: Number(x.ev).toFixed(2),
+      hazard: Number(x.hazard).toFixed(3),
+      ttlMin: x.ttlMin !== null && x.ttlMin !== undefined ? Number(x.ttlMin).toFixed(2) : 'null',
+      predictedAt,
+      ageMs: (Date.now() - x.forecastUpdatedAtMs),
+    };
+  }));
 
   if (expired.length) {
     console.log('\n[EXPIRED] Up to 10:');
-    console.table(expired.slice(0, 10).map(x => ({
-      key: x.key,
-      ev: Number(x.ev).toFixed(2),
-      hazard: Number(x.hazard).toFixed(3),
-      ttlMin: Number(x.ttlMin).toFixed(2),
-      ageMs: (Date.now() - x.forecastUpdatedAtMs),
-      reason: x.reason,
-      prevEv: x.prevEv,
-    })));
+    console.table(expired.slice(0, 10).map(x => {
+      const predictedAt = x.predictedLiquidationAtMs 
+        ? new Date(x.predictedLiquidationAtMs).toISOString().slice(11, 19) // HH:MM:SS
+        : 'unknown';
+      return {
+        key: x.key.slice(0, 8),
+        ev: Number(x.ev).toFixed(2),
+        hazard: Number(x.hazard).toFixed(3),
+        ttlMin: x.ttlMin !== null && x.ttlMin !== undefined ? Number(x.ttlMin).toFixed(2) : 'null',
+        predictedAt,
+        expiredReason: x.reason ?? 'unknown',
+        ageMs: (Date.now() - x.forecastUpdatedAtMs),
+        prevEv: x.prevEv !== undefined ? Number(x.prevEv).toFixed(2) : undefined,
+      };
+    }));
     console.log(`\n🔁 Suggest refresh: ${expired.length} of ${evaluated.length} forecasts are expired or need recompute`);
   } else {
     console.log('\n✓ No expired forecasts detected.');
