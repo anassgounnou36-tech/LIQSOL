@@ -76,6 +76,10 @@ export const EnvSchema = z.object({
 
   // Scheduler max plans per cycle
   SCHED_MAX_PLANS_PER_CYCLE: z.string().optional().default('100'),
+
+  // TTL expiry configuration
+  TTL_GRACE_MS: z.string().optional().default('60000'), // 60 seconds grace period after predicted liquidation
+  TTL_UNKNOWN_PASSES: z.string().optional().default('true'), // Whether plans with unknown TTL should pass (not be marked expired)
 });
 
 export type Env = z.infer<typeof EnvSchema>;

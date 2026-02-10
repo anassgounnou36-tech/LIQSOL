@@ -17,7 +17,8 @@ console.log('Test 1: Basic refresh behavior');
   const params: TtlManagerParams = {
     forecastMaxAgeMs: getEnvNum('FORECAST_MAX_AGE_MS', 300_000),
     minRefreshIntervalMs: getEnvNum('SCHED_MIN_REFRESH_INTERVAL_MS', 60_000),
-    ttlExpiredMarginMin: getEnvNum('SCHED_TTL_EXPIRED_MARGIN_MIN', 2),
+    ttlGraceMs: getEnvNum('TTL_GRACE_MS', 60_000),
+    ttlUnknownPasses: (process.env.TTL_UNKNOWN_PASSES ?? 'true') === 'true',
     evDropPct: getEnvNum('SCHED_EV_DROP_PCT', 0.15),
     minEv: getEnvNum('SCHED_MIN_EV', 0),
   };
@@ -72,7 +73,8 @@ console.log('\n\nTest 2: Throttle behavior (immediate re-run with high minRefres
   const params: TtlManagerParams = {
     forecastMaxAgeMs: 300_000, // 5 minutes
     minRefreshIntervalMs: 600_000, // 10 minutes - very high to ensure throttle kicks in
-    ttlExpiredMarginMin: 2,
+    ttlGraceMs: 60_000,
+    ttlUnknownPasses: true,
     evDropPct: 0.15,
     minEv: 0,
   };
@@ -135,7 +137,8 @@ console.log('\n\nTest 3: Batch limit behavior (SCHED_REFRESH_BATCH_LIMIT)');
     const params: TtlManagerParams = {
       forecastMaxAgeMs: 300_000, // 5 minutes
       minRefreshIntervalMs: 0, // No throttle for this test
-      ttlExpiredMarginMin: 2,
+      ttlGraceMs: 60_000,
+      ttlUnknownPasses: true,
       evDropPct: 0.15,
       minEv: 0,
     };

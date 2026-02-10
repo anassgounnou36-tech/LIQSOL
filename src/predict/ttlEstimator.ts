@@ -29,10 +29,25 @@ export function estimateTtlString(
   candidate: TtlCandidate,
   opts: { solDropPctPerMin: number; maxDropPct: number }
 ): string {
+  const debugEnabled = (process.env.TTL_DEBUG ?? 'false') === 'true';
+  
   try {
     const hr = Number(candidate.healthRatio ?? 0);
     const margin = Math.max(0, hr - 1.0);
-    if (margin <= 0) return 'now';
+    
+    if (debugEnabled) {
+      console.log('[TTL Debug]', {
+        healthRatio: hr,
+        distanceToThreshold: margin,
+        solDropPctPerMin: opts.solDropPctPerMin,
+        maxDropPct: opts.maxDropPct,
+      });
+    }
+    
+    if (margin <= 0) {
+      if (debugEnabled) console.log('[TTL Debug] Result: now (margin <= 0)');
+      return 'now';
+    }
 
     // Very simple mapping: assume linear sensitivity — placeholder.
     // Future PRs can use computeHealthRatio with shocked oracle prices per step.
@@ -40,8 +55,20 @@ export function estimateTtlString(
     const minutes = requiredDropPct / Math.max(0.0001, opts.solDropPctPerMin);
     const m = Math.floor(minutes);
     const s = Math.floor((minutes - m) * 60);
-    return `${m}m${s.toString().padStart(2, '0')}s`;
-  } catch {
+    const result = `${m}m${s.toString().padStart(2, '0')}s`;
+    
+    if (debugEnabled) {
+      console.log('[TTL Debug]', {
+        requiredDropPct,
+        minutes: minutes.toFixed(4),
+        clamped: requiredDropPct < margin * 100,
+        result,
+      });
+    }
+    
+    return result;
+  } catch (err) {
+    if (debugEnabled) console.log('[TTL Debug] Error:', err);
     return 'unknown';
   }
 }
