@@ -10,6 +10,10 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { loadReserves, getMintsByOracle, type ReserveCache } from '../cache/reserveCache.js';
 import { logger } from '../observability/logger.js';
 
+// Singleton guard to prevent double initialization
+let isInitialized = false;
+let orchestratorInstance: EventRefreshOrchestrator | null = null;
+
 function getEnvNum(key: string, def: number): number {
   const v = process.env[key];
   const n = v ? Number(v) : NaN;
@@ -36,6 +40,11 @@ async function deriveOraclePubkeysFromReserves(env: any): Promise<{ oraclePubkey
 
 // Initialize listeners and orchestrator for event-driven refresh
 async function initRealtime(): Promise<EventRefreshOrchestrator> {
+  if (isInitialized && orchestratorInstance) {
+    logger.info('Real-time listeners already initialized (singleton guard), reusing existing instance');
+    return orchestratorInstance;
+  }
+  
   const env = loadEnv();
   const grpcUrl = env.YELLOWSTONE_GRPC_URL;
   const token = env.YELLOWSTONE_X_TOKEN;
@@ -97,6 +106,10 @@ async function initRealtime(): Promise<EventRefreshOrchestrator> {
 
   logger.info('Real-time listeners initialized and started');
 
+  // Set singleton guards
+  isInitialized = true;
+  orchestratorInstance = orchestrator;
+
   return orchestrator;
 }
 
@@ -105,12 +118,29 @@ export async function startBotStartupScheduler(): Promise<void> {
   loadEnv();
   loadStartupSchedulerConfig(); // load flags/env; no local assignment needed
 
+  // Load and display configurable thresholds
+  const ttlGraceMs = getEnvNum('TTL_GRACE_MS', 60_000);
+  const ttlUnknownPasses = (process.env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
+  const schedMinEv = getEnvNum('SCHED_MIN_EV', 0);
+  const schedMaxTtlMin = getEnvNum('SCHED_MAX_TTL_MIN', 999999);
+  const schedMinHazard = getEnvNum('SCHED_MIN_HAZARD', 0);
+  const schedForceIncludeLiquidatable = (process.env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'true') === 'true';
+  
+  console.log('\n[Scheduler] Configurable Thresholds:');
+  console.log(`  TTL_GRACE_MS: ${ttlGraceMs}`);
+  console.log(`  TTL_UNKNOWN_PASSES: ${ttlUnknownPasses}`);
+  console.log(`  SCHED_MIN_EV: ${schedMinEv}`);
+  console.log(`  SCHED_MAX_TTL_MIN: ${schedMaxTtlMin}`);
+  console.log(`  SCHED_MIN_HAZARD: ${schedMinHazard}`);
+  console.log(`  SCHED_FORCE_INCLUDE_LIQUIDATABLE: ${schedForceIncludeLiquidatable}\n`);
+
   const ttlParams: TtlManagerParams = {
     forecastMaxAgeMs: getEnvNum('FORECAST_MAX_AGE_MS', 300_000),
     minRefreshIntervalMs: getEnvNum('SCHED_MIN_REFRESH_INTERVAL_MS', 60_000),
-    ttlExpiredMarginMin: getEnvNum('SCHED_TTL_EXPIRED_MARGIN_MIN', 2),
+    ttlGraceMs,
+    ttlUnknownPasses,
     evDropPct: getEnvNum('SCHED_EV_DROP_PCT', 0.15),
-    minEv: getEnvNum('SCHED_MIN_EV', 0),
+    minEv: schedMinEv,
   };
 
   // Initialize event-driven refresh (listeners + orchestrator). No local variable needed.
@@ -130,18 +160,84 @@ export async function startBotStartupScheduler(): Promise<void> {
     if ((process.env.SCHEDULER_ENABLE_AUDIT ?? 'true') === 'true') {
       const queue = loadQueue();
       const total = queue.length;
-      const active = queue.filter(p => Number(p.ttlMin ?? Infinity) > 0).length;
-      const expired = total - active;
+      const nowMs = Date.now();
+      const ttlGraceMs = getEnvNum('TTL_GRACE_MS', 60_000);
+      
+      // Count active vs expired using new TTL logic
+      let active = 0;
+      let expired = 0;
+      const expiredReasons = {
+        ttl_grace_exceeded: 0,
+        ttl_negative: 0,
+        ttl_unknown: 0,
+      };
+      
+      for (const p of queue) {
+        const ttlMin = p.ttlMin;
+        const predictedAtMs = p.predictedLiquidationAtMs;
+        
+        let isExpired = false;
+        
+        if (ttlMin === null || ttlMin === undefined) {
+          // Unknown TTL - check TTL_UNKNOWN_PASSES setting
+          const ttlUnknownPasses = (process.env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
+          if (!ttlUnknownPasses) {
+            isExpired = true;
+            expiredReasons.ttl_unknown++;
+          }
+        } else if (ttlMin < 0) {
+          // Negative TTL
+          isExpired = true;
+          expiredReasons.ttl_negative++;
+        } else if (predictedAtMs != null && nowMs > predictedAtMs + ttlGraceMs) {
+          // Past predicted time + grace
+          isExpired = true;
+          expiredReasons.ttl_grace_exceeded++;
+        }
+        
+        if (isExpired) {
+          expired++;
+        } else {
+          active++;
+        }
+      }
+      
       console.log(`[Audit] Total: ${total} | Active: ${active} | Expired: ${expired}`);
+      if (expired > 0) {
+        console.log(`[Audit] Expired reasons:`, expiredReasons);
+      }
+      
       if (total > 0) {
         const top = [...queue]
+          .filter(p => {
+            // Only show active plans
+            const ttlMin = p.ttlMin;
+            const predictedAtMs = p.predictedLiquidationAtMs;
+            if (ttlMin === null || ttlMin === undefined) {
+              return (process.env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
+            }
+            if (ttlMin < 0) return false;
+            if (predictedAtMs != null && nowMs > predictedAtMs + ttlGraceMs) return false;
+            return true;
+          })
           .sort((a, b) =>
             (Number(b.ev) - Number(a.ev)) ||
-            (Number(a.ttlMin) - Number(b.ttlMin)) ||
+            (Number(a.ttlMin ?? Infinity) - Number(b.ttlMin ?? Infinity)) ||
             (Number(b.hazard) - Number(a.hazard))
           )
           .slice(0, 5)
-          .map(p => ({ key: p.key, ev: Number(p.ev).toFixed(2), ttlMin: Number(p.ttlMin).toFixed(2), hazard: Number(p.hazard).toFixed(3) }));
+          .map(p => {
+            const predictedAt = p.predictedLiquidationAtMs 
+              ? new Date(p.predictedLiquidationAtMs).toISOString() 
+              : 'unknown';
+            return { 
+              key: p.key.slice(0, 8), 
+              ev: Number(p.ev ?? 0).toFixed(2), 
+              ttlMin: p.ttlMin !== null && p.ttlMin !== undefined ? Number(p.ttlMin).toFixed(2) : 'null',
+              predictedAt: predictedAt.slice(11, 19), // Show only time
+              hazard: Number(p.hazard ?? 0).toFixed(3) 
+            };
+          });
         console.table(top);
       }
     }

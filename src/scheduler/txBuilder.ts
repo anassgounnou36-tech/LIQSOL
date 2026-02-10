@@ -3,6 +3,16 @@ import { computeEV, type EvParams } from '../predict/evCalculator.js';
 import { estimateTtlString } from '../predict/ttlEstimator.js';
 import { parseTtlMinutes } from '../predict/forecastTTLManager.js';
 
+/**
+ * Compute absolute predicted liquidation timestamp from TTL minutes
+ * Returns null if TTL is unknown/invalid
+ */
+function computePredictedLiquidationAtMs(ttlMin: number, nowMs: number): number | null {
+  if (!Number.isFinite(ttlMin) || ttlMin === Infinity) return null;
+  if (ttlMin < 0) return nowMs; // Already expired
+  return nowMs + Math.floor(ttlMin * 60 * 1000);
+}
+
 export interface FlashloanPlan {
   // PR2: Plan versioning and liquidation fields
   planVersion: number; // Must be 2 for PR2+ executors
@@ -29,9 +39,10 @@ export interface FlashloanPlan {
   // Forecast and scoring
   ev: number;
   hazard: number;
-  ttlMin: number;
+  ttlMin: number | null; // null for unknown TTL
   ttlStr?: string;
   createdAtMs: number;
+  predictedLiquidationAtMs?: number | null; // absolute epoch timestamp when liquidation predicted
   prevEv?: number; // optional: previous EV for audit
   liquidationEligible?: boolean; // PR10+: whether obligation is currently liquidatable
 }
@@ -45,6 +56,11 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
   // PR2: Extract liquidation fields from candidate
   const repayMint = c.primaryBorrowMint ?? c.borrowMint ?? mint;
   const collateralMint = c.primaryCollateralMint ?? c.collateralMint ?? '';
+  
+  const nowMs = Date.now();
+  const ttlMinRaw = c.ttlMin ?? Infinity;
+  const ttlMin = Number.isFinite(ttlMinRaw) ? ttlMinRaw : null;
+  const predictedLiquidationAtMs = ttlMin !== null ? computePredictedLiquidationAtMs(ttlMin, nowMs) : null;
   
   return {
     planVersion: 2, // PR2 plan version
@@ -62,9 +78,10 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
     collateralReservePubkey: c.collateralReservePubkey,
     ev: Number(c.ev ?? 0),
     hazard: Number(c.hazard ?? 0),
-    ttlMin: Number(c.ttlMin ?? Infinity),
+    ttlMin,
     ttlStr: c.ttlStr ?? c.ttl,
-    createdAtMs: Date.now(),
+    createdAtMs: nowMs,
+    predictedLiquidationAtMs,
     liquidationEligible: c.liquidationEligible ?? false,
   };
 }
@@ -95,7 +112,12 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
   });
   
   // Parse TTL string into minutes using shared utility
-  const ttlMin = parseTtlMinutes(ttlStr);
+  const ttlMinRaw = parseTtlMinutes(ttlStr);
+  const ttlMin = Number.isFinite(ttlMinRaw) ? ttlMinRaw : null;
+  
+  // Compute absolute predicted liquidation timestamp
+  const nowMs = Date.now();
+  const predictedLiquidationAtMs = ttlMin !== null ? computePredictedLiquidationAtMs(ttlMin, nowMs) : null;
   
   // PR2: Update liquidation fields from candidate if available
   const repayMint = candidateLike.primaryBorrowMint ?? candidateLike.borrowMint ?? plan.repayMint;
@@ -109,7 +131,8 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     hazard,
     ttlMin,
     ttlStr,
-    createdAtMs: Date.now(),
+    createdAtMs: nowMs,
+    predictedLiquidationAtMs,
     amountUi,
     amountUsd,
     repayMint,

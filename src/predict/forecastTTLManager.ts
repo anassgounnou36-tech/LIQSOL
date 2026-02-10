@@ -9,7 +9,8 @@ export interface ForecastEntry {
   ev: number;
   hazard: number;
   ttlStr?: string;      // e.g., "5m30s" or "now" or "unknown"
-  ttlMin?: number;      // parsed minutes from ttlStr
+  ttlMin?: number | null;      // parsed minutes from ttlStr, null for unknown
+  predictedLiquidationAtMs?: number | null; // absolute epoch timestamp
   forecastUpdatedAtMs: number; // when this forecast was produced
 }
 
@@ -17,12 +18,15 @@ export interface TtlManagerParams {
   // Freshness
   forecastMaxAgeMs: number;         // e.g., 300_000 (5 min)
   minRefreshIntervalMs?: number;    // optional per-candidate min interval, e.g., 60_000
-  // Urgency
-  ttlExpiredMarginMin?: number;     // e.g., 2 → treat TTL<=2 as nearly expired
+  // Urgency - grace period for TTL expiry
+  ttlExpiredMarginMin?: number;     // Deprecated: use ttlGraceMs instead
+  ttlGraceMs?: number;              // e.g., 60000 (60s) - grace period for TTL=0
   // EV drop trigger (relative %)
   evDropPct: number;                // e.g., 0.15 (15%)
   // Absolute EV lower bound
   minEv: number;                    // e.g., 0
+  // Allow unknown TTL
+  ttlUnknownPasses?: boolean;       // e.g., true - treat unknown TTL as non-expired
 }
 
 export type ForecastWithFlags = ForecastEntry & {
@@ -33,18 +37,19 @@ export type ForecastWithFlags = ForecastEntry & {
 };
 
 /**
- * Parse TTL string into minutes. Unknown or invalid returns Infinity.
+ * Parse TTL string into minutes. Unknown or invalid returns null.
  */
-export function parseTtlMinutes(ttlStr?: string): number {
-  if (!ttlStr || ttlStr === 'unknown') return Infinity;
+export function parseTtlMinutes(ttlStr?: string): number | null {
+  if (!ttlStr || ttlStr === 'unknown') return null;
   if (ttlStr === 'now') return 0;
   const m = /^(\d+)m(\d+)s$/.exec(ttlStr);
-  if (!m) return Infinity;
+  if (!m) return null;
   return Number(m[1]) + Number(m[2]) / 60;
 }
 
 /**
  * Mark expired and recompute flags for each forecast.
+ * Uses absolute timestamp + grace period for TTL expiry.
  * prevEvByKey can be supplied to evaluate relative EV drop.
  */
 export function evaluateForecasts(
@@ -54,6 +59,8 @@ export function evaluateForecasts(
 ): ForecastWithFlags[] {
   const now = opts?.nowMs ?? Date.now();
   const out: ForecastWithFlags[] = [];
+  const ttlGraceMs = params.ttlGraceMs ?? 60_000; // Default 60s grace
+  const ttlUnknownPasses = params.ttlUnknownPasses ?? true;
 
   for (const f of forecasts) {
     const ttlMin = f.ttlMin ?? parseTtlMinutes(f.ttlStr);
@@ -70,12 +77,26 @@ export function evaluateForecasts(
       reason = 'age';
     }
 
-    // Urgency-based expiry (close to or past liquidation)
-    const marginMin = params.ttlExpiredMarginMin ?? 0;
-    if (ttlMin <= marginMin) {
+    // TTL-based expiry using absolute timestamp + grace
+    if (ttlMin === null) {
+      // Unknown TTL
+      if (!ttlUnknownPasses) {
+        expired = true;
+        needsRecompute = true;
+        reason = reason ? `${reason},ttl_unknown` : 'ttl_unknown';
+      }
+    } else if (ttlMin < 0) {
+      // Negative TTL means already expired
       expired = true;
       needsRecompute = true;
-      reason = reason ? `${reason},ttl` : 'ttl';
+      reason = reason ? `${reason},ttl_negative` : 'ttl_negative';
+    } else if (f.predictedLiquidationAtMs != null) {
+      // Check if now > predictedLiquidationAtMs + grace
+      if (now > f.predictedLiquidationAtMs + ttlGraceMs) {
+        expired = true;
+        needsRecompute = true;
+        reason = reason ? `${reason},ttl_grace_exceeded` : 'ttl_grace_exceeded';
+      }
     }
 
     // EV-based triggers

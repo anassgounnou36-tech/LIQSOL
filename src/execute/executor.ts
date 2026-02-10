@@ -21,7 +21,8 @@ interface Plan {
   ev?: number | string;
   hazard?: number | string;
   ttlStr?: string;
-  ttlMin?: number | string;
+  ttlMin?: number | string | null; // Can be null for unknown
+  predictedLiquidationAtMs?: number | string | null; // Absolute timestamp
   createdAtMs?: number | string;
   repayMint?: string;
   collateralMint?: string;
@@ -275,9 +276,19 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   const rpcUrl = env.RPC_PRIMARY || 'https://api.mainnet-beta.solana.com';
   const connection = new Connection(rpcUrl, 'confirmed');
 
-  const minEv = Number(env.EXEC_MIN_EV ?? 0);
-  const maxTtlMin = Number(env.EXEC_MAX_TTL_MIN ?? 10);
+  const minEv = Number(env.EXEC_MIN_EV ?? env.SCHED_MIN_EV ?? 0);
+  const maxTtlMin = Number(env.EXEC_MAX_TTL_MIN ?? env.SCHED_MAX_TTL_MIN ?? 999999);
   const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
+  const ttlGraceMs = Number(env.TTL_GRACE_MS ?? 60_000);
+  const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
+  const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'true') === 'true';
+
+  console.log('[Executor] Filter thresholds:');
+  console.log(`  EXEC_MIN_EV: ${minEv}`);
+  console.log(`  EXEC_MAX_TTL_MIN: ${maxTtlMin}`);
+  console.log(`  TTL_GRACE_MS: ${ttlGraceMs}`);
+  console.log(`  TTL_UNKNOWN_PASSES: ${ttlUnknownPasses}`);
+  console.log(`  SCHED_FORCE_INCLUDE_LIQUIDATABLE: ${forceIncludeLiquidatable}`);
 
   const plans = loadPlans();
   if (!Array.isArray(plans) || plans.length === 0) {
@@ -285,11 +296,67 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     return { status: 'no-plans' };
   }
 
+  // Filter with reason tracking
+  const nowMs = Date.now();
+  const filterReasons = {
+    total: plans.length,
+    rejected_ev: 0,
+    rejected_ttl_expired: 0,
+    rejected_ttl_too_high: 0,
+    rejected_hazard: 0,
+    accepted_liquidatable_forced: 0,
+    accepted_normal: 0,
+  };
+
   const candidates = plans
-    .filter(p => Number(p.ev ?? 0) > minEv)
     .filter(p => {
-      const ttl = Number(p.ttlMin ?? Infinity);
-      return ttl > 0 && ttl <= maxTtlMin;
+      // Force-include liquidatable if enabled
+      if (forceIncludeLiquidatable && p.liquidationEligible) {
+        filterReasons.accepted_liquidatable_forced++;
+        return true;
+      }
+      
+      // EV filter
+      if (Number(p.ev ?? 0) <= minEv) {
+        filterReasons.rejected_ev++;
+        return false;
+      }
+      
+      // TTL filter with new logic
+      const ttlMin = p.ttlMin;
+      const predictedAtMs = typeof p.predictedLiquidationAtMs === 'number' ? p.predictedLiquidationAtMs : null;
+      
+      // Handle null/unknown TTL
+      if (ttlMin === null || ttlMin === undefined) {
+        if (!ttlUnknownPasses) {
+          filterReasons.rejected_ttl_expired++;
+          return false;
+        }
+        // Unknown TTL passes if allowed
+      } else {
+        const ttlMinNum = Number(ttlMin);
+        
+        // Check if negative (already expired)
+        if (ttlMinNum < 0) {
+          filterReasons.rejected_ttl_expired++;
+          return false;
+        }
+        
+        // Check if past predicted time + grace
+        if (predictedAtMs !== null && nowMs > predictedAtMs + ttlGraceMs) {
+          filterReasons.rejected_ttl_expired++;
+          return false;
+        }
+        
+        // Check if TTL too high
+        if (ttlMinNum > maxTtlMin) {
+          filterReasons.rejected_ttl_too_high++;
+          return false;
+        }
+      }
+      
+      filterReasons.accepted_normal++;
+      return true;
     })
     .sort((a, b) => {
       // Primary: liquidationEligible (true first)
@@ -300,18 +367,24 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
       const evDiff = Number(b.ev ?? 0) - Number(a.ev ?? 0);
       if (evDiff !== 0) return evDiff;
       
-      // Tertiary: TTL asc
-      const ttlDiff = Number(a.ttlMin ?? Infinity) - Number(b.ttlMin ?? Infinity);
+      // Tertiary: TTL asc (treat null as Infinity)
+      const aTtl = a.ttlMin !== null && a.ttlMin !== undefined ? Number(a.ttlMin) : Infinity;
+      const bTtl = b.ttlMin !== null && b.ttlMin !== undefined ? Number(b.ttlMin) : Infinity;
+      const ttlDiff = aTtl - bTtl;
       if (ttlDiff !== 0) return ttlDiff;
       
       // Quaternary: hazard desc
       return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
     });
 
+  console.log('[Executor] Filter results:', filterReasons);
+
   if (candidates.length === 0) {
-    console.log('No eligible candidates based on EV/TTL thresholds.');
+    console.log('[Executor] No eligible candidates based on EV/TTL thresholds.');
     return { status: 'no-eligible' };
   }
+
+  console.log(`[Executor] Selected ${candidates.length} eligible plans, executing up to maxInflight=1`);
 
   const target = candidates[0];
   
