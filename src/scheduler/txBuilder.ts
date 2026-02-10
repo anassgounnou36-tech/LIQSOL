@@ -58,8 +58,14 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
   const collateralMint = c.primaryCollateralMint ?? c.collateralMint ?? '';
   
   const nowMs = Date.now();
-  const ttlMinRaw = c.ttlMin ?? Infinity;
-  const ttlMin = Number.isFinite(ttlMinRaw) ? ttlMinRaw : null;
+  // Parse TTL: use ttlMin if provided, otherwise parse from ttlStr
+  let ttlMin: number | null;
+  if (c.ttlMin !== undefined && c.ttlMin !== null) {
+    const ttlMinRaw = Number(c.ttlMin);
+    ttlMin = Number.isFinite(ttlMinRaw) ? ttlMinRaw : null;
+  } else {
+    ttlMin = parseTtlMinutes(c.ttlStr);
+  }
   const predictedLiquidationAtMs = ttlMin !== null ? computePredictedLiquidationAtMs(ttlMin, nowMs) : null;
   
   return {
