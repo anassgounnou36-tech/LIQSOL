@@ -7,6 +7,8 @@ import { buildJupiterSwapIxs } from './swapBuilder.js';
 import { buildComputeBudgetIxs } from '../execution/computeBudget.js';
 import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
+import { resolveMint } from '../utils/mintResolve.js';
+import { sendWithBoundedRetry, formatAttemptResults } from './broadcastRetry.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 
 interface Plan {
@@ -76,6 +78,11 @@ function loadPlans(): Plan[] {
  * - Liquidation builder now derives reserves from obligation (no collateralMint/repayMint required)
  * - Fail-fast on swap failure (no try-catch)
  * - Use actual amounts from liquidation result (no placeholders)
+ * 
+ * Final PR: Real swap sizing via simulation
+ * - If swap needed, run pre-simulation to estimate seized collateral
+ * - Build real Jupiter swap with estimated amount (minus haircut)
+ * - Fail-fast if swap required but sizing unavailable
  */
 async function buildFullTransaction(
   plan: FlashloanPlan,
@@ -83,14 +90,13 @@ async function buildFullTransaction(
   signer: Keypair,
   market: PublicKey,
   programId: PublicKey,
-  opts: { includeSwap?: boolean; mockSwap?: boolean } = {}
+  opts: { includeSwap?: boolean; useRealSwapSizing?: boolean } = {}
 ): Promise<TransactionInstruction[]> {
   const ixs: TransactionInstruction[] = [];
   
   // Get env for config
   const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
   const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
-  const slippageBps = Number(process.env.JUPITER_SLIPPAGE_BPS ?? 50);
   
   // 1) ComputeBudget instructions
   const computeIxs = buildComputeBudgetIxs({
@@ -120,14 +126,27 @@ async function buildFullTransaction(
   
   // 3) Liquidation refresh + repay/seize (PR62: derives reserves from obligation)
   // Build with obligation pubkey only - reserves are derived from on-chain data
+  let repayMintPreference: PublicKey | undefined;
+  if (plan.repayMint) {
+    try {
+      repayMintPreference = resolveMint(plan.repayMint);
+    } catch (err) {
+      console.error(
+        `[Executor] Failed to resolve repayMint for plan ${plan.key} (obligation: ${plan.obligationPubkey}):`,
+        err instanceof Error ? err.message : String(err)
+      );
+      throw err;
+    }
+  }
+  
   const liquidationResult = await buildKaminoLiquidationIxs({
     connection,
     marketPubkey: market,
     programId,
     obligationPubkey: new PublicKey(plan.obligationPubkey),
     liquidatorPubkey: signer.publicKey,
-    // Optional: prefer USDC if available in borrows
-    repayMintPreference: plan.repayMint ? new PublicKey(plan.repayMint) : undefined,
+    // Optional: prefer specific mint if provided
+    repayMintPreference,
     repayAmountUi: plan.amountUi,
   });
   
@@ -138,34 +157,69 @@ async function buildFullTransaction(
   const { repayMint, collateralMint } = liquidationResult;
   
   // 4) Optional Jupiter swap (if collateral mint != repay mint)
-  // PR62: fail-fast, no try-catch, use actual decimals
+  // Final PR: Real swap sizing via simulation
   if (opts.includeSwap && !collateralMint.equals(repayMint)) {
-    // For now, we can't calculate exact seized collateral amount without simulating first
-    // So we'll need to either:
-    // 1) Skip swap in dry-run mode
-    // 2) Use a reasonable estimate
-    // 3) Fail if mockMode is not enabled
+    console.log('[Executor] Swap required: collateral mint differs from repay mint');
+    console.log(`[Executor]   Collateral: ${collateralMint.toBase58()}`);
+    console.log(`[Executor]   Repay: ${repayMint.toBase58()}`);
     
-    if (!opts.mockSwap) {
-      throw new Error(
-        'Swap building requires mockMode=true for testing. ' +
-        'Real swap amounts can only be determined after liquidation simulation. ' +
-        `Collateral mint ${collateralMint.toBase58()} differs from repay mint ${repayMint.toBase58()}.`
-      );
+    if (opts.useRealSwapSizing) {
+      // Real swap sizing: simulate liquidation to estimate seized collateral
+      console.log('[Executor] Using REAL swap sizing via pre-simulation...');
+      
+      // Import swap sizing helper
+      const { estimateSeizedCollateral } = await import('./swapSizing.js');
+      
+      // Build pre-simulation transaction (everything up to and including liquidation, no swap/repay)
+      const preSimIxs = [...ixs]; // Current ixs already include: ComputeBudget + FlashBorrow + Refresh + Liquidation
+      
+      try {
+        // Estimate seized collateral via simulation
+        const estimate = await estimateSeizedCollateral({
+          connection,
+          signer,
+          instructions: preSimIxs,
+          collateralMint,
+          liquidatorPubkey: signer.publicKey,
+        });
+        
+        console.log(`[Executor] Estimated seized: ${estimate.amountBaseUnits} base units`);
+        console.log(`[Executor] After haircut: ${estimate.amountWithHaircut} base units`);
+        
+        // Convert to UI amount for display
+        const collateralDecimals = plan.collateralDecimals ?? 9;
+        const seizedUi = Number(estimate.amountWithHaircut) / Math.pow(10, collateralDecimals);
+        console.log(`[Executor] Building Jupiter swap for ${seizedUi.toFixed(6)} ${collateralMint.toBase58().slice(0, 8)}...`);
+        
+        // Build real Jupiter swap with estimated amount
+        const slippageBps = Number(process.env.SWAP_SLIPPAGE_BPS ?? 50);
+        const swapIxs = await buildJupiterSwapIxs({
+          userPublicKey: signer.publicKey,
+          fromMint: collateralMint.toBase58(),
+          toMint: repayMint.toBase58(),
+          amountUi: seizedUi.toString(),
+          fromDecimals: collateralDecimals,
+          slippageBps,
+          mockMode: false, // Real swap with actual amounts
+        });
+        
+        console.log(`[Executor] Built ${swapIxs.length} swap instruction(s)`);
+        ixs.push(...swapIxs);
+        
+      } catch (err) {
+        console.error('[Executor] Failed to estimate seized collateral:', err instanceof Error ? err.message : String(err));
+        throw new Error(
+          'Swap required but sizing failed. ' +
+          'Cannot build transaction without knowing seized collateral amount. ' +
+          `Collateral: ${collateralMint.toBase58()}, Repay: ${repayMint.toBase58()}`
+        );
+      }
+      
+    } else {
+      // Fallback: mock mode or skip swap (for backward compatibility)
+      console.log('[Executor] useRealSwapSizing=false, skipping swap (dry-run/test mode)');
+      // Don't add swap instructions - transaction will fail if actually broadcast
     }
-    
-    // In mock mode, return empty instructions
-    const swapIxs = await buildJupiterSwapIxs({
-      userPublicKey: signer.publicKey,
-      fromMint: collateralMint.toBase58(),
-      toMint: repayMint.toBase58(),
-      amountUi: '1.0',
-      fromDecimals: plan.collateralDecimals ?? 9,
-      slippageBps,
-      mockMode: true,
-    });
-    
-    ixs.push(...swapIxs);
   }
   
   // 5) FlashRepay
@@ -259,10 +313,13 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   console.log('[Executor] Building full transaction...');
   const buildStart = Date.now();
   
+  // Final PR: Use real swap sizing when not in mock/test mode
+  const useRealSwapSizing = !dry; // Use real sizing for broadcast mode, skip for dry-run
+  
   // PR2: Build full transaction pipeline
   const ixs = await buildFullTransaction(target, connection, signer, market, programId, {
     includeSwap: true,
-    mockSwap: false,
+    useRealSwapSizing,
   });
   
   const buildMs = Date.now() - buildStart;
@@ -274,8 +331,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     payerKey: signer.publicKey,
     recentBlockhash: bh.blockhash,
     instructions: ixs,
-  }).compileToLegacyMessage();
-  const tx = new VersionedTransaction(msg);
+  });
+  const compiledMsg = msg.compileToLegacyMessage();
+  const tx = new VersionedTransaction(compiledMsg);
   tx.sign([signer]);
 
   if (dry || !broadcast) {
@@ -296,31 +354,52 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     
     return { status: 'simulated' };
   } else {
-    // Broadcast transaction
-    console.log('[Executor] Broadcasting transaction...');
-    const sendStart = Date.now();
+    // Broadcast transaction with bounded retries
+    console.log('[Executor] Broadcasting transaction with bounded retries...');
+    
+    const maxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_PLAN ?? 2);
+    const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
+    const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
+    
+    console.log(`[Executor] Retry config: maxAttempts=${maxAttempts}, cuLimit=${cuLimit}, cuPrice=${cuPrice}`);
     
     try {
-      const signature = await connection.sendTransaction(tx, { skipPreflight: false });
-      const sendMs = Date.now() - sendStart;
+      const attempts = await sendWithBoundedRetry(
+        connection,
+        tx,
+        signer,
+        msg, // Pass TransactionMessage before compilation
+        {
+          maxAttempts,
+          cuLimit,
+          cuPrice,
+          cuLimitBumpFactor: 1.5,
+          cuPriceBumpMicrolamports: 50000,
+        }
+      );
       
-      console.log(`[Executor] Transaction sent in ${sendMs}ms`);
-      console.log(`[Executor] Signature: ${signature}`);
+      // Log all attempts
+      console.log(formatAttemptResults(attempts));
       
-      // Wait for confirmation
-      const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+      // Get final result
+      const finalAttempt = attempts[attempts.length - 1];
       
-      if (confirmation.value.err) {
-        console.error('[Executor] Transaction failed:', confirmation.value.err);
-        return { status: 'tx-failed', signature };
+      if (finalAttempt && finalAttempt.success) {
+        console.log('[Executor] Transaction confirmed successfully!');
+        return { 
+          status: 'confirmed', 
+          signature: finalAttempt.signature
+        } as { status: string; signature?: string; [key: string]: unknown };
+      } else {
+        console.error('[Executor] All broadcast attempts failed');
+        return { 
+          status: 'broadcast-failed'
+        } as { status: string; signature?: string; [key: string]: unknown };
       }
-      
-      console.log('[Executor] Transaction confirmed!');
-      return { status: 'confirmed', signature };
       
     } catch (err) {
       console.error('[Executor] Broadcast error:', err instanceof Error ? err.message : String(err));
-      return { status: 'broadcast-error' };
+      return { status: 'broadcast-error' } as { status: string; signature?: string; [key: string]: unknown };
     }
   }
 }

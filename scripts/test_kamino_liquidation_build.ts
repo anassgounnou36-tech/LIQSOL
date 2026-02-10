@@ -4,6 +4,7 @@ import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { buildKaminoLiquidationIxs } from '../src/kamino/liquidationBuilder.js';
 import { loadEnv } from '../src/config/env.js';
 import { normalizeWslPath } from '../src/utils/path.js';
+import { resolveMint } from '../src/utils/mintResolve.js';
 
 interface TestPlan {
   planVersion?: number;
@@ -73,6 +74,17 @@ async function main() {
   
   try {
     // PR62: New API - only obligationPubkey required, reserves derived from obligation
+    let repayMintPreference: PublicKey | undefined;
+    if (plan.repayMint) {
+      try {
+        repayMintPreference = resolveMint(plan.repayMint);
+        console.log(`[Test] Resolved repayMint preference: ${repayMintPreference.toBase58()}`);
+      } catch (err) {
+        console.error(`[Test] ERROR: Failed to resolve repayMint "${plan.repayMint}":`, err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    }
+    
     const result = await buildKaminoLiquidationIxs({
       connection,
       marketPubkey: market,
@@ -80,7 +92,7 @@ async function main() {
       obligationPubkey: new PublicKey(plan.obligationPubkey!),
       liquidatorPubkey: liquidator.publicKey,
       // Optional: prefer specific repay mint if provided
-      repayMintPreference: plan.repayMint ? new PublicKey(plan.repayMint) : undefined,
+      repayMintPreference,
     });
     
     const totalIxs = result.refreshIxs.length + result.liquidationIxs.length;
