@@ -35,10 +35,10 @@ export function normalizeCandidates(payload: any): any[] {
   return Object.values(payload);
 }
 
-export function parseTtlMinutes(ttlStr?: string): number {
-  if (!ttlStr || ttlStr === 'unknown') return Infinity;
+export function parseTtlMinutes(ttlStr?: string): number | null {
+  if (!ttlStr || ttlStr === 'unknown') return null;
   const m = /^(?:(\d+)m)?(?:(\d+)s)?$/.exec(ttlStr);
-  if (!m) return Infinity;
+  if (!m) return null;
   const minutes = Number(m[1] || 0);
   const seconds = Number(m[2] || 0);
   return minutes + seconds / 60;
@@ -57,7 +57,13 @@ export function filterCandidates(raw: any[], p: FilterParams): any[] {
       const liquidationEligible = c.liquidationEligible ?? false;
       return { ...c, key: c.key ?? c.obligationPubkey ?? 'unknown', hazard, ev, ttlStr, ttlMin, borrowUsd, liquidationEligible };
     })
-    .filter((c) => c.ev > p.minEv && c.ttlMin <= p.maxTtlMin && c.hazard > p.minHazard);
+    .filter((c) => {
+      // Always include liquidatable obligations
+      if (c.liquidationEligible) return true;
+      // For others, check thresholds
+      const ttlMinValue = c.ttlMin ?? Infinity;
+      return c.ev > p.minEv && ttlMinValue <= p.maxTtlMin && c.hazard > p.minHazard;
+    });
 }
 
 export function filterCandidatesWithStats(raw: any[], p: FilterParams): { filtered: any[]; stats: FilterStats } {
@@ -111,7 +117,10 @@ export function filterCandidatesWithStats(raw: any[], p: FilterParams): { filter
       stats.reasons.evTooLow++;
       return false;
     }
-    if (c.ttlMin > p.maxTtlMin) {
+    
+    // Handle null TTL (unknown)
+    const ttlMinValue = c.ttlMin ?? Infinity;
+    if (ttlMinValue > p.maxTtlMin) {
       stats.reasons.ttlTooHigh++;
       return false;
     }
