@@ -32,10 +32,10 @@ async function main() {
   // Load environment first to get defaults
   const env = loadReadonlyEnv();
 
-  // Get defaults from env
-  const envTop = Number(process.env.CAND_TOP || "50");
-  const envNear = Number(process.env.CAND_NEAR || "1.02");
-  const envValidate = Number(process.env.CAND_VALIDATE_SAMPLES || "0");
+  // Get defaults from env (already validated by zod schema)
+  const envTop = Number(env.CAND_TOP);
+  const envNear = Number(env.CAND_NEAR);
+  const envValidate = Number(env.CAND_VALIDATE_SAMPLES);
 
   // Parse command-line arguments (override env if provided)
   const args = process.argv.slice(2);
