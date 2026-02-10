@@ -29,19 +29,28 @@ import { explainHealth } from "../math/healthBreakdown.js";
 async function main() {
   logger.info("Starting candidate selection from scored obligations...");
 
-  // Parse command-line arguments
+  // Load environment first to get defaults
+  const env = loadReadonlyEnv();
+
+  // Get defaults from env (already validated by zod schema)
+  const envTop = Number(env.CAND_TOP);
+  const envNear = Number(env.CAND_NEAR);
+  const envValidate = Number(env.CAND_VALIDATE_SAMPLES);
+
+  // Parse command-line arguments (override env if provided)
   const args = process.argv.slice(2);
-  const topArg = Number((args.find((a) => a.startsWith("--top=")) || "").split("=")[1] || "50");
-  const nearArg = Number((args.find((a) => a.startsWith("--near=")) || "").split("=")[1] || "1.02");
-  const validateArg = Number((args.find((a) => a.startsWith("--validate-samples=")) || "").split("=")[1] || "0");
+  const topArgRaw = args.find((a) => a.startsWith("--top="));
+  const nearArgRaw = args.find((a) => a.startsWith("--near="));
+  const validateArgRaw = args.find((a) => a.startsWith("--validate-samples="));
+  
+  const topArg = topArgRaw ? Number(topArgRaw.split("=")[1]) : envTop;
+  const nearArg = nearArgRaw ? Number(nearArgRaw.split("=")[1]) : envNear;
+  const validateArg = validateArgRaw ? Number(validateArgRaw.split("=")[1]) : envValidate;
 
   logger.info(
     { top: topArg, nearThreshold: nearArg, validateSamples: validateArg },
-    "Command-line options"
+    "Resolved parameters (env + CLI overrides)"
   );
-
-  // Load environment
-  const env = loadReadonlyEnv();
 
   // Parse config
   let marketPubkey: PublicKey;

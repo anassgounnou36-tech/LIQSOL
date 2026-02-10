@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { filterCandidates, normalizeCandidates } from '../src/scheduler/txFilters.js';
+import { filterCandidatesWithStats, normalizeCandidates } from '../src/scheduler/txFilters.js';
 import { buildPlanFromCandidate } from '../src/scheduler/txBuilder.js';
 import { enqueuePlans } from '../src/scheduler/txScheduler.js';
 import { type EvParams } from '../src/predict/evCalculator.js';
@@ -43,9 +43,41 @@ function getOptionalEnvNum(key: string): number | undefined {
     ttlMaxDropPct: getEnvNum('TTL_MAX_DROP_PCT', 20),
   };
 
+  // Print resolved scheduler parameters
+  console.log('\n🔧 Scheduler Parameters (from .env):');
+  console.log(`  SCHED_MIN_EV:          ${params.minEv}`);
+  console.log(`  SCHED_MAX_TTL_MIN:     ${params.maxTtlMin}`);
+  console.log(`  SCHED_MIN_HAZARD:      ${params.minHazard}`);
+  console.log(`  HAZARD_ALPHA:          ${hazardAlpha}`);
+  console.log(`  TTL_SOL_DROP_PCT:      ${params.ttlDropPerMinPct}`);
+  console.log(`  TTL_MAX_DROP_PCT:      ${params.ttlMaxDropPct}`);
+  console.log('\n🧮 EV Parameters:');
+  console.log(`  Close Factor:          ${evParams.closeFactor}`);
+  console.log(`  Liquidation Bonus:     ${evParams.liquidationBonusPct * 100}%`);
+  console.log(`  Flashloan Fee:         ${evParams.flashloanFeePct * 100}%`);
+  console.log(`  Fixed Gas USD:         $${evParams.fixedGasUsd}`);
+  if (evParams.slippageBufferPct !== undefined) {
+    console.log(`  Slippage Buffer:       ${evParams.slippageBufferPct * 100}%`);
+  }
+
   const payload = loadCandidatesPayload();
   const candidates = normalizeCandidates(payload);
-  const filtered = filterCandidates(candidates, params);
+  const { filtered, stats } = filterCandidatesWithStats(candidates, params);
+
+  console.log('\n📊 Filter Statistics:');
+  console.log(`  Total candidates:           ${stats.total}`);
+  console.log(`  Filtered (passed):          ${stats.filtered}`);
+  console.log(`  Rejected (total):           ${stats.total - stats.filtered}`);
+  console.log('');
+  console.log('  Rejection Reasons:');
+  console.log(`    EV too low (<= ${params.minEv}):      ${stats.reasons.evTooLow}`);
+  console.log(`    TTL too high (> ${params.maxTtlMin} min): ${stats.reasons.ttlTooHigh}`);
+  console.log(`    Hazard too low (<= ${params.minHazard}):  ${stats.reasons.hazardTooLow}`);
+  console.log(`    Missing health ratio:       ${stats.reasons.missingHealth}`);
+  console.log(`    Missing borrow value:       ${stats.reasons.missingBorrow}`);
+  console.log('');
+  console.log('  Force-Included:');
+  console.log(`    Liquidatable now:           ${stats.forcedIn.liquidatable}`);
 
   console.log('\n📋 Filtered candidates (up to 10):');
   console.table(filtered.slice(0, 10).map((c) => ({
