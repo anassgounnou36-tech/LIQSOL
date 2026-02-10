@@ -52,6 +52,8 @@
     "test:kamino:liquidation:build:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_kamino_liquidation_build_wsl.ps1",
     "test:jupiter:swapbuilder": "tsx scripts/test_jupiter_swapbuilder.ts",
     "test:jupiter:swapbuilder:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_jupiter_swapbuilder_wsl.ps1",
+    "test:seized:delta": "tsx scripts/test_seized_delta_estimator.ts",
+    "test:seized:delta:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_seized_delta_estimator_wsl.ps1",
     "test:executor:sim:full": "tsx scripts/test_executor_full_sim.ts",
     "test:executor:sim:full:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_executor_full_sim_wsl.ps1",
     "bot:run": "tsx src/bot/run.ts",

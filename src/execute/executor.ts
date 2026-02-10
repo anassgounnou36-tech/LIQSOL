@@ -157,62 +157,93 @@ async function buildFullTransaction(
   const { repayMint, collateralMint } = liquidationResult;
   
   // 4) Optional Jupiter swap (if collateral mint != repay mint)
-  // Final PR: Real swap sizing via simulation
+  // Final PR: Real swap sizing via deterministic seized delta estimation (NO log parsing)
   if (opts.includeSwap && !collateralMint.equals(repayMint)) {
     console.log('[Executor] Swap required: collateral mint differs from repay mint');
     console.log(`[Executor]   Collateral: ${collateralMint.toBase58()}`);
     console.log(`[Executor]   Repay: ${repayMint.toBase58()}`);
     
     if (opts.useRealSwapSizing) {
-      // Real swap sizing: simulate liquidation to estimate seized collateral
-      console.log('[Executor] Using REAL swap sizing via pre-simulation...');
+      // Real swap sizing: simulate liquidation to estimate seized collateral using account-delta
+      console.log('[Executor] Using REAL swap sizing via deterministic seized-delta estimation...');
       
-      // Import swap sizing helper
-      const { estimateSeizedCollateral } = await import('./swapSizing.js');
+      // Import seized delta estimator
+      const { estimateSeizedCollateralDeltaBaseUnits } = await import('./seizedDeltaEstimator.js');
+      const { formatBaseUnitsToUiString } = await import('./swapBuilder.js');
       
       // Build pre-simulation transaction (everything up to and including liquidation)
       // At this point ixs contains: ComputeBudget + FlashBorrow + Refresh + Liquidation
       const preSimIxs = [...ixs];
       
       try {
-        // Estimate seized collateral via simulation
-        const estimate = await estimateSeizedCollateral({
-          connection,
-          signer,
+        // Build pre-sim tx for account-delta estimation
+        const bh = await connection.getLatestBlockhash();
+        const msg = new TransactionMessage({
+          payerKey: signer.publicKey,
+          recentBlockhash: bh.blockhash,
           instructions: preSimIxs,
+        });
+        const compiledMsg = msg.compileToLegacyMessage();
+        const preSimTx = new VersionedTransaction(compiledMsg);
+        preSimTx.sign([signer]);
+        
+        // Estimate seized collateral via account-delta approach (NO log parsing)
+        const seizedCollateralBaseUnits = await estimateSeizedCollateralDeltaBaseUnits({
+          connection,
+          liquidator: signer.publicKey,
           collateralMint,
-          liquidatorPubkey: signer.publicKey,
+          simulateTx: preSimTx,
         });
         
-        console.log(`[Executor] Estimated seized: ${estimate.amountBaseUnits} base units`);
-        console.log(`[Executor] After haircut: ${estimate.amountWithHaircut} base units`);
+        console.log(`[Executor] Estimated seized: ${seizedCollateralBaseUnits} base units`);
         
-        // Convert to UI amount for display
+        // Apply safety haircut (SWAP_IN_HAIRCUT_BPS)
+        const haircutBps = Number(process.env.SWAP_IN_HAIRCUT_BPS ?? 100);
+        const haircutMultiplier = 10000n - BigInt(haircutBps);
+        const inAmountBaseUnits = (seizedCollateralBaseUnits * haircutMultiplier) / 10000n;
+        
+        console.log(`[Executor] After ${haircutBps} bps haircut: ${inAmountBaseUnits} base units`);
+        
+        // Format for logging only
         const collateralDecimals = plan.collateralDecimals ?? 9;
-        const seizedUi = Number(estimate.amountWithHaircut) / Math.pow(10, collateralDecimals);
-        console.log(`[Executor] Building Jupiter swap for ${seizedUi.toFixed(6)} ${collateralMint.toBase58().slice(0, 8)}...`);
+        const seizedUi = formatBaseUnitsToUiString(inAmountBaseUnits, collateralDecimals);
+        console.log(`[Executor] Building Jupiter swap for ${seizedUi} ${collateralMint.toBase58().slice(0, 8)}...`);
         
-        // Build real Jupiter swap with estimated amount
-        const slippageBps = Number(process.env.SWAP_SLIPPAGE_BPS ?? 50);
-        const swapIxs = await buildJupiterSwapIxs({
-          userPublicKey: signer.publicKey,
-          fromMint: collateralMint.toBase58(),
-          toMint: repayMint.toBase58(),
-          amountUi: seizedUi.toString(),
-          fromDecimals: collateralDecimals,
+        // Build real Jupiter swap with base-units API (NO UI strings, NO Number conversions)
+        const slippageBps = Number(process.env.SWAP_SLIPPAGE_BPS ?? 100);
+        const swapResult = await buildJupiterSwapIxs({
+          inputMint: collateralMint,
+          outputMint: repayMint,
+          inAmountBaseUnits, // bigint, NO conversion
           slippageBps,
-          mockMode: false, // Real swap with actual amounts
+          userPubkey: signer.publicKey,
+          connection,
         });
         
-        console.log(`[Executor] Built ${swapIxs.length} swap instruction(s)`);
-        ixs.push(...swapIxs);
+        // Collect all swap instructions
+        const allSwapIxs = [
+          ...swapResult.setupIxs,
+          ...swapResult.swapIxs,
+          ...swapResult.cleanupIxs,
+        ];
+        
+        console.log(`[Executor] Built ${allSwapIxs.length} swap instruction(s) (${swapResult.setupIxs.length} setup, ${swapResult.swapIxs.length} swap, ${swapResult.cleanupIxs.length} cleanup)`);
+        
+        if (swapResult.estimatedOutAmountBaseUnits) {
+          const repayDecimals = plan.repayDecimals ?? 6;
+          const estimatedOutUi = formatBaseUnitsToUiString(swapResult.estimatedOutAmountBaseUnits, repayDecimals);
+          console.log(`[Executor]   Estimated output: ${estimatedOutUi} ${repayMint.toBase58().slice(0, 8)}`);
+        }
+        
+        ixs.push(...allSwapIxs);
         
       } catch (err) {
-        console.error('[Executor] Failed to estimate seized collateral:', err instanceof Error ? err.message : String(err));
+        console.error('[Executor] Failed to estimate seized collateral or build swap:', err instanceof Error ? err.message : String(err));
         throw new Error(
-          'Swap required but sizing failed. ' +
+          'Swap required but sizing or building failed. ' +
           'Cannot build transaction without knowing seized collateral amount. ' +
-          `Collateral: ${collateralMint.toBase58()}, Repay: ${repayMint.toBase58()}`
+          `Collateral: ${collateralMint.toBase58()}, Repay: ${repayMint.toBase58()}, ` +
+          `Error: ${err instanceof Error ? err.message : String(err)}`
         );
       }
       
