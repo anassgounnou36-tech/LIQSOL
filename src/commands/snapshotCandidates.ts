@@ -29,19 +29,30 @@ import { explainHealth } from "../math/healthBreakdown.js";
 async function main() {
   logger.info("Starting candidate selection from scored obligations...");
 
-  // Parse command-line arguments
+  // Load environment first to get defaults
+  const env = loadReadonlyEnv();
+
+  // Get defaults from env
+  const envTop = Number(process.env.CAND_TOP || "50");
+  const envNear = Number(process.env.CAND_NEAR || "1.02");
+  const envValidate = Number(process.env.CAND_VALIDATE_SAMPLES || "0");
+
+  // Parse command-line arguments (override env if provided)
   const args = process.argv.slice(2);
-  const topArg = Number((args.find((a) => a.startsWith("--top=")) || "").split("=")[1] || "50");
-  const nearArg = Number((args.find((a) => a.startsWith("--near=")) || "").split("=")[1] || "1.02");
-  const validateArg = Number((args.find((a) => a.startsWith("--validate-samples=")) || "").split("=")[1] || "0");
+  const topArg = args.find((a) => a.startsWith("--top="))
+    ? Number(args.find((a) => a.startsWith("--top="))!.split("=")[1])
+    : envTop;
+  const nearArg = args.find((a) => a.startsWith("--near="))
+    ? Number(args.find((a) => a.startsWith("--near="))!.split("=")[1])
+    : envNear;
+  const validateArg = args.find((a) => a.startsWith("--validate-samples="))
+    ? Number(args.find((a) => a.startsWith("--validate-samples="))!.split("=")[1])
+    : envValidate;
 
   logger.info(
     { top: topArg, nearThreshold: nearArg, validateSamples: validateArg },
-    "Command-line options"
+    "Resolved parameters (env + CLI overrides)"
   );
-
-  // Load environment
-  const env = loadReadonlyEnv();
 
   // Parse config
   let marketPubkey: PublicKey;

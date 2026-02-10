@@ -56,6 +56,8 @@
     "test:executor:sim:full:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_executor_full_sim_wsl.ps1",
     "bot:run": "tsx src/bot/run.ts",
     "bot:run:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_bot_run_wsl.ps1",
+    "pipeline:once": "npm run snapshot:obligations && npm run snapshot:scored && npm run snapshot:candidates && npm run test:scheduler:forecast && npm run audit:pipeline",
+    "pipeline:once:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_pipeline_once_wsl.ps1",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",

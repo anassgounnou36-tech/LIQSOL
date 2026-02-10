@@ -68,6 +68,14 @@ export const EnvSchema = z.object({
   EXEC_MIN_EV: z.string().optional().default('0'),
   EXEC_MAX_TTL_MIN: z.string().optional().default('10'),
   SCHEDULED_MIN_LIQUIDATION_DELAY_MS: z.string().optional().default('0'),
+
+  // Candidate selection tuning
+  CAND_TOP: z.string().optional().default('50'),
+  CAND_NEAR: z.string().optional().default('1.02'),
+  CAND_VALIDATE_SAMPLES: z.string().optional().default('0'),
+
+  // Scheduler max plans per cycle
+  SCHED_MAX_PLANS_PER_CYCLE: z.string().optional().default('100'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

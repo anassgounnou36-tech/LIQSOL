@@ -3,16 +3,15 @@
 # Runs directly from the current directory in WSL (no workspace copying needed)
 
 Param(
-  [string]$Top = "50",
-  [string]$Near = "1.02",
-  [string]$Validate = "5"
+  [string]$Top = "",
+  [string]$Near = "",
+  [string]$Validate = ""
 )
 
 # Force Ubuntu distro for all WSL calls
 $Distro = "Ubuntu"
 
 Write-Host "PR8 WSL runner: snapshot:candidates" -ForegroundColor Cyan
-Write-Host "Parameters: --top=$Top --near=$Near --validate-samples=$Validate" -ForegroundColor Gray
 Write-Host ""
 
 Write-Host "Checking for WSL installation..." -ForegroundColor Cyan
@@ -64,6 +63,33 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ".env file found." -ForegroundColor Green
+Write-Host ""
+
+# Read environment variables from .env if parameters not provided
+Write-Host "Reading configuration..." -ForegroundColor Cyan
+if ([string]::IsNullOrWhiteSpace($Top)) {
+    $Top = & wsl.exe -d $Distro -- bash -c "cd '$wslPath' && grep -E '^CAND_TOP=' .env | cut -d'=' -f2 | tr -d '\r\n'"
+    if ([string]::IsNullOrWhiteSpace($Top)) {
+        $Top = "50"
+    }
+}
+if ([string]::IsNullOrWhiteSpace($Near)) {
+    $Near = & wsl.exe -d $Distro -- bash -c "cd '$wslPath' && grep -E '^CAND_NEAR=' .env | cut -d'=' -f2 | tr -d '\r\n'"
+    if ([string]::IsNullOrWhiteSpace($Near)) {
+        $Near = "1.02"
+    }
+}
+if ([string]::IsNullOrWhiteSpace($Validate)) {
+    $Validate = & wsl.exe -d $Distro -- bash -c "cd '$wslPath' && grep -E '^CAND_VALIDATE_SAMPLES=' .env | cut -d'=' -f2 | tr -d '\r\n'"
+    if ([string]::IsNullOrWhiteSpace($Validate)) {
+        $Validate = "0"
+    }
+}
+
+Write-Host "Resolved parameters:" -ForegroundColor Green
+Write-Host "  CAND_TOP:              $Top" -ForegroundColor Gray
+Write-Host "  CAND_NEAR:             $Near" -ForegroundColor Gray
+Write-Host "  CAND_VALIDATE_SAMPLES: $Validate" -ForegroundColor Gray
 Write-Host ""
 
 # Check for obligations snapshot data
