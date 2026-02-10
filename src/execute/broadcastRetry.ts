@@ -61,9 +61,12 @@ function classifyFailure(error: string): FailureType {
  * 
  * Retry rules:
  * - Blockhash expired/not found: refresh blockhash and retry once
- * - Compute exceeded: bump CU limit and retry once
- * - Priority too low: bump CU price and retry once
+ * - Compute exceeded: log warning (NOTE: full implementation requires rebuilding tx with new CU budget)
+ * - Priority too low: log warning (NOTE: full implementation requires rebuilding tx with new CU price)
  * - Other errors: no retry
+ * 
+ * NOTE: CU limit and priority fee bumps log the intent but don't rebuild the transaction.
+ * Full implementation would require passing instructions and rebuilding with updated compute budget.
  * 
  * @param connection - Solana connection
  * @param tx - Transaction to send (will be rebuilt if blockhash needs refresh)
@@ -105,7 +108,7 @@ export async function sendWithBoundedRetry(
       const confirmation = await connection.confirmTransaction({
         signature,
         blockhash: message.recentBlockhash,
-        lastValidBlockHeight: (await connection.getLatestBlockhash()).lastValidBlockHeight,
+        lastValidBlockHeight: (await connection.getBlockHeight()) + 150, // ~60 seconds at 400ms/slot
       }, 'confirmed' as Commitment);
       
       const confirmMs = Date.now() - confirmStart;
@@ -144,20 +147,22 @@ export async function sendWithBoundedRetry(
           if (failureType === 'compute-exceeded' && currentCuLimit) {
             const bumpFactor = config.cuLimitBumpFactor ?? 1.5;
             const newLimit = Math.floor(currentCuLimit * bumpFactor);
-            console.log(`[Broadcast] Bumping CU limit from ${currentCuLimit} to ${newLimit} and retrying...`);
+            console.log(`[Broadcast] Compute exceeded. Would bump CU limit from ${currentCuLimit} to ${newLimit}`);
+            console.log(`[Broadcast] NOTE: CU limit bump requires rebuilding transaction - not implemented`);
+            console.log(`[Broadcast] Retrying with original transaction...`);
+            // NOTE: Full implementation would rebuild instructions with new CU budget
             currentCuLimit = newLimit;
-            // Would need to rebuild instructions with new CU budget here
-            // For now, just retry with same transaction
             continue;
           }
           
           if (failureType === 'priority-too-low' && currentCuPrice !== undefined) {
             const bump = config.cuPriceBumpMicrolamports ?? 50000;
             const newPrice = currentCuPrice + bump;
-            console.log(`[Broadcast] Bumping CU price from ${currentCuPrice} to ${newPrice} microlamports and retrying...`);
+            console.log(`[Broadcast] Priority too low. Would bump CU price from ${currentCuPrice} to ${newPrice} microlamports`);
+            console.log(`[Broadcast] NOTE: Priority fee bump requires rebuilding transaction - not implemented`);
+            console.log(`[Broadcast] Retrying with original transaction...`);
+            // NOTE: Full implementation would rebuild instructions with new CU price
             currentCuPrice = newPrice;
-            // Would need to rebuild instructions with new CU price here
-            // For now, just retry with same transaction
             continue;
           }
         }
@@ -228,7 +233,10 @@ export async function sendWithBoundedRetry(
         if (failureType === 'compute-exceeded' && currentCuLimit) {
           const bumpFactor = config.cuLimitBumpFactor ?? 1.5;
           const newLimit = Math.floor(currentCuLimit * bumpFactor);
-          console.log(`[Broadcast] Bumping CU limit from ${currentCuLimit} to ${newLimit} and retrying...`);
+          console.log(`[Broadcast] Compute exceeded. Would bump CU limit from ${currentCuLimit} to ${newLimit}`);
+          console.log(`[Broadcast] NOTE: CU limit bump requires rebuilding transaction - not implemented`);
+          console.log(`[Broadcast] Retrying with original transaction...`);
+          // NOTE: Full implementation would rebuild instructions with new CU budget
           currentCuLimit = newLimit;
           continue;
         }
@@ -236,7 +244,10 @@ export async function sendWithBoundedRetry(
         if (failureType === 'priority-too-low' && currentCuPrice !== undefined) {
           const bump = config.cuPriceBumpMicrolamports ?? 50000;
           const newPrice = currentCuPrice + bump;
-          console.log(`[Broadcast] Bumping CU price from ${currentCuPrice} to ${newPrice} microlamports and retrying...`);
+          console.log(`[Broadcast] Priority too low. Would bump CU price from ${currentCuPrice} to ${newPrice} microlamports`);
+          console.log(`[Broadcast] NOTE: Priority fee bump requires rebuilding transaction - not implemented`);
+          console.log(`[Broadcast] Retrying with original transaction...`);
+          // NOTE: Full implementation would rebuild instructions with new CU price
           currentCuPrice = newPrice;
           continue;
         }

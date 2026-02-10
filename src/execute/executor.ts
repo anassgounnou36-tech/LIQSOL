@@ -170,8 +170,9 @@ async function buildFullTransaction(
       // Import swap sizing helper
       const { estimateSeizedCollateral } = await import('./swapSizing.js');
       
-      // Build pre-simulation transaction (everything up to and including liquidation, no swap/repay)
-      const preSimIxs = [...ixs]; // Current ixs already include: ComputeBudget + FlashBorrow + Refresh + Liquidation
+      // Build pre-simulation transaction (everything up to and including liquidation)
+      // At this point ixs contains: ComputeBudget + FlashBorrow + Refresh + Liquidation
+      const preSimIxs = [...ixs];
       
       try {
         // Estimate seized collateral via simulation
@@ -357,6 +358,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     // Broadcast transaction with bounded retries
     console.log('[Executor] Broadcasting transaction with bounded retries...');
     
+    // Get retry config from env (reuse CU settings from buildFullTransaction)
     const maxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_PLAN ?? 2);
     const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
     const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);

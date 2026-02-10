@@ -1,5 +1,7 @@
 import { Connection, PublicKey, TransactionInstruction, VersionedTransaction, TransactionMessage, Keypair } from '@solana/web3.js';
-import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+
+// Basis points divisor for percentage calculations
+const BIPS_DIVISOR = 10000n;
 
 /**
  * Parameters for estimating seized collateral from liquidation simulation
@@ -37,7 +39,7 @@ export interface SeizedCollateralEstimate {
 export async function estimateSeizedCollateral(
   params: EstimateSeizedCollateralParams
 ): Promise<SeizedCollateralEstimate> {
-  const { connection, signer, instructions, collateralMint, liquidatorPubkey } = params;
+  const { connection, signer, instructions, collateralMint } = params;
   
   // Get haircut from env (default 100 bps = 1%)
   const haircutBps = Number(process.env.SWAP_IN_HAIRCUT_BPS ?? 100);
@@ -79,14 +81,15 @@ export async function estimateSeizedCollateral(
     let seizedAmount = 0n;
     
     // First, try to parse logs for transfer amounts
+    // Look for Kamino-specific log patterns with more specific matching
     for (const log of logs) {
       // Look for Kamino liquidation program logs indicating collateral seized
-      // Pattern might be like: "Liquidate: seized XXX collateral tokens"
-      // or "Transfer: XXX tokens"
+      // Pattern: Match "seized XXX" or "withdrawn XXX" where XXX is the amount
       if (log.includes('seized') || log.includes('Seized') || log.includes('withdrawn') || log.includes('Withdrawn')) {
-        const match = log.match(/(\d+)/);
-        if (match) {
-          const amount = BigInt(match[1]);
+        // More specific pattern: match digits after the keyword
+        const seizedMatch = log.match(/(?:seized|Seized|withdrawn|Withdrawn).*?(\d+)/);
+        if (seizedMatch) {
+          const amount = BigInt(seizedMatch[1]);
           if (amount > seizedAmount) {
             seizedAmount = amount;
             console.log(`[SwapSizing] Found seized amount in logs: ${seizedAmount} base units`);
@@ -95,24 +98,10 @@ export async function estimateSeizedCollateral(
       }
     }
     
-    // If log parsing fails, try account state approach
+    // If log parsing fails, account state approach is not available in web3.js 1.x simulation
     if (seizedAmount === 0n) {
-      console.log('[SwapSizing] No seized amount found in logs, trying account state approach...');
-      
-      // Get liquidator's collateral ATA
-      const liquidatorAta = await getAssociatedTokenAddress(
-        collateralMint,
-        liquidatorPubkey,
-        false, // allowOwnerOffCurve
-        TOKEN_PROGRAM_ID
-      );
-      
-      // Check if ATA exists and get its post-simulation balance
-      // Note: simulateTransaction doesn't return account states in web3.js 1.x
-      // We need to use a different approach or fallback to conservative estimate
-      
-      console.log(`[SwapSizing] Liquidator collateral ATA: ${liquidatorAta.toBase58()}`);
-      console.log('[SwapSizing] WARNING: Account state parsing not available in simulation');
+      console.log('[SwapSizing] No seized amount found in logs');
+      console.log('[SwapSizing] Account state parsing not available in simulation');
       console.log('[SwapSizing] Consider using deterministic calculation or providing explicit amount');
       
       // Fallback: Use a conservative estimate if we have liquidation context
@@ -125,8 +114,8 @@ export async function estimateSeizedCollateral(
     }
     
     // Apply safety haircut
-    const haircutMultiplier = BigInt(10000 - haircutBps);
-    const amountWithHaircut = (seizedAmount * haircutMultiplier) / 10000n;
+    const haircutMultiplier = BIPS_DIVISOR - BigInt(haircutBps);
+    const amountWithHaircut = (seizedAmount * haircutMultiplier) / BIPS_DIVISOR;
     
     console.log(`[SwapSizing] Estimated seized: ${seizedAmount} base units`);
     console.log(`[SwapSizing] After ${haircutBps} bps haircut: ${amountWithHaircut} base units`);
