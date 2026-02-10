@@ -19,7 +19,6 @@ export interface TtlManagerParams {
   forecastMaxAgeMs: number;         // e.g., 300_000 (5 min)
   minRefreshIntervalMs?: number;    // optional per-candidate min interval, e.g., 60_000
   // Urgency - grace period for TTL expiry
-  ttlExpiredMarginMin?: number;     // Deprecated: use ttlGraceMs instead
   ttlGraceMs?: number;              // e.g., 60000 (60s) - grace period for TTL=0
   // EV drop trigger (relative %)
   evDropPct: number;                // e.g., 0.15 (15%)

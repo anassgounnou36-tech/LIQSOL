@@ -8,7 +8,7 @@ import { parseTtlMinutes } from '../predict/forecastTTLManager.js';
  * Returns null if TTL is unknown/invalid
  */
 function computePredictedLiquidationAtMs(ttlMin: number, nowMs: number): number | null {
-  if (!Number.isFinite(ttlMin) || ttlMin === Infinity) return null;
+  if (!Number.isFinite(ttlMin)) return null;
   if (ttlMin < 0) return nowMs; // Already expired
   return nowMs + Math.floor(ttlMin * 60 * 1000);
 }
@@ -118,8 +118,7 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
   });
   
   // Parse TTL string into minutes using shared utility
-  const ttlMinRaw = parseTtlMinutes(ttlStr);
-  const ttlMin = Number.isFinite(ttlMinRaw) ? ttlMinRaw : null;
+  const ttlMin = parseTtlMinutes(ttlStr);
   
   // Compute absolute predicted liquidation timestamp
   const nowMs = Date.now();

@@ -85,8 +85,8 @@ console.log('1. Building plans from candidates:');
 const plans: FlashloanPlan[] = candidates.map(c => {
   const plan = buildPlanFromCandidate(c);
   console.log(`   ${plan.key}:`);
-  console.log(`     ttlMin: ${plan.ttlMin !== null ? plan.ttlMin.toFixed(2) : 'null'}`);
-  console.log(`     predictedLiquidationAtMs: ${plan.predictedLiquidationAtMs ? new Date(plan.predictedLiquidationAtMs).toISOString() : 'null'}`);
+  console.log(`     ttlMin: ${plan.ttlMin != null ? plan.ttlMin.toFixed(2) : 'null'}`);
+  console.log(`     predictedLiquidationAtMs: ${plan.predictedLiquidationAtMs != null ? new Date(plan.predictedLiquidationAtMs).toISOString() : 'null'}`);
   console.log(`     ev: ${plan.ev.toFixed(2)}`);
   return plan;
 });

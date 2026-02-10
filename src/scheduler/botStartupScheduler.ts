@@ -228,13 +228,13 @@ export async function startBotStartupScheduler(): Promise<void> {
           .slice(0, 5)
           .map(p => {
             const predictedAt = p.predictedLiquidationAtMs 
-              ? new Date(p.predictedLiquidationAtMs).toISOString() 
+              ? new Date(p.predictedLiquidationAtMs).toISOString().slice(11, 19) // HH:MM:SS
               : 'unknown';
             return { 
               key: p.key.slice(0, 8), 
               ev: Number(p.ev ?? 0).toFixed(2), 
               ttlMin: p.ttlMin !== null && p.ttlMin !== undefined ? Number(p.ttlMin).toFixed(2) : 'null',
-              predictedAt: predictedAt.slice(11, 19), // Show only time
+              predictedAt,
               hazard: Number(p.hazard ?? 0).toFixed(3) 
             };
           });

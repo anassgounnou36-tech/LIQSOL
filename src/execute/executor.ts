@@ -324,7 +324,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
       
       // TTL filter with new logic
       const ttlMin = p.ttlMin;
-      const predictedAtMs = typeof p.predictedLiquidationAtMs === 'number' ? p.predictedLiquidationAtMs : null;
+      const predictedAtMs = typeof p.predictedLiquidationAtMs === 'number' ? p.predictedLiquidationAtMs : (
+        typeof p.predictedLiquidationAtMs === 'string' ? Number(p.predictedLiquidationAtMs) : null
+      );
       
       // Handle null/unknown TTL
       if (ttlMin === null || ttlMin === undefined) {
