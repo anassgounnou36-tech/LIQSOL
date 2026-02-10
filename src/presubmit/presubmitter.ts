@@ -272,7 +272,7 @@ export class Presubmitter {
         console.log(`[Presubmit]   Seized: ${inAmountUi} (after ${haircutBps} bps haircut)`);
         
         // Build swap
-        const slippageBps = Number(process.env.SWAP_SLIPPAGE_BPS ?? 50);
+        const slippageBps = Number(process.env.SWAP_SLIPPAGE_BPS ?? 100);
         const swapResult = await buildJupiterSwapIxs({
           inputMint: collateralMint,
           outputMint: repayMint,

@@ -210,7 +210,7 @@ async function buildFullTransaction(
         console.log(`[Executor] Building Jupiter swap for ${seizedUi} ${collateralMint.toBase58().slice(0, 8)}...`);
         
         // Build real Jupiter swap with base-units API (NO UI strings, NO Number conversions)
-        const slippageBps = Number(process.env.SWAP_SLIPPAGE_BPS ?? 50);
+        const slippageBps = Number(process.env.SWAP_SLIPPAGE_BPS ?? 100);
         const swapResult = await buildJupiterSwapIxs({
           inputMint: collateralMint,
           outputMint: repayMint,
