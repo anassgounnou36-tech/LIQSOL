@@ -7,6 +7,7 @@ import { buildJupiterSwapIxs } from '../src/execute/swapBuilder.js';
 import { buildComputeBudgetIxs } from '../src/execution/computeBudget.js';
 import { loadEnv } from '../src/config/env.js';
 import { normalizeWslPath } from '../src/utils/path.js';
+import { resolveMint } from '../src/utils/mintResolve.js';
 
 interface TestPlan {
   planVersion?: number;
@@ -111,13 +112,25 @@ async function main() {
     
     // 3) Liquidation (PR62: derives reserves from obligation)
     console.log('[Test] 3/5: Building Liquidation instructions...');
+    
+    let repayMintPreference: PublicKey | undefined;
+    if (plan.repayMint) {
+      try {
+        repayMintPreference = resolveMint(plan.repayMint);
+        console.log(`[Test]   Resolved repayMint preference: ${repayMintPreference.toBase58()}`);
+      } catch (err) {
+        console.error(`[Test]   ERROR: Failed to resolve repayMint "${plan.repayMint}":`, err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    }
+    
     const liquidationResult = await buildKaminoLiquidationIxs({
       connection,
       marketPubkey: market,
       programId,
       obligationPubkey: new PublicKey(plan.obligationPubkey!),
       liquidatorPubkey: signer.publicKey,
-      repayMintPreference: plan.repayMint ? new PublicKey(plan.repayMint) : undefined,
+      repayMintPreference,
       repayAmountUi: amountUi,
     });
     allIxs.push(...liquidationResult.refreshIxs);
