@@ -3,7 +3,7 @@
 
 Write-Host "Running Kamino error decoder test in WSL..." -ForegroundColor Cyan
 
-wsl bash -c "cd /home/runner/work/LIQSOL/LIQSOL && npx tsx scripts/test_decode_klend_error.ts"
+wsl npm run test:klend:error
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Test failed with exit code $LASTEXITCODE" -ForegroundColor Red

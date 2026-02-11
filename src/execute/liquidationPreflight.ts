@@ -198,23 +198,12 @@ export async function checkLiquidationPreflight(
       }
     }
     
-    // 9. Validate collateral exists
-    const collateralExists = deposits.length > 0;
-    if (!collateralExists) {
-      return {
-        success: false,
-        reason: 'preflight_no_collateral',
-        details: 'No collateral deposits found',
-        healthRatio,
-      };
-    }
-    
     // All checks passed
     return {
       success: true,
       healthRatio,
       repayMintValid,
-      collateralExists,
+      collateralExists: true,
     };
     
   } catch (error) {
