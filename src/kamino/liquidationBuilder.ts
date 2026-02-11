@@ -88,7 +88,8 @@ function convertSdkAccount(a: any) {
  */
 export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams): Promise<KaminoLiquidationResult> {
   // Create @solana/kit RPC from connection URL for Kamino SDK compatibility
-  const rpc = createSolanaRpc(p.connection.rpcEndpoint);
+  // Cast to any to avoid type identity mismatches from duplicate @solana/addresses versions
+  const rpc = createSolanaRpc(p.connection.rpcEndpoint) as unknown as any;
   
   // 1) Load market from Kamino SDK
   const market = await KaminoMarket.load(

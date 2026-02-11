@@ -178,7 +178,7 @@ async function main() {
           // Try to find USDC borrow first
           const usdcBorrow = borrows.find((b) => {
             const reserve = reserveCache.byMint.get(b.mint);
-            return reserve && reserve[0].liquidityMint === USDC_MINT;
+            return reserve && reserve.liquidityMint === USDC_MINT;
           });
           
           const selectedBorrow = usdcBorrow || borrows[0];
@@ -192,7 +192,7 @@ async function main() {
           // Try to find SOL deposit first
           const solDeposit = deposits.find((d) => {
             const reserve = reserveCache.byMint.get(d.mint);
-            return reserve && reserve[0].liquidityMint === SOL_MINT;
+            return reserve && reserve.liquidityMint === SOL_MINT;
           });
           
           const selectedDeposit = solDeposit || deposits[0];
