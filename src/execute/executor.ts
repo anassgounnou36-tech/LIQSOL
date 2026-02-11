@@ -11,6 +11,7 @@ import { normalizeWslPath } from '../utils/path.js';
 import { resolveMint } from '../utils/mintResolve.js';
 import { sendWithBoundedRetry, formatAttemptResults } from './broadcastRetry.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
+import { isPlanComplete, getMissingFields } from '../scheduler/planValidation.js';
 
 interface Plan {
   planVersion?: number;
@@ -431,17 +432,18 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   }
   
   // Guard: Skip incomplete/legacy plans (missing reserve pubkeys or empty collateralMint)
-  if (!target.repayReservePubkey || !target.collateralReservePubkey || !target.collateralMint || target.collateralMint.trim() === '') {
+  if (!isPlanComplete(target)) {
     console.error('[Executor] ❌ legacy_or_incomplete_plan: Cannot execute liquidation with incomplete plan');
     console.error('[Executor]    This plan is missing critical fields needed for liquidation:');
     
-    if (!target.repayReservePubkey) {
+    const missing = getMissingFields(target);
+    if (missing.repayReservePubkey === 'missing') {
       console.error('[Executor]      - repayReservePubkey: missing');
     }
-    if (!target.collateralReservePubkey) {
+    if (missing.collateralReservePubkey === 'missing') {
       console.error('[Executor]      - collateralReservePubkey: missing');
     }
-    if (!target.collateralMint || target.collateralMint.trim() === '') {
+    if (missing.collateralMint === 'missing') {
       console.error('[Executor]      - collateralMint: missing or empty');
     }
     

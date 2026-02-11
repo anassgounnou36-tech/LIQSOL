@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FlashloanPlan, recomputePlanFields } from './txBuilder.js';
 import { evaluateForecasts, type ForecastEntry, parseTtlMinutes, type TtlManagerParams } from '../predict/forecastTTLManager.js';
+import { isPlanComplete, getMissingFields } from './planValidation.js';
 
 const QUEUE_PATH = path.join(process.cwd(), 'data', 'tx_queue.json');
 
@@ -27,19 +28,15 @@ export function enqueuePlans(plans: FlashloanPlan[]): FlashloanPlan[] {
   // Validate and enqueue new plans
   let skippedCount = 0;
   for (const p of plans) {
-    // Validate plan completeness: repayReservePubkey, collateralReservePubkey, collateralMint must be present
-    const isComplete = 
-      p.repayReservePubkey && p.repayReservePubkey.trim() !== '' &&
-      p.collateralReservePubkey && p.collateralReservePubkey.trim() !== '' &&
-      p.collateralMint && p.collateralMint.trim() !== '';
-    
-    if (!isComplete) {
+    // Validate plan completeness using shared validation function
+    if (!isPlanComplete(p)) {
       skippedCount++;
+      const missing = getMissingFields(p);
       console.log(
         `[Scheduler] skip_incomplete_plan: ${p.key} ` +
-        `(repayReserve=${p.repayReservePubkey || 'missing'}, ` +
-        `collateralReserve=${p.collateralReservePubkey || 'missing'}, ` +
-        `collateralMint=${p.collateralMint || 'missing'})`
+        `(repayReserve=${missing.repayReservePubkey}, ` +
+        `collateralReserve=${missing.collateralReservePubkey}, ` +
+        `collateralMint=${missing.collateralMint})`
       );
       continue;
     }

@@ -24,7 +24,7 @@ describe("TX Queue Validation", () => {
       fs.unlinkSync(QUEUE_PATH);
     }
   });
-  it("should accept complete plans with all required fields", () => {
+  it("should enqueue complete plans with all required fields", () => {
     const plans: FlashloanPlan[] = [
       {
         planVersion: 2,

@@ -200,7 +200,15 @@ async function main() {
           collateralReservePubkey = selectedDeposit.reserve;
           // Use underlying liquidity mint from reserve, not the collateral mint (cToken)
           const collateralReserve = reserveCache.byMint.get(selectedDeposit.mint);
-          primaryCollateralMint = collateralReserve?.liquidityMint;
+          if (collateralReserve) {
+            primaryCollateralMint = collateralReserve.liquidityMint;
+          } else {
+            // If reserve not found in cache, log warning and skip (incomplete data)
+            logger.warn(
+              { obligationPubkey: o.obligationPubkey, depositMint: selectedDeposit.mint },
+              "Collateral reserve not found in cache - obligation will have incomplete mint data"
+            );
+          }
         }
       }
       
