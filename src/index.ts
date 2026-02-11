@@ -1,5 +1,6 @@
-import { Connection, Keypair } from "@solana/web3.js";
+import { Keypair } from "@solana/web3.js";
 import fs from "node:fs";
+import { getConnection } from "./solana/connection.js";
 import { loadEnv } from "./config/env.js";
 import { logger } from "./observability/logger.js";
 
@@ -13,7 +14,7 @@ function loadKeypair(filePath: string): Keypair {
 async function main() {
   const env = loadEnv();
 
-  const conn = new Connection(env.RPC_PRIMARY, "confirmed");
+  const conn = getConnection();
   const kp = loadKeypair(env.BOT_KEYPAIR_PATH);
 
   const t0 = Date.now();

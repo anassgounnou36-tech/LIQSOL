@@ -6,6 +6,7 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
+import { getConnection } from "../solana/connection.js";
 import { loadEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { buildKaminoFlashloanIxs, type FlashloanMint } from "../flashloan/kaminoFlashloan.js";
@@ -133,7 +134,7 @@ async function main() {
   const env = loadEnv();
   
   // Setup connection and signer
-  const connection = new Connection(env.RPC_PRIMARY, "confirmed");
+  const connection = getConnection();
   const signer = loadKeypair(env.BOT_KEYPAIR_PATH);
   
   logger.info(

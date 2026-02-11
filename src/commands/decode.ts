@@ -5,7 +5,8 @@
  *   - npm run decode:reserve <reserve_pubkey>
  *   - npm run decode:obligation <obligation_pubkey>
  */
-import { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
+import { getConnection } from "../solana/connection.js";
 import { loadEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { decodeReserve, decodeObligation } from "../kamino/decoder.js";
@@ -47,8 +48,9 @@ async function main() {
   }
 
   // Load environment and setup connection
-  const env = loadEnv();
-  const connection = new Connection(env.RPC_PRIMARY, "confirmed");
+  // Ensure .env is loaded (side-effect only; no unused variable)
+  loadEnv();
+  const connection = getConnection();
 
   logger.info(
     { accountType, pubkey: pubkey.toString() },

@@ -6,7 +6,8 @@ import { runDryExecutor } from '../execute/executor.js';
 import { YellowstoneAccountListener } from '../monitoring/yellowstoneAccountListener.js';
 import { YellowstonePriceListener } from '../monitoring/yellowstonePriceListener.js';
 import { EventRefreshOrchestrator } from '../monitoring/eventRefreshOrchestrator.js';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
+import { getConnection } from '../solana/connection.js';
 import { loadReserves, getMintsByOracle, type ReserveCache } from '../cache/reserveCache.js';
 import { logger } from '../observability/logger.js';
 
@@ -26,7 +27,7 @@ function deriveObligationPubkeysFromQueue(): string[] {
 }
 
 async function deriveOraclePubkeysFromReserves(env: any): Promise<{ oraclePubkeys: string[]; reserveCache: ReserveCache }> {
-  const conn = new Connection(env.RPC_PRIMARY, 'confirmed');
+  const conn = getConnection();
   const market = new PublicKey(env.KAMINO_MARKET_PUBKEY);
   const reserves = await loadReserves(conn, market);
   const set = new Set<string>();

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
+import { getConnection } from "../solana/connection.js";
 import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { loadReserves } from "../cache/reserveCache.js";
@@ -41,7 +42,7 @@ async function main() {
 
   try {
     // Initialize Solana RPC connection
-    const connection = new Connection(env.RPC_PRIMARY, "confirmed");
+    const connection = getConnection();
 
     // Load reserves
     const reserves = await loadReserves(connection, marketPubkey);
