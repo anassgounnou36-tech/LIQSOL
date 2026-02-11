@@ -1,4 +1,4 @@
-import { Keypair, PublicKey, Transaction, TransactionInstruction, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import fs from "node:fs";
 import path from "node:path";
 import { Buffer } from "node:buffer";

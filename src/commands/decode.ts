@@ -48,7 +48,8 @@ async function main() {
   }
 
   // Load environment and setup connection
-  const env = loadEnv();
+  // Ensure .env is loaded (side-effect only; no unused variable)
+  loadEnv();
   const connection = getConnection();
 
   logger.info(

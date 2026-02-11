@@ -32,7 +32,8 @@ async function main() {
   }
 
   // Load environment and setup connection
-  const env = loadReadonlyEnv();
+  // Ensure .env is loaded for readonly commands (side-effect only)
+  loadReadonlyEnv();
   const connection = getConnection();
 
   logger.info(
