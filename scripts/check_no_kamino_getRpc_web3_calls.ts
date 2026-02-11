@@ -23,6 +23,9 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Directories to exclude from scanning
+const EXCLUDED_DIRS = ['node_modules', 'dist', '.git', 'data', 'test', '__tests__'];
+
 // Forbidden patterns that indicate incorrect RPC usage
 const FORBIDDEN_PATTERNS = [
   'getRpc().getAccountInfo',
@@ -48,8 +51,8 @@ function* walkTypeScriptFiles(dir: string): Generator<string> {
     const fullPath = path.join(dir, entry.name);
     
     if (entry.isDirectory()) {
-      // Skip node_modules, dist, etc.
-      if (['node_modules', 'dist', '.git', 'data', 'test', '__tests__'].includes(entry.name)) {
+      // Skip excluded directories
+      if (EXCLUDED_DIRS.includes(entry.name)) {
         continue;
       }
       yield* walkTypeScriptFiles(fullPath);
@@ -57,6 +60,27 @@ function* walkTypeScriptFiles(dir: string): Generator<string> {
       yield fullPath;
     }
   }
+}
+
+/**
+ * Strip comments from a line of code (simple heuristic)
+ * Handles single-line comments (//) and common comment markers
+ */
+function stripComments(line: string): string {
+  const trimmed = line.trim();
+  
+  // Full line comments
+  if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*') || trimmed.startsWith('*/')) {
+    return '';
+  }
+  
+  // Inline comments (simple approach: strip everything after //)
+  const commentIndex = line.indexOf('//');
+  if (commentIndex !== -1) {
+    return line.substring(0, commentIndex);
+  }
+  
+  return line;
 }
 
 /**
@@ -69,16 +93,16 @@ function scanFile(filePath: string): Violation[] {
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const trimmed = line.trim();
     
-    // Skip comment lines
-    if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) {
-      continue;
+    // Strip comments before checking patterns
+    const codeOnly = stripComments(line);
+    if (!codeOnly) {
+      continue; // Skip empty/comment-only lines
     }
     
     // Check each forbidden pattern
     for (const pattern of FORBIDDEN_PATTERNS) {
-      if (line.includes(pattern)) {
+      if (codeOnly.includes(pattern)) {
         violations.push({
           file: filePath,
           line: i + 1, // 1-indexed line numbers

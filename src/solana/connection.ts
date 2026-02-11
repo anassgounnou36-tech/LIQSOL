@@ -17,6 +17,7 @@ let connectionInstance: Connection | null = null;
 /**
  * Get or create the shared Connection instance.
  * Initializes from RPC_PRIMARY environment variable on first call.
+ * Uses 'confirmed' commitment level by default.
  * 
  * @returns Shared Connection instance for all RPC operations
  */
@@ -35,8 +36,9 @@ export function getConnection(): Connection {
       );
     }
     
+    // Use 'confirmed' as default commitment level for balance between speed and reliability
     connectionInstance = new Connection(rpcUrl, 'confirmed');
-    console.log(`[Connection] Initialized shared Connection to ${rpcUrl}`);
+    console.log(`[Connection] Initialized shared Connection to ${rpcUrl} with 'confirmed' commitment`);
   }
   
   return connectionInstance;
