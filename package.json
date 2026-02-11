@@ -87,6 +87,7 @@
     "@pythnetwork/client": "2.22.1",
     "@solana/kit": "6.0.1",
     "@solana/web3.js": "^1.95.3",
+    "@solana-program/compute-budget": "^0.13.0",
     "@switchboard-xyz/switchboard-v2": "0.0.174",
     "@triton-one/yellowstone-grpc": "5.0.1",
     "bs58": "^6.0.0",
