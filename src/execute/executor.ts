@@ -10,6 +10,7 @@ import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
 import { resolveMint } from '../utils/mintResolve.js';
 import { sendWithBoundedRetry, formatAttemptResults } from './broadcastRetry.js';
+import { decodeKlendError } from '../kamino/errors.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 
 interface Plan {
@@ -451,7 +452,40 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     
     console.log(`[Executor] Simulation completed in ${simMs}ms`);
     if (sim.value.err) {
-      console.error('[Executor] Simulation error:', sim.value.err);
+      console.error('[Executor] ═══════════════════════════════════════════════════════════════');
+      console.error('[Executor] SIMULATION ERROR DETAILS:');
+      console.error('[Executor] ═══════════════════════════════════════════════════════════════');
+      
+      // Log raw error
+      console.error('[Executor] Raw error:', JSON.stringify(sim.value.err, null, 2));
+      
+      // Check if it's an InstructionError with Custom code
+      if (typeof sim.value.err === 'object' && sim.value.err !== null && 'InstructionError' in sim.value.err) {
+        const instructionError = sim.value.err.InstructionError as [number, any];
+        const [ixIndex, errorDetail] = instructionError;
+        
+        console.error(`[Executor] Instruction index: ${ixIndex}`);
+        
+        // Check for Custom error code
+        if (typeof errorDetail === 'object' && errorDetail !== null && 'Custom' in errorDetail) {
+          const customCode = errorDetail.Custom as number;
+          const decodedError = decodeKlendError(customCode);
+          
+          console.error('[Executor] ───────────────────────────────────────────────────────────────');
+          console.error(`[Executor] Decoded Kamino Error (${customCode}): ${decodedError}`);
+          console.error('[Executor] ───────────────────────────────────────────────────────────────');
+        }
+      }
+      
+      // Log context for troubleshooting
+      console.error('[Executor] Context:');
+      console.error(`[Executor]   Obligation: ${target.obligationPubkey}`);
+      console.error(`[Executor]   Repay mint: ${target.repayMint ?? 'unknown'}`);
+      console.error(`[Executor]   Collateral mint: ${target.collateralMint ?? 'unknown'}`);
+      console.error(`[Executor]   Flashloan mint: ${target.mint ?? 'USDC'}`);
+      console.error(`[Executor]   Flashloan amount: ${target.amountUi ?? target.amountUsd ?? 'unknown'}`);
+      console.error('[Executor] ═══════════════════════════════════════════════════════════════');
+      
       return { status: 'sim-error' };
     }
     

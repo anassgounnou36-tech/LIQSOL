@@ -60,6 +60,8 @@
     "test:ttl:logic:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_ttl_expiry_logic_wsl.ps1",
     "test:ttl:rules": "tsx scripts/test_ttl_expiry_rules.ts",
     "test:ttl:rules:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_ttl_expiry_rules_wsl.ps1",
+    "test:klend:error": "tsx scripts/test_decode_klend_error.ts",
+    "test:klend:error:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_test_klend_error_wsl.ps1",
     "bot:run": "tsx src/bot/run.ts",
     "bot:run:wsl": "powershell -ExecutionPolicy Bypass -File scripts/run_bot_run_wsl.ps1",
     "pipeline:once": "npm run snapshot:obligations && npm run snapshot:scored && npm run snapshot:candidates && npm run test:scheduler:forecast && npm run audit:pipeline",
