@@ -15,8 +15,8 @@ import { KaminoMarket, KaminoObligation } from '@kamino-finance/klend-sdk';
 import { createSolanaRpc, address } from '@solana/kit';
 import { computeHealthRatio, type HealthRatioInput } from '../math/health.js';
 import { isLiquidatable } from '../math/liquidation.js';
-import { loadReserves, type ReserveCache } from '../cache/reserveCache.js';
-import { loadOraclePrices, type OraclePriceCache } from '../cache/oracleCache.js';
+import { loadReserves } from '../cache/reserveCache.js';
+import { loadOracles } from '../cache/oracleCache.js';
 
 export interface PreflightParams {
   connection: Connection;
@@ -71,9 +71,10 @@ export async function checkLiquidationPreflight(
   
   try {
     // 1. Load market from Kamino SDK
+    // Note: Type assertion needed due to @solana/kit RPC version mismatch with SDK
     const rpc = createSolanaRpc(connection.rpcEndpoint);
     const market = await KaminoMarket.load(
-      rpc,
+      rpc as any, // Type assertion to work around RPC version mismatch
       address(marketPubkey.toBase58()),
       1000, // recentSlotDurationMs
       address(programId.toBase58())
@@ -128,7 +129,7 @@ export async function checkLiquidationPreflight(
     
     // 4. Load reserves and oracle prices for health computation
     const reserves = await loadReserves(connection, marketPubkey);
-    const oraclePrices = await loadOraclePrices(connection, reserves);
+    const oraclePrices = await loadOracles(connection, reserves);
     
     // 5. Convert obligation deposits/borrows to format expected by health computation
     const obligationDeposits = deposits.map((d: any) => {
@@ -154,7 +155,7 @@ export async function checkLiquidationPreflight(
       deposits: obligationDeposits,
       borrows: obligationBorrows,
       reserves: reserves.byMint,
-      prices: oraclePrices.byMint,
+      prices: oraclePrices, // OracleCache is a Map<string, OraclePriceData>
     };
     
     const healthResult = computeHealthRatio(healthInput);
