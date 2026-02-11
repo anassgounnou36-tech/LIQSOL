@@ -346,7 +346,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }, [], address(p.programId.toBase58()));
   
   refreshIxs.push(new TransactionInstruction({
-    keys: (repayRefreshIx.accounts || []).map(a => convertSdkAccount(a, 'repayRefresh')),
+    keys: (repayRefreshIx.accounts || []).map((a: any) => convertSdkAccount(a, 'repayRefresh')),
     programId: new PublicKey(addressSafe(repayRefreshIx.programAddress, 'repayRefresh.programAddress')),
     data: Buffer.from(repayRefreshIx.data || []),
   }));
@@ -370,7 +370,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }, [], address(p.programId.toBase58()));
   
   refreshIxs.push(new TransactionInstruction({
-    keys: (collateralRefreshIx.accounts || []).map(a => convertSdkAccount(a, 'collateralRefresh')),
+    keys: (collateralRefreshIx.accounts || []).map((a: any) => convertSdkAccount(a, 'collateralRefresh')),
     programId: new PublicKey(addressSafe(collateralRefreshIx.programAddress, 'collateralRefresh.programAddress')),
     data: Buffer.from(collateralRefreshIx.data || []),
   }));
@@ -382,7 +382,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }, [], address(p.programId.toBase58()));
   
   refreshIxs.push(new TransactionInstruction({
-    keys: (obligationRefreshIx.accounts || []).map(a => convertSdkAccount(a, 'obligationRefresh')),
+    keys: (obligationRefreshIx.accounts || []).map((a: any) => convertSdkAccount(a, 'obligationRefresh')),
     programId: new PublicKey(addressSafe(obligationRefreshIx.programAddress, 'obligationRefresh.programAddress')),
     data: Buffer.from(obligationRefreshIx.data || []),
   }));
@@ -506,7 +506,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   // Convert SDK instruction to web3.js TransactionInstruction
   liquidationIxs.push(new TransactionInstruction({
-    keys: (liquidateIx.accounts || []).map(a => convertSdkAccount(a, 'liquidate')),
+    keys: (liquidateIx.accounts || []).map((a: any) => convertSdkAccount(a, 'liquidate')),
     programId: new PublicKey(addressSafe(liquidateIx.programAddress, 'liquidate.programAddress')),
     data: Buffer.from(liquidateIx.data || []),
   }));
