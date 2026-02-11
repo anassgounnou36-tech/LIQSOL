@@ -1,11 +1,14 @@
 import { Connection, PublicKey, TransactionInstruction, AddressLookupTableAccount, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
-import { KaminoMarket, KaminoObligation, refreshReserve, refreshObligation, liquidateObligationAndRedeemReserveCollateral, getAssociatedTokenAddress } from "@kamino-finance/klend-sdk";
+import { KaminoMarket, KaminoObligation, refreshReserve, refreshObligation, liquidateObligationAndRedeemReserveCollateral } from "@kamino-finance/klend-sdk";
 import { createSolanaRpc, address } from "@solana/kit";
 import { AccountRole } from "@solana/instructions";
 import { none, some } from "@solana/options";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { Buffer } from "node:buffer";
 import BN from "bn.js";
 import { parseUiAmountToBaseUnits } from "../execute/amount.js";
+import { resolveTokenProgramId } from "../solana/tokenProgram.js";
+import { buildCreateAtaIdempotentIx } from "../solana/ata.js";
 
 /**
  * PR62: Parameters for building Kamino liquidation instructions.
@@ -204,13 +207,83 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   console.log(`[LiqBuilder] Selected repay: ${repayMint.toBase58()}, collateral: ${collateralMint.toBase58()}`);
   
+  // Get reserve states early for mint resolution
+  const repayReserveState = repayReserve.state;
+  const collateralReserveState = collateralReserve.state;
+  
+  // Determine mints for ATA creation
+  const repayLiquidityMint = new PublicKey(repayReserve.getLiquidityMint());
+  const withdrawLiquidityMint = new PublicKey(collateralReserve.getLiquidityMint());
+  const withdrawCollateralMint = new PublicKey(collateralReserveState.collateral.mintPubkey);
+  
+  // Resolve token program IDs from mint owners (source of truth)
+  console.log('[LiqBuilder] Resolving token program IDs...');
+  const repayTokenProgramId = await resolveTokenProgramId(p.connection, repayLiquidityMint);
+  const withdrawLiquidityTokenProgramId = await resolveTokenProgramId(p.connection, withdrawLiquidityMint);
+  const collateralTokenProgramId = await resolveTokenProgramId(p.connection, withdrawCollateralMint);
+  
+  console.log(`[LiqBuilder] Token programs - repay: ${repayTokenProgramId.toBase58().slice(0, 8)}..., withdrawLiq: ${withdrawLiquidityTokenProgramId.toBase58().slice(0, 8)}..., collateral: ${collateralTokenProgramId.toBase58().slice(0, 8)}...`);
+  
+  // Derive user ATAs for liquidator
+  const userSourceLiquidityAta = getAssociatedTokenAddressSync(
+    repayLiquidityMint,
+    p.liquidatorPubkey,
+    false,
+    repayTokenProgramId
+  );
+  
+  const userDestinationCollateralAta = getAssociatedTokenAddressSync(
+    withdrawCollateralMint,
+    p.liquidatorPubkey,
+    false,
+    collateralTokenProgramId
+  );
+  
+  const userDestinationLiquidityAta = getAssociatedTokenAddressSync(
+    withdrawLiquidityMint,
+    p.liquidatorPubkey,
+    false,
+    withdrawLiquidityTokenProgramId
+  );
+  
+  // Build ATA idempotent create instructions
+  const ataCreateIxs: TransactionInstruction[] = [];
+  
+  ataCreateIxs.push(buildCreateAtaIdempotentIx({
+    payer: p.liquidatorPubkey,
+    owner: p.liquidatorPubkey,
+    ata: userSourceLiquidityAta,
+    mint: repayLiquidityMint,
+    tokenProgramId: repayTokenProgramId,
+  }));
+  
+  ataCreateIxs.push(buildCreateAtaIdempotentIx({
+    payer: p.liquidatorPubkey,
+    owner: p.liquidatorPubkey,
+    ata: userDestinationCollateralAta,
+    mint: withdrawCollateralMint,
+    tokenProgramId: collateralTokenProgramId,
+  }));
+  
+  ataCreateIxs.push(buildCreateAtaIdempotentIx({
+    payer: p.liquidatorPubkey,
+    owner: p.liquidatorPubkey,
+    ata: userDestinationLiquidityAta,
+    mint: withdrawLiquidityMint,
+    tokenProgramId: withdrawLiquidityTokenProgramId,
+  }));
+  
+  console.log(`[LiqBuilder] Created ${ataCreateIxs.length} ATA idempotent instructions`);
+  
   const refreshIxs: TransactionInstruction[] = [];
   const liquidationIxs: TransactionInstruction[] = [];
+  
+  // Prepend ATA create instructions to refreshIxs
+  refreshIxs.push(...ataCreateIxs);
   
   // D) Build refresh instructions
   // 1. Refresh repay reserve
   const DEFAULT_PUBKEY = "11111111111111111111111111111111";
-  const repayReserveState = repayReserve.state;
   const repayRefreshIx = refreshReserve({
     reserve: repayReserve.address,
     lendingMarket: address(p.marketPubkey.toBase58()),
@@ -235,7 +308,6 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }));
   
   // 2. Refresh collateral reserve
-  const collateralReserveState = collateralReserve.state;
   const collateralRefreshIx = refreshReserve({
     reserve: collateralReserve.address,
     lendingMarket: address(p.marketPubkey.toBase58()),
@@ -345,29 +417,15 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     address: address(p.liquidatorPubkey.toBase58()),
   } as any;
   
-  // Get token programs
-  const repayTokenProgram = repayReserve.getLiquidityTokenProgram();
-  const collateralTokenProgram = collateralReserve.getLiquidityTokenProgram();
-  const collateralMintTokenProgram = collateralReserve.getLiquidityTokenProgram(); // Same for collateral mint
+  // Use the resolved token programs and ATAs from earlier
+  // Convert PublicKey to @solana/kit address for SDK compatibility
+  const userSourceLiquidity = address(userSourceLiquidityAta.toBase58());
+  const userDestinationCollateral = address(userDestinationCollateralAta.toBase58());
+  const userDestinationLiquidity = address(userDestinationLiquidityAta.toBase58());
   
-  // Derive liquidator ATAs (use repayReserveState and collateralReserveState defined earlier)
-  const userSourceLiquidity = await getAssociatedTokenAddress(
-    repayReserve.getLiquidityMint(),
-    address(p.liquidatorPubkey.toBase58()),
-    repayTokenProgram
-  );
-  
-  const userDestinationCollateral = await getAssociatedTokenAddress(
-    collateralReserveState.collateral.mintPubkey,
-    address(p.liquidatorPubkey.toBase58()),
-    collateralMintTokenProgram
-  );
-  
-  const userDestinationLiquidity = await getAssociatedTokenAddress(
-    collateralReserve.getLiquidityMint(),
-    address(p.liquidatorPubkey.toBase58()),
-    collateralTokenProgram
-  );
+  const repayTokenProgram = address(repayTokenProgramId.toBase58());
+  const collateralMintTokenProgram = address(collateralTokenProgramId.toBase58());
+  const withdrawLiqTokenProgram = address(withdrawLiquidityTokenProgramId.toBase58());
   
   // D) Build liquidation instruction
   const liquidateIx = liquidateObligationAndRedeemReserveCollateral(
@@ -395,7 +453,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       userDestinationLiquidity,
       collateralTokenProgram: collateralMintTokenProgram,
       repayLiquidityTokenProgram: repayTokenProgram,
-      withdrawLiquidityTokenProgram: collateralTokenProgram,
+      withdrawLiquidityTokenProgram: withdrawLiqTokenProgram,
       instructionSysvarAccount: address(SYSVAR_INSTRUCTIONS_PUBKEY.toBase58()),
     },
     [],
