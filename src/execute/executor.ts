@@ -128,7 +128,11 @@ async function buildFullTransaction(
   
   // 3) Liquidation refresh + repay/seize (PR62: derives reserves from obligation)
   // Build with obligation pubkey only - reserves are derived from on-chain data
+  // PR: Add strict preflight validation with expected reserve pubkeys from plan
   let repayMintPreference: PublicKey | undefined;
+  let expectedRepayReservePubkey: PublicKey | undefined;
+  let expectedCollateralReservePubkey: PublicKey | undefined;
+  
   if (plan.repayMint) {
     try {
       repayMintPreference = resolveMint(plan.repayMint);
@@ -141,6 +145,31 @@ async function buildFullTransaction(
     }
   }
   
+  // PR: Parse expected reserve pubkeys from plan for validation
+  if (plan.repayReservePubkey) {
+    try {
+      expectedRepayReservePubkey = new PublicKey(plan.repayReservePubkey);
+      console.log(`[Executor] Using expected repay reserve: ${expectedRepayReservePubkey.toBase58()}`);
+    } catch (err) {
+      console.warn(
+        `[Executor] Invalid repayReservePubkey in plan: ${plan.repayReservePubkey}`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+  
+  if (plan.collateralReservePubkey) {
+    try {
+      expectedCollateralReservePubkey = new PublicKey(plan.collateralReservePubkey);
+      console.log(`[Executor] Using expected collateral reserve: ${expectedCollateralReservePubkey.toBase58()}`);
+    } catch (err) {
+      console.warn(
+        `[Executor] Invalid collateralReservePubkey in plan: ${plan.collateralReservePubkey}`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+  
   const liquidationResult = await buildKaminoLiquidationIxs({
     connection,
     marketPubkey: market,
@@ -150,6 +179,9 @@ async function buildFullTransaction(
     // Optional: prefer specific mint if provided
     repayMintPreference,
     repayAmountUi: plan.amountUi,
+    // PR: Pass expected reserve pubkeys for strict preflight validation
+    expectedRepayReservePubkey,
+    expectedCollateralReservePubkey,
   });
   
   ixs.push(...liquidationResult.refreshIxs);
@@ -398,6 +430,21 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     return { status: 'invalid-plan' };
   }
   
+  // PR: Warn if reserve pubkeys are missing (not fatal, but increases risk of 6006)
+  if (!target.repayReservePubkey || !target.collateralReservePubkey) {
+    console.warn('[Executor] ⚠️  Warning: Plan is missing reserve pubkeys');
+    console.warn('[Executor]    This plan was likely created before the reserve-tracking fix.');
+    console.warn('[Executor]    Liquidation builder will derive reserves, but there is higher risk of Custom(6006).');
+    console.warn('[Executor]    Recommend: Regenerate tx_queue.json with npm run snapshot:candidates');
+    
+    if (!target.repayReservePubkey) {
+      console.warn('[Executor]    Missing: repayReservePubkey');
+    }
+    if (!target.collateralReservePubkey) {
+      console.warn('[Executor]    Missing: collateralReservePubkey');
+    }
+  }
+  
   const now = Date.now();
   const createdAtMs = Number(target.createdAtMs ?? 0);
   const ageMs = createdAtMs ? (now - createdAtMs) : Infinity;
@@ -451,7 +498,61 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     
     console.log(`[Executor] Simulation completed in ${simMs}ms`);
     if (sim.value.err) {
-      console.error('[Executor] Simulation error:', sim.value.err);
+      // PR: Enhanced error logging for Custom errors (especially 6006 InvalidAccountInput)
+      const err = sim.value.err;
+      console.error('[Executor] Simulation error:', err);
+      
+      // Check if it's an InstructionError with Custom error
+      if (typeof err === 'object' && err !== null && 'InstructionError' in err) {
+        const instructionError = (err as any).InstructionError;
+        const ixIndex = instructionError[0];
+        const innerError = instructionError[1];
+        
+        // Check for Custom error
+        if (typeof innerError === 'object' && innerError !== null && 'Custom' in innerError) {
+          const customCode = innerError.Custom;
+          
+          // Log structured block for Custom errors
+          console.error('\n[Executor] ═══ CUSTOM ERROR DIAGNOSTIC ═══');
+          console.error(`  Error Code: Custom(${customCode})`);
+          console.error(`  Instruction Index: ${ixIndex}`);
+          console.error(`  Obligation: ${target.obligationPubkey}`);
+          if (target.repayReservePubkey) {
+            console.error(`  Repay Reserve (from plan): ${target.repayReservePubkey}`);
+          }
+          if (target.collateralReservePubkey) {
+            console.error(`  Collateral Reserve (from plan): ${target.collateralReservePubkey}`);
+          }
+          
+          // Decode known Kamino error codes
+          const knownErrors: Record<number, string> = {
+            6006: 'InvalidAccountInput - Account mismatch (repay/collateral reserves likely wrong)',
+            6016: 'ObligationHealthy - Cannot liquidate healthy obligation',
+            6017: 'ObligationStale - Obligation needs refresh',
+            6018: 'ObligationReserveLimit - Reserve limit reached',
+          };
+          
+          if (knownErrors[customCode]) {
+            console.error(`  Decoded: ${knownErrors[customCode]}`);
+          }
+          
+          // If it's 6006, provide specific guidance
+          if (customCode === 6006) {
+            console.error('\n  💡 LIKELY CAUSE:');
+            console.error('     The reserves selected for liquidation do not match the obligation\'s');
+            console.error('     actual borrows/deposits. This happens when:');
+            console.error('     - Plan was created with generic USDC/SOL but obligation has different assets');
+            console.error('     - Obligation changed since plan was created');
+            console.error('     - Reserve pubkeys in plan are missing or incorrect');
+            console.error('\n  ✅ SOLUTION:');
+            console.error('     Regenerate tx_queue.json with: npm run snapshot:candidates');
+            console.error('     This will extract correct reserve pubkeys from each obligation.');
+          }
+          
+          console.error('═══════════════════════════════════════\n');
+        }
+      }
+      
       return { status: 'sim-error' };
     }
     

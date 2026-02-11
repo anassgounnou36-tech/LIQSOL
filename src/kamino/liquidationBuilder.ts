@@ -13,6 +13,8 @@ import { buildCreateAtaIdempotentIx } from "../solana/ata.js";
 /**
  * PR62: Parameters for building Kamino liquidation instructions.
  * Now derives reserves from obligation (no collateralMint/repayMint required in params)
+ * 
+ * PR: Added strict preflight validation with expected reserve pubkeys
  */
 export interface BuildKaminoLiquidationParams {
   connection: Connection;
@@ -31,6 +33,11 @@ export interface BuildKaminoLiquidationParams {
   // Optional: repay amount in UI units (will be converted to base units)
   // If not provided, derives from borrow amount with protocol-safe clamping
   repayAmountUi?: string;
+  
+  // PR: Expected reserve pubkeys for preflight validation (from plan)
+  // If provided, will validate that selected reserves match these pubkeys
+  expectedRepayReservePubkey?: PublicKey;
+  expectedCollateralReservePubkey?: PublicKey;
 }
 
 /**
@@ -206,6 +213,36 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }
   
   console.log(`[LiqBuilder] Selected repay: ${repayMint.toBase58()}, collateral: ${collateralMint.toBase58()}`);
+  
+  // PR: Strict preflight validation - check that selected reserves match expected reserves from plan
+  if (p.expectedRepayReservePubkey && !p.expectedRepayReservePubkey.equals(new PublicKey(repayReserve.address))) {
+    throw new Error(
+      `[LiqBuilder] Preflight validation failed: repay reserve mismatch. ` +
+      `Expected: ${p.expectedRepayReservePubkey.toBase58()}, ` +
+      `Selected: ${repayReserve.address}. ` +
+      `This obligation's borrows don't match the planned reserves.`
+    );
+  }
+  
+  if (p.expectedCollateralReservePubkey && !p.expectedCollateralReservePubkey.equals(new PublicKey(collateralReserve.address))) {
+    throw new Error(
+      `[LiqBuilder] Preflight validation failed: collateral reserve mismatch. ` +
+      `Expected: ${p.expectedCollateralReservePubkey.toBase58()}, ` +
+      `Selected: ${collateralReserve.address}. ` +
+      `This obligation's deposits don't match the planned reserves.`
+    );
+  }
+  
+  // PR: Log additional validation info for debugging
+  if (p.expectedRepayReservePubkey || p.expectedCollateralReservePubkey) {
+    console.log(`[LiqBuilder] Preflight validation passed: reserves match plan`);
+    if (p.expectedRepayReservePubkey) {
+      console.log(`[LiqBuilder]   Repay reserve validated: ${p.expectedRepayReservePubkey.toBase58()}`);
+    }
+    if (p.expectedCollateralReservePubkey) {
+      console.log(`[LiqBuilder]   Collateral reserve validated: ${p.expectedCollateralReservePubkey.toBase58()}`);
+    }
+  }
   
   // Get reserve states early - needed for mint resolution and later for refresh/liquidation ixs
   const repayReserveState = repayReserve.state;
