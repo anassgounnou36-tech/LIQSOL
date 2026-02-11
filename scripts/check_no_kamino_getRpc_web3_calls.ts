@@ -1,19 +1,22 @@
 #!/usr/bin/env tsx
 /**
- * Regression guard: Check for forbidden kaminoMarket.getRpc() web3.js method calls
+ * Regression guard: Check for forbidden @solana/rpc usage and risky casts in Kamino integration
  * 
  * This script scans src/ for patterns that would cause "getAccountInfo is not a function" errors.
- * The Kamino SDK uses @solana/kit RPC which does not expose web3.js Connection methods.
+ * The Kamino SDK uses @solana/kit RPC which has a different shape than @solana/rpc.
  * 
  * Forbidden patterns:
- * - getRpc().getAccountInfo
+ * - getRpc().getAccountInfo (legacy web3.js method calls)
  * - getRpc().getMultipleAccountsInfo
  * - getRpc().simulateTransaction
  * - getRpc().getLatestBlockhash
+ * - from "@solana/rpc" (wrong import source)
+ * - KaminoMarket.load(\s*rpc as any (risky type cast)
+ * - KaminoObligation.load(\s*rpc as any (risky type cast)
  * 
  * Usage:
- *   npm run check:rpc:guard
- *   npm run check:rpc:guard:wsl (on Windows)
+ *   npm run check:kamino:rpc
+ *   npm run check:kamino:rpc:wsl (on Windows)
  */
 
 import fs from 'node:fs';
@@ -32,6 +35,9 @@ const FORBIDDEN_PATTERNS = [
   'getRpc().getMultipleAccountsInfo',
   'getRpc().simulateTransaction',
   'getRpc().getLatestBlockhash',
+  'from "@solana/rpc"',
+  'KaminoMarket\\.load\\(\\s*rpc as any',
+  'KaminoObligation\\.load\\(\\s*rpc as any',
 ];
 
 interface Violation {
@@ -117,7 +123,20 @@ function scanFile(filePath: string): Violation[] {
     
     // Check each forbidden pattern
     for (const pattern of FORBIDDEN_PATTERNS) {
-      if (codeOnly.includes(pattern)) {
+      // Check if pattern contains regex special characters
+      const isRegex = pattern.includes('\\s') || pattern.includes('\\(');
+      
+      let match = false;
+      if (isRegex) {
+        // Use regex matching for patterns with special characters
+        const regex = new RegExp(pattern);
+        match = regex.test(codeOnly);
+      } else {
+        // Use simple string matching for literal patterns
+        match = codeOnly.includes(pattern);
+      }
+      
+      if (match) {
         violations.push({
           file: filePath,
           line: i + 1, // 1-indexed line numbers
@@ -159,7 +178,7 @@ function main(): void {
   
   if (allViolations.length === 0) {
     console.log('✅ No forbidden patterns found!\n');
-    console.log('All RPC calls use the centralized Connection from src/solana/connection.ts\n');
+    console.log('All Kamino SDK integrations use @solana/kit RPC correctly\n');
     process.exit(0);
   }
   
@@ -174,11 +193,16 @@ function main(): void {
     console.error('');
   }
   
-  console.error('💡 Fix: Use getConnection() from src/solana/connection.ts instead\n');
+  console.error('💡 Fix: Use @solana/kit for Kamino SDK RPC creation\n');
   console.error('Example:');
-  console.error('  import { getConnection } from "../solana/connection.js";');
-  console.error('  const connection = getConnection();');
-  console.error('  const accountInfo = await connection.getAccountInfo(...);');
+  console.error('  import { createSolanaRpc, address } from "@solana/kit";');
+  console.error('  const rpc = createSolanaRpc(connection.rpcEndpoint);');
+  console.error('  const market = await KaminoMarket.load(');
+  console.error('    rpc,');
+  console.error('    address(marketPubkey.toBase58()),');
+  console.error('    1000,');
+  console.error('    address(programId.toBase58())');
+  console.error('  );');
   console.error('');
   
   process.exit(1);
