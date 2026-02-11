@@ -1,24 +1,15 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { resolveTokenProgramId } from "../src/solana/tokenProgram.js";
+import { USDC_MINT } from "../src/constants/mints.js";
 
 (async () => {
-  const rpcUrl = process.env.RPC_PRIMARY;
-  if (!rpcUrl) {
-    console.error("ERROR: RPC_PRIMARY not set in environment");
-    process.exit(1);
-  }
-
-  const usdcMintStr = process.env.USDC_MINT;
-  if (!usdcMintStr) {
-    console.error("ERROR: USDC_MINT not set in environment");
-    process.exit(1);
-  }
-
+  const rpcUrl = process.env.RPC_PRIMARY || "https://api.mainnet-beta.solana.com";
+  
   console.log("Testing token program resolution...");
-  console.log(`RPC: ${rpcUrl.slice(0, 30)}...`);
+  console.log(`RPC: ${rpcUrl.slice(0, 50)}...`);
   
   const conn = new Connection(rpcUrl, "processed");
-  const usdc = new PublicKey(usdcMintStr);
+  const usdc = new PublicKey(USDC_MINT);
   
   console.log(`\nResolving token program for USDC mint: ${usdc.toBase58()}`);
   
