@@ -91,6 +91,9 @@ async function main() {
 
   try {
     // Initialize Solana RPC connection
+    // Note: Previously used 'finalized' commitment. Now using centralized connection
+    // which uses 'confirmed' for consistency. This provides good balance between
+    // speed and reliability across all commands.
     const connection = getConnection();
     
     logger.info({ rpcUrl: env.RPC_PRIMARY }, "Connected to Solana RPC");

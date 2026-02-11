@@ -63,21 +63,36 @@ function* walkTypeScriptFiles(dir: string): Generator<string> {
 }
 
 /**
- * Strip comments from a line of code (simple heuristic)
+ * Strip comments from a line of code
  * Handles single-line comments (//) and common comment markers
+ * 
+ * Note: This is a simple heuristic that handles most cases.
+ * For more robust parsing, consider using a full TypeScript parser.
  */
 function stripComments(line: string): string {
   const trimmed = line.trim();
   
-  // Full line comments
+  // Full line comments (most common case)
   if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*') || trimmed.startsWith('*/')) {
     return '';
   }
   
+  // Check for block comment end marker anywhere in line
+  if (trimmed.includes('*/')) {
+    // If line is just closing block comment, skip it
+    if (trimmed === '*/') {
+      return '';
+    }
+    // Otherwise, this could be code after block comment close
+    // For simplicity, we'll keep the line to avoid missing violations
+  }
+  
   // Inline comments (simple approach: strip everything after //)
+  // This handles: const x = 1; // getRpc().getAccountInfo()
   const commentIndex = line.indexOf('//');
   if (commentIndex !== -1) {
-    return line.substring(0, commentIndex);
+    const codeBeforeComment = line.substring(0, commentIndex);
+    return codeBeforeComment;
   }
   
   return line;
