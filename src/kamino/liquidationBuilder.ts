@@ -92,9 +92,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     throw new Error(`Failed to load Kamino market: ${p.marketPubkey.toBase58()}`);
   }
   
-  // 1) Load obligation
+  // 1) Load obligation using the market instance (SDK overload expects KaminoMarket)
   const obligation = await KaminoObligation.load(
-    rpc,
+    market,
     address(p.obligationPubkey.toBase58())
   );
   
