@@ -183,6 +183,7 @@ async function main() {
           
           const selectedBorrow = usdcBorrow || borrows[0];
           repayReservePubkey = selectedBorrow.reserve;
+          // Borrows already use liquidity mint directly (not cToken)
           primaryBorrowMint = selectedBorrow.mint;
         }
         
@@ -197,7 +198,17 @@ async function main() {
           
           const selectedDeposit = solDeposit || deposits[0];
           collateralReservePubkey = selectedDeposit.reserve;
-          primaryCollateralMint = selectedDeposit.mint;
+          // Use underlying liquidity mint from reserve, not the collateral mint (cToken)
+          const collateralReserve = reserveCache.byMint.get(selectedDeposit.mint);
+          if (collateralReserve) {
+            primaryCollateralMint = collateralReserve.liquidityMint;
+          } else {
+            // If reserve not found in cache, log warning and skip (incomplete data)
+            logger.warn(
+              { obligationPubkey: o.obligationPubkey, depositMint: selectedDeposit.mint },
+              "Collateral reserve not found in cache - obligation will have incomplete mint data"
+            );
+          }
         }
       }
       

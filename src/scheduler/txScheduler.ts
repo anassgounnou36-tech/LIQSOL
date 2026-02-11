@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FlashloanPlan, recomputePlanFields } from './txBuilder.js';
 import { evaluateForecasts, type ForecastEntry, parseTtlMinutes, type TtlManagerParams } from '../predict/forecastTTLManager.js';
+import { isPlanComplete, getMissingFields } from './planValidation.js';
 
 const QUEUE_PATH = path.join(process.cwd(), 'data', 'tx_queue.json');
 
@@ -23,7 +24,30 @@ export function enqueuePlans(plans: FlashloanPlan[]): FlashloanPlan[] {
   const existing = loadQueue();
   const map = new Map<string, FlashloanPlan>();
   for (const p of existing) map.set(p.key, p);
-  for (const p of plans) map.set(p.key, p);
+  
+  // Validate and enqueue new plans
+  let skippedCount = 0;
+  for (const p of plans) {
+    // Validate plan completeness using shared validation function
+    if (!isPlanComplete(p)) {
+      skippedCount++;
+      const missing = getMissingFields(p);
+      console.log(
+        `[Scheduler] skip_incomplete_plan: ${p.key} ` +
+        `(repayReserve=${missing.repayReservePubkey}, ` +
+        `collateralReserve=${missing.collateralReservePubkey}, ` +
+        `collateralMint=${missing.collateralMint})`
+      );
+      continue;
+    }
+    
+    map.set(p.key, p);
+  }
+  
+  if (skippedCount > 0) {
+    console.log(`[Scheduler] Skipped ${skippedCount} incomplete plan(s)`);
+  }
+  
   const all = Array.from(map.values())
     .sort((a, b) => {
       // Primary: liquidationEligible (true first)

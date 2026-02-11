@@ -11,6 +11,7 @@ import { normalizeWslPath } from '../utils/path.js';
 import { resolveMint } from '../utils/mintResolve.js';
 import { sendWithBoundedRetry, formatAttemptResults } from './broadcastRetry.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
+import { isPlanComplete, getMissingFields } from '../scheduler/planValidation.js';
 
 interface Plan {
   planVersion?: number;
@@ -430,19 +431,25 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     return { status: 'invalid-plan' };
   }
   
-  // PR: Warn if reserve pubkeys are missing (not fatal, but increases risk of 6006)
-  if (!target.repayReservePubkey || !target.collateralReservePubkey) {
-    console.warn('[Executor] ⚠️  Warning: Plan is missing reserve pubkeys');
-    console.warn('[Executor]    This plan was likely created before the reserve-tracking fix.');
-    console.warn('[Executor]    Liquidation builder will derive reserves, but there is higher risk of Custom(6006).');
-    console.warn('[Executor]    Recommend: Regenerate tx_queue.json with npm run snapshot:candidates');
+  // Guard: Skip incomplete/legacy plans (missing reserve pubkeys or empty collateralMint)
+  if (!isPlanComplete(target)) {
+    console.error('[Executor] ❌ legacy_or_incomplete_plan: Cannot execute liquidation with incomplete plan');
+    console.error('[Executor]    This plan is missing critical fields needed for liquidation:');
     
-    if (!target.repayReservePubkey) {
-      console.warn('[Executor]    Missing: repayReservePubkey');
+    const missing = getMissingFields(target);
+    if (missing.repayReservePubkey === 'missing') {
+      console.error('[Executor]      - repayReservePubkey: missing');
     }
-    if (!target.collateralReservePubkey) {
-      console.warn('[Executor]    Missing: collateralReservePubkey');
+    if (missing.collateralReservePubkey === 'missing') {
+      console.error('[Executor]      - collateralReservePubkey: missing');
     }
+    if (missing.collateralMint === 'missing') {
+      console.error('[Executor]      - collateralMint: missing or empty');
+    }
+    
+    console.error('[Executor]    Skipping this plan to prevent Custom(6006) InvalidAccountInput errors.');
+    console.error('[Executor]    Action: Regenerate tx_queue.json with: npm run test:scheduler:forecast');
+    return { status: 'incomplete-plan' };
   }
   
   const now = Date.now();
