@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
+import { getConnection } from "../solana/connection.js";
 import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
 import { decodeReserve } from "../kamino/decoder.js";
@@ -32,7 +33,7 @@ async function main() {
 
   // Load environment and setup connection
   const env = loadReadonlyEnv();
-  const connection = new Connection(env.RPC_PRIMARY, "confirmed");
+  const connection = getConnection();
 
   logger.info(
     { pubkey: pubkey.toString() },
