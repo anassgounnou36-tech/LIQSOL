@@ -207,7 +207,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   console.log(`[LiqBuilder] Selected repay: ${repayMint.toBase58()}, collateral: ${collateralMint.toBase58()}`);
   
-  // Get reserve states early for mint resolution
+  // Get reserve states early - needed for mint resolution and later for refresh/liquidation ixs
   const repayReserveState = repayReserve.state;
   const collateralReserveState = collateralReserve.state;
   
@@ -225,24 +225,25 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   console.log(`[LiqBuilder] Token programs - repay: ${repayTokenProgramId.toBase58().slice(0, 8)}..., withdrawLiq: ${withdrawLiquidityTokenProgramId.toBase58().slice(0, 8)}..., collateral: ${collateralTokenProgramId.toBase58().slice(0, 8)}...`);
   
   // Derive user ATAs for liquidator
+  // The third parameter (false) indicates the owner is NOT a PDA (Program Derived Address)
   const userSourceLiquidityAta = getAssociatedTokenAddressSync(
     repayLiquidityMint,
     p.liquidatorPubkey,
-    false,
+    false, // allowOwnerOffCurve: owner is not a PDA
     repayTokenProgramId
   );
   
   const userDestinationCollateralAta = getAssociatedTokenAddressSync(
     withdrawCollateralMint,
     p.liquidatorPubkey,
-    false,
+    false, // allowOwnerOffCurve: owner is not a PDA
     collateralTokenProgramId
   );
   
   const userDestinationLiquidityAta = getAssociatedTokenAddressSync(
     withdrawLiquidityMint,
     p.liquidatorPubkey,
-    false,
+    false, // allowOwnerOffCurve: owner is not a PDA
     withdrawLiquidityTokenProgramId
   );
   
