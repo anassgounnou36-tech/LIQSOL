@@ -41,8 +41,8 @@ export function resolveMintFlexible(input: string): PublicKey {
       return new PublicKey(BTC_MINT);
   }
   
-  // Try to parse as base58 pubkey (32-byte address)
-  // Valid base58 pubkeys are typically 32-44 characters
+  // Try to parse as base58 pubkey
+  // Solana pubkeys are 32 bytes, which encode to 43-44 characters in base58
   try {
     const pubkey = new PublicKey(input);
     // Validate it's actually a valid 32-byte public key
