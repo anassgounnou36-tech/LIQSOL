@@ -175,7 +175,7 @@ export class Presubmitter {
     const { buildJupiterSwapIxs, formatBaseUnitsToUiString } = await import('../execute/swapBuilder.js');
     const { buildComputeBudgetIxs } = await import('../execution/computeBudget.js');
     const { estimateSeizedCollateralDeltaBaseUnits } = await import('../execute/seizedDeltaEstimator.js');
-    const { resolveMint } = await import('../utils/mintResolve.js');
+    const { resolveMintFlexible } = await import('../solana/mint.js');
     
     const ixs = [];
     
@@ -205,7 +205,7 @@ export class Presubmitter {
     let repayMintPreference: PublicKey | undefined;
     if (plan.repayMint) {
       try {
-        repayMintPreference = resolveMint(plan.repayMint);
+        repayMintPreference = resolveMintFlexible(plan.repayMint);
       } catch (err) {
         console.error(
           `[Presubmit] Failed to resolve repayMint for plan ${plan.key} (obligation: ${plan.obligationPubkey}):`,

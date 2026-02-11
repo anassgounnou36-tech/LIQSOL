@@ -8,7 +8,7 @@ import { buildJupiterSwapIxs } from './swapBuilder.js';
 import { buildComputeBudgetIxs } from '../execution/computeBudget.js';
 import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
-import { resolveMint } from '../utils/mintResolve.js';
+import { resolveMintFlexible } from '../solana/mint.js';
 import { sendWithBoundedRetry, formatAttemptResults } from './broadcastRetry.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { isPlanComplete, getMissingFields } from '../scheduler/planValidation.js';
@@ -136,7 +136,7 @@ async function buildFullTransaction(
   
   if (plan.repayMint) {
     try {
-      repayMintPreference = resolveMint(plan.repayMint);
+      repayMintPreference = resolveMintFlexible(plan.repayMint);
     } catch (err) {
       console.error(
         `[Executor] Failed to resolve repayMint for plan ${plan.key} (obligation: ${plan.obligationPubkey}):`,
