@@ -17,6 +17,11 @@ export interface ScoredObligation {
   liquidationEligible: boolean;
   borrowValueUsd: number;
   collateralValueUsd: number;
+  // PR: Reserve pubkeys from obligation borrows/deposits
+  repayReservePubkey?: string;
+  collateralReservePubkey?: string;
+  primaryBorrowMint?: string;
+  primaryCollateralMint?: string;
   // optionally: underlying detail for validation
 }
 

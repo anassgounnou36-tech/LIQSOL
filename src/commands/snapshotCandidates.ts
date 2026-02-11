@@ -160,14 +160,60 @@ async function main() {
     }
 
     // Map to ScoredObligation interface for candidate selector
-    const scoredForSelection: ScoredObligation[] = scoredObligations.map((o) => ({
-      obligationPubkey: o.obligationPubkey,
-      ownerPubkey: o.ownerPubkey,
-      healthRatio: o.healthRatio,
-      liquidationEligible: o.liquidationEligible,
-      borrowValueUsd: o.borrowValue,
-      collateralValueUsd: o.collateralValue,
-    }));
+    // PR: Enrich with reserve pubkeys from obligation borrows/deposits
+    const scoredForSelection: ScoredObligation[] = scoredObligations.map((o) => {
+      // Get full obligation entry to access borrows and deposits
+      const entry = indexer.getObligationEntry(o.obligationPubkey);
+      
+      // Extract reserve pubkeys - select repay from borrows, collateral from deposits
+      let repayReservePubkey: string | undefined;
+      let collateralReservePubkey: string | undefined;
+      let primaryBorrowMint: string | undefined;
+      let primaryCollateralMint: string | undefined;
+      
+      if (entry && entry.decoded) {
+        // Select repay reserve: prefer USDC, otherwise take first borrow
+        const borrows = entry.decoded.borrows.filter((b) => b.reserve !== PublicKey.default.toString());
+        if (borrows.length > 0) {
+          // Try to find USDC borrow first
+          const usdcBorrow = borrows.find((b) => {
+            const reserve = reserveCache.byMint.get(b.mint);
+            return reserve && reserve.liquidityMint === USDC_MINT;
+          });
+          
+          const selectedBorrow = usdcBorrow || borrows[0];
+          repayReservePubkey = selectedBorrow.reserve;
+          primaryBorrowMint = selectedBorrow.mint;
+        }
+        
+        // Select collateral reserve: prefer SOL, otherwise take first deposit
+        const deposits = entry.decoded.deposits.filter((d) => d.reserve !== PublicKey.default.toString());
+        if (deposits.length > 0) {
+          // Try to find SOL deposit first
+          const solDeposit = deposits.find((d) => {
+            const reserve = reserveCache.byMint.get(d.mint);
+            return reserve && reserve.liquidityMint === SOL_MINT;
+          });
+          
+          const selectedDeposit = solDeposit || deposits[0];
+          collateralReservePubkey = selectedDeposit.reserve;
+          primaryCollateralMint = selectedDeposit.mint;
+        }
+      }
+      
+      return {
+        obligationPubkey: o.obligationPubkey,
+        ownerPubkey: o.ownerPubkey,
+        healthRatio: o.healthRatio,
+        liquidationEligible: o.liquidationEligible,
+        borrowValueUsd: o.borrowValue,
+        collateralValueUsd: o.collateralValue,
+        repayReservePubkey,
+        collateralReservePubkey,
+        primaryBorrowMint,
+        primaryCollateralMint,
+      };
+    });
 
     // Select and rank candidates
     logger.info("Selecting and ranking candidates...");
