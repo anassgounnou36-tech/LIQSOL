@@ -1,6 +1,6 @@
 import { Connection, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { getAssociatedTokenAddress } from '@kamino-finance/klend-sdk';
-import type { Address } from '@solana/addresses';
+import { address } from '@solana/kit';
 
 /** Check payer SOL balance meets minimum lamports */
 export async function checkSolBalance(connection: Connection, pubkey: PublicKey, minLamports: number): Promise<boolean> {
@@ -10,7 +10,7 @@ export async function checkSolBalance(connection: Connection, pubkey: PublicKey,
 
 /** Compute ATA for owner/mint and check existence */
 export async function checkATAExists(connection: Connection, owner: PublicKey, mint: PublicKey): Promise<{ ata: PublicKey; exists: boolean }> {
-  const ataStr = await getAssociatedTokenAddress(mint.toBase58() as Address, owner.toBase58() as Address);
+  const ataStr = await getAssociatedTokenAddress(address(mint.toBase58()), address(owner.toBase58()));
   const ata = new PublicKey(ataStr);
   const info = await connection.getAccountInfo(ata);
   return { ata, exists: !!info };

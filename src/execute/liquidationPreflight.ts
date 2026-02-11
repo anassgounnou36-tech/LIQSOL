@@ -12,6 +12,7 @@
 
 import { Connection, PublicKey } from '@solana/web3.js';
 import { KaminoMarket, KaminoObligation } from '@kamino-finance/klend-sdk';
+import type { KaminoMarketRpcApi } from '@kamino-finance/klend-sdk';
 import { createSolanaRpc, address } from '@solana/kit';
 import { computeHealthRatio, type HealthRatioInput } from '../math/health.js';
 import { isLiquidatable } from '../math/liquidation.js';
@@ -71,10 +72,10 @@ export async function checkLiquidationPreflight(
   
   try {
     // 1. Load market from Kamino SDK
-    // Note: Type assertion needed due to @solana/kit RPC version mismatch with SDK
-    const rpc = createSolanaRpc(connection.rpcEndpoint);
+    // Explicitly type with KaminoMarketRpcApi to match Kamino loader expectations
+    const rpc = createSolanaRpc<KaminoMarketRpcApi>(connection.rpcEndpoint);
     const market = await KaminoMarket.load(
-      rpc as any, // Type assertion to work around RPC version mismatch
+      rpc,
       address(marketPubkey.toBase58()),
       1000, // recentSlotDurationMs
       address(programId.toBase58())

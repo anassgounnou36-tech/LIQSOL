@@ -1,5 +1,6 @@
 import { Connection, PublicKey, TransactionInstruction, AddressLookupTableAccount, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { KaminoMarket, KaminoObligation, refreshReserve, refreshObligation, liquidateObligationAndRedeemReserveCollateral, getAssociatedTokenAddress } from "@kamino-finance/klend-sdk";
+import type { KaminoMarketRpcApi } from "@kamino-finance/klend-sdk";
 import { createSolanaRpc, address } from "@solana/kit";
 import { AccountRole } from "@solana/instructions";
 import { none, some } from "@solana/options";
@@ -78,7 +79,8 @@ function convertSdkAccount(a: any) {
  */
 export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams): Promise<KaminoLiquidationResult> {
   // Create @solana/kit RPC from connection URL for Kamino SDK compatibility
-  const rpc = createSolanaRpc(p.connection.rpcEndpoint);
+  // Explicitly type with KaminoMarketRpcApi to match Kamino loader expectations
+  const rpc = createSolanaRpc<KaminoMarketRpcApi>(p.connection.rpcEndpoint);
   
   // 1) Load market from Kamino SDK
   const market = await KaminoMarket.load(
