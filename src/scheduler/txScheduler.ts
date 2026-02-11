@@ -23,7 +23,27 @@ export function saveQueue(items: FlashloanPlan[]): void {
 export function enqueuePlans(plans: FlashloanPlan[]): FlashloanPlan[] {
   const existing = loadQueue();
   const map = new Map<string, FlashloanPlan>();
-  for (const p of existing) map.set(p.key, p);
+  
+  // Filter out legacy/incomplete plans from existing queue
+  let legacyDroppedCount = 0;
+  for (const p of existing) {
+    if (!isPlanComplete(p)) {
+      legacyDroppedCount++;
+      const missing = getMissingFields(p);
+      console.log(
+        `[Scheduler] drop_legacy_incomplete_plan: ${p.key} ` +
+        `(repayReserve=${missing.repayReservePubkey}, ` +
+        `collateralReserve=${missing.collateralReservePubkey}, ` +
+        `collateralMint=${missing.collateralMint})`
+      );
+      continue;
+    }
+    map.set(p.key, p);
+  }
+  
+  if (legacyDroppedCount > 0) {
+    console.log(`[Scheduler] Dropped ${legacyDroppedCount} legacy/incomplete plan(s) from existing queue`);
+  }
   
   // Validate and enqueue new plans
   let skippedCount = 0;

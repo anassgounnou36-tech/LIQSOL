@@ -8,8 +8,9 @@ import { createKeyPairSignerFromBytes } from "@solana/signers";
 import { AccountRole } from "@solana/instructions";
 import { createSolanaRpc, address } from "@solana/kit";
 import { none } from "@solana/options";
+import { resolveMintFlexible } from "../solana/mint.js";
 
-export type FlashloanMint = "USDC" | "SOL";
+export type FlashloanMint = string; // Accept any string (symbol or base58 pubkey)
 
 export interface BuildKaminoFlashloanParams {
   connection: Connection;
@@ -74,18 +75,19 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
     throw new Error(`Failed to load market: ${p.marketPubkey.toBase58()}`);
   }
 
-  // Get reserve by mint symbol
-  let reserve;
-  if (p.mint === "SOL") {
-    reserve = market.getReserveBySymbol("SOL");
-  } else if (p.mint === "USDC") {
-    reserve = market.getReserveBySymbol("USDC");
-  } else {
-    throw new Error(`Unsupported mint: ${p.mint}`);
+  // Resolve mint to PublicKey (handles both symbols like "USDC" and base58 pubkeys)
+  let mintPubkey: PublicKey;
+  try {
+    mintPubkey = resolveMintFlexible(p.mint);
+  } catch (err) {
+    throw new Error(`Failed to resolve mint "${p.mint}": ${err instanceof Error ? err.message : String(err)}`);
   }
+  
+  // Get reserve by mint pubkey
+  const reserve = market.getReserveByMint(address(mintPubkey.toBase58()));
 
   if (!reserve) {
-    throw new Error(`Reserve not found for mint: ${p.mint}`);
+    throw new Error(`Reserve not found for mint: ${p.mint} (resolved to ${mintPubkey.toBase58()})`);
   }
 
   // Get reserve mint and decimals
