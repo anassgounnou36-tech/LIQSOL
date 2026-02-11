@@ -36,5 +36,8 @@ jobs:
     - name: Lint
       run: npm run lint
     
+    - name: RPC Guard Check
+      run: npm run check:rpc:guard
+    
     - name: Test
       run: npm run test

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
+import { Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
+import { getConnection } from '../solana/connection.js';
 import { buildKaminoFlashloanIxs } from '../flashloan/kaminoFlashloan.js';
 import { buildKaminoLiquidationIxs } from '../kamino/liquidationBuilder.js';
 import { buildJupiterSwapIxs } from './swapBuilder.js';
@@ -87,13 +88,13 @@ function loadPlans(): Plan[] {
  */
 async function buildFullTransaction(
   plan: FlashloanPlan,
-  connection: Connection,
   signer: Keypair,
   market: PublicKey,
   programId: PublicKey,
   opts: { includeSwap?: boolean; useRealSwapSizing?: boolean } = {}
 ): Promise<TransactionInstruction[]> {
   const ixs: TransactionInstruction[] = [];
+  const connection = getConnection();
   
   // Get env for config
   const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
@@ -273,8 +274,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   const dry = opts?.dry ?? true;
   const broadcast = opts?.broadcast ?? false;
 
-  const rpcUrl = env.RPC_PRIMARY || 'https://api.mainnet-beta.solana.com';
-  const connection = new Connection(rpcUrl, 'confirmed');
+  const connection = getConnection();
 
   const minEv = Number(env.EXEC_MIN_EV ?? env.SCHED_MIN_EV ?? 0);
   const maxTtlMin = Number(env.EXEC_MAX_TTL_MIN ?? env.SCHED_MAX_TTL_MIN ?? 999999);
@@ -424,7 +424,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   const useRealSwapSizing = !dry; // Use real sizing for broadcast mode, skip for dry-run
   
   // PR2: Build full transaction pipeline
-  const ixs = await buildFullTransaction(target, connection, signer, market, programId, {
+  const ixs = await buildFullTransaction(target, signer, market, programId, {
     includeSwap: true,
     useRealSwapSizing,
   });
