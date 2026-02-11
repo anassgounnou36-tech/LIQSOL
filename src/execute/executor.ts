@@ -418,6 +418,45 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   const market = new PublicKey(env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
   const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
 
+  // Part B: Liquidation preflight check
+  console.log('[Executor] Running preflight checks...');
+  const { checkLiquidationPreflight } = await import('./liquidationPreflight.js');
+  
+  let repayMintPreference: PublicKey | undefined;
+  if (target.repayMint) {
+    try {
+      repayMintPreference = resolveMint(target.repayMint);
+    } catch (err) {
+      console.error(
+        `[Executor] Failed to resolve repayMint for preflight: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+  
+  const preflightResult = await checkLiquidationPreflight({
+    connection,
+    marketPubkey: market,
+    programId,
+    obligationPubkey: new PublicKey(target.obligationPubkey),
+    repayMintPreference,
+  });
+  
+  if (!preflightResult.success) {
+    console.log('[Executor] ───────────────────────────────────────────────────────────────');
+    console.log(`[Executor] Preflight FAILED: ${preflightResult.reason}`);
+    if (preflightResult.details) {
+      console.log(`[Executor]   Details: ${preflightResult.details}`);
+    }
+    if (preflightResult.healthRatio !== undefined) {
+      console.log(`[Executor]   Current health ratio: ${preflightResult.healthRatio.toFixed(4)}`);
+    }
+    console.log('[Executor] ───────────────────────────────────────────────────────────────');
+    return { status: preflightResult.reason };
+  }
+  
+  console.log('[Executor] Preflight checks PASSED');
+  console.log(`[Executor]   Health ratio: ${preflightResult.healthRatio.toFixed(4)} (liquidatable)`);
+
   console.log('[Executor] Building full transaction...');
   const buildStart = Date.now();
   
