@@ -23,7 +23,34 @@ export function enqueuePlans(plans: FlashloanPlan[]): FlashloanPlan[] {
   const existing = loadQueue();
   const map = new Map<string, FlashloanPlan>();
   for (const p of existing) map.set(p.key, p);
-  for (const p of plans) map.set(p.key, p);
+  
+  // Validate and enqueue new plans
+  let skippedCount = 0;
+  for (const p of plans) {
+    // Validate plan completeness: repayReservePubkey, collateralReservePubkey, collateralMint must be present
+    const isComplete = 
+      p.repayReservePubkey && p.repayReservePubkey.trim() !== '' &&
+      p.collateralReservePubkey && p.collateralReservePubkey.trim() !== '' &&
+      p.collateralMint && p.collateralMint.trim() !== '';
+    
+    if (!isComplete) {
+      skippedCount++;
+      console.log(
+        `[Scheduler] skip_incomplete_plan: ${p.key} ` +
+        `(repayReserve=${p.repayReservePubkey || 'missing'}, ` +
+        `collateralReserve=${p.collateralReservePubkey || 'missing'}, ` +
+        `collateralMint=${p.collateralMint || 'missing'})`
+      );
+      continue;
+    }
+    
+    map.set(p.key, p);
+  }
+  
+  if (skippedCount > 0) {
+    console.log(`[Scheduler] Skipped ${skippedCount} incomplete plan(s)`);
+  }
+  
   const all = Array.from(map.values())
     .sort((a, b) => {
       // Primary: liquidationEligible (true first)
