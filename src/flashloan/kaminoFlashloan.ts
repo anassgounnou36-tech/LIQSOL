@@ -6,8 +6,7 @@ import { getFlashLoanInstructions } from "@kamino-finance/klend-sdk";
 import { Decimal } from "decimal.js";
 import { createKeyPairSignerFromBytes } from "@solana/signers";
 import { AccountRole } from "@solana/instructions";
-import { createSolanaRpc } from "@solana/rpc";
-import type { Address } from "@solana/addresses";
+import { createSolanaRpc, address } from "@solana/kit";
 import { none } from "@solana/options";
 
 export type FlashloanMint = "USDC" | "SOL";
@@ -63,13 +62,11 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
 
   // Load market from Kamino SDK
   // Note: SDK v7.3.9 requires recentSlotDurationMs parameter
-  // Note: Type cast needed due to @solana/kit v2 vs v3 incompatibility in SDK dependencies
   const market = await KaminoMarket.load(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rpc as any, // RPC type compatibility between @solana/kit v2 (SDK) and v3 (our imports)
-    p.marketPubkey.toBase58() as Address,
+    rpc,
+    address(p.marketPubkey.toBase58()),
     1000, // recentSlotDurationMs - default value
-    p.programId.toBase58() as Address
+    address(p.programId.toBase58())
   );
 
   if (!market) {
@@ -104,7 +101,7 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
   // Derive user ATA for the reserve with correct token program
   const destinationAtaStr = await getAssociatedTokenAddress(
     reserveMint,
-    p.signer.publicKey.toBase58() as Address,
+    address(p.signer.publicKey.toBase58()),
     tokenProgramId // Use reserve's token program for Token-2022 compatibility
   );
   const destinationAta = new PublicKey(destinationAtaStr);
@@ -126,7 +123,7 @@ export async function buildKaminoFlashloanIxs(p: BuildKaminoFlashloanParams): Pr
     destinationAta: destinationAtaStr,
     referrerAccount: none(), // No referrer for flashloans
     referrerTokenState: none(),
-    programId: p.programId.toBase58() as Address,
+    programId: address(p.programId.toBase58()),
   });
 
   // Convert SDK instructions to web3.js TransactionInstruction

@@ -1,8 +1,7 @@
 import { Connection, PublicKey, TransactionInstruction, AddressLookupTableAccount, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { KaminoMarket, KaminoObligation, refreshReserve, refreshObligation, liquidateObligationAndRedeemReserveCollateral, getAssociatedTokenAddress } from "@kamino-finance/klend-sdk";
-import { createSolanaRpc } from "@solana/rpc";
+import { createSolanaRpc, address } from "@solana/kit";
 import { AccountRole } from "@solana/instructions";
-import type { Address } from "@solana/addresses";
 import { none, some } from "@solana/options";
 import { Buffer } from "node:buffer";
 import BN from "bn.js";
@@ -82,23 +81,21 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const rpc = createSolanaRpc(p.connection.rpcEndpoint);
   
   // 1) Load market from Kamino SDK
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const market = await KaminoMarket.load(
-    rpc as any,
-    p.marketPubkey.toBase58() as Address,
+    rpc,
+    address(p.marketPubkey.toBase58()),
     1000, // recentSlotDurationMs
-    p.programId.toBase58() as Address
+    address(p.programId.toBase58())
   );
   
   if (!market) {
     throw new Error(`Failed to load Kamino market: ${p.marketPubkey.toBase58()}`);
   }
   
-  // 1) Load obligation
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // 1) Load obligation using the market instance (SDK overload expects KaminoMarket)
   const obligation = await KaminoObligation.load(
-    rpc as any,
-    p.obligationPubkey.toBase58() as Address
+    market,
+    address(p.obligationPubkey.toBase58())
   );
   
   if (!obligation) {
@@ -119,7 +116,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   if (p.repayMintPreference) {
     // Find borrow matching preference
     for (const borrow of borrows) {
-      const reserve = market.getReserveByAddress(borrow.borrowReserve.toString() as Address);
+      const reserve = market.getReserveByAddress(address(borrow.borrowReserve.toString()));
       if (reserve && reserve.getLiquidityMint() === p.repayMintPreference.toBase58()) {
         repayReserve = reserve;
         repayMint = p.repayMintPreference;
@@ -138,7 +135,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     let maxBorrowValue = 0;
     
     for (const borrow of borrows) {
-      const reserve = market.getReserveByAddress(borrow.borrowReserve.toString() as Address);
+      const reserve = market.getReserveByAddress(address(borrow.borrowReserve.toString()));
       if (reserve) {
         // Get borrow value in USD using oracle price
         const borrowedAmountSf = borrow.borrowedAmountSf.toString();
@@ -175,7 +172,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   let maxDepositValue = 0;
   
   for (const deposit of deposits) {
-    const reserve = market.getReserveByAddress(deposit.depositReserve.toString() as Address);
+    const reserve = market.getReserveByAddress(address(deposit.depositReserve.toString()));
     if (reserve) {
       // Get deposit value in USD using oracle price
       const depositedAmount = deposit.depositedAmount.toString();
@@ -216,7 +213,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const repayReserveState = repayReserve.state;
   const repayRefreshIx = refreshReserve({
     reserve: repayReserve.address,
-    lendingMarket: p.marketPubkey.toBase58() as Address,
+    lendingMarket: address(p.marketPubkey.toBase58()),
     pythOracle: (repayReserveState.config.tokenInfo.pythConfiguration.price && 
                  repayReserveState.config.tokenInfo.pythConfiguration.price !== DEFAULT_PUBKEY) ? 
       some(repayReserveState.config.tokenInfo.pythConfiguration.price) : none(),
@@ -229,7 +226,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     scopePrices: (repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed &&
                  repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed !== DEFAULT_PUBKEY) ?
       some(repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed) : none(),
-  }, [], p.programId.toBase58() as Address);
+  }, [], address(p.programId.toBase58()));
   
   refreshIxs.push(new TransactionInstruction({
     keys: (repayRefreshIx.accounts || []).map(convertSdkAccount),
@@ -241,7 +238,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const collateralReserveState = collateralReserve.state;
   const collateralRefreshIx = refreshReserve({
     reserve: collateralReserve.address,
-    lendingMarket: p.marketPubkey.toBase58() as Address,
+    lendingMarket: address(p.marketPubkey.toBase58()),
     pythOracle: (collateralReserveState.config.tokenInfo.pythConfiguration.price &&
                  collateralReserveState.config.tokenInfo.pythConfiguration.price !== DEFAULT_PUBKEY) ?
       some(collateralReserveState.config.tokenInfo.pythConfiguration.price) : none(),
@@ -254,7 +251,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     scopePrices: (collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed &&
                  collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed !== DEFAULT_PUBKEY) ?
       some(collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed) : none(),
-  }, [], p.programId.toBase58() as Address);
+  }, [], address(p.programId.toBase58()));
   
   refreshIxs.push(new TransactionInstruction({
     keys: (collateralRefreshIx.accounts || []).map(convertSdkAccount),
@@ -264,9 +261,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   // 3. Refresh obligation
   const obligationRefreshIx = refreshObligation({
-    lendingMarket: p.marketPubkey.toBase58() as Address,
-    obligation: p.obligationPubkey.toBase58() as Address,
-  }, [], p.programId.toBase58() as Address);
+    lendingMarket: address(p.marketPubkey.toBase58()),
+    obligation: address(p.obligationPubkey.toBase58()),
+  }, [], address(p.programId.toBase58()));
   
   refreshIxs.push(new TransactionInstruction({
     keys: (obligationRefreshIx.accounts || []).map(convertSdkAccount),
@@ -345,7 +342,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // The SDK only needs the address to build the instruction; actual signing happens later
   // We use 'as any' here because we're just building instructions, not actually signing
   const liquidatorSigner = {
-    address: p.liquidatorPubkey.toBase58() as Address,
+    address: address(p.liquidatorPubkey.toBase58()),
   } as any;
   
   // Get token programs
@@ -356,19 +353,19 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // Derive liquidator ATAs (use repayReserveState and collateralReserveState defined earlier)
   const userSourceLiquidity = await getAssociatedTokenAddress(
     repayReserve.getLiquidityMint(),
-    p.liquidatorPubkey.toBase58() as Address,
+    address(p.liquidatorPubkey.toBase58()),
     repayTokenProgram
   );
   
   const userDestinationCollateral = await getAssociatedTokenAddress(
     collateralReserveState.collateral.mintPubkey,
-    p.liquidatorPubkey.toBase58() as Address,
+    address(p.liquidatorPubkey.toBase58()),
     collateralMintTokenProgram
   );
   
   const userDestinationLiquidity = await getAssociatedTokenAddress(
     collateralReserve.getLiquidityMint(),
-    p.liquidatorPubkey.toBase58() as Address,
+    address(p.liquidatorPubkey.toBase58()),
     collateralTokenProgram
   );
   
@@ -381,8 +378,8 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     },
     {
       liquidator: liquidatorSigner,
-      obligation: p.obligationPubkey.toBase58() as Address,
-      lendingMarket: p.marketPubkey.toBase58() as Address,
+      obligation: address(p.obligationPubkey.toBase58()),
+      lendingMarket: address(p.marketPubkey.toBase58()),
       lendingMarketAuthority,
       repayReserve: repayReserve.address,
       repayReserveLiquidityMint: repayReserve.getLiquidityMint(),
@@ -399,10 +396,10 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       collateralTokenProgram: collateralMintTokenProgram,
       repayLiquidityTokenProgram: repayTokenProgram,
       withdrawLiquidityTokenProgram: collateralTokenProgram,
-      instructionSysvarAccount: SYSVAR_INSTRUCTIONS_PUBKEY.toBase58() as Address,
+      instructionSysvarAccount: address(SYSVAR_INSTRUCTIONS_PUBKEY.toBase58()),
     },
     [],
-    p.programId.toBase58() as Address
+    address(p.programId.toBase58())
   );
   
   // Convert SDK instruction to web3.js TransactionInstruction
