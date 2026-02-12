@@ -273,8 +273,8 @@ export async function startBotStartupScheduler(): Promise<void> {
           console.warn('[Executor] Stack trace:');
           console.warn(err.stack);
         }
-        // Re-throw to preserve stack for higher-level handlers
-        throw e;
+        // Re-throw the typed Error object to preserve stack and type information
+        throw err;
       }
     }
 

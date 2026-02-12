@@ -42,8 +42,28 @@ export function addressSafe(input: unknown, ctx: string): string {
     // Unsupported type
     throw new Error(`Unsupported input type: ${typeof input}`);
   } catch (origError) {
-    // Include context, original value, and original error message
+    // Include context and original error message
     const origMsg = origError instanceof Error ? origError.message : String(origError);
-    throw new Error(`Invalid address (${ctx}): ${JSON.stringify(input)} - ${origMsg}`);
+    
+    // Sanitize input for logging: limit length and mask potentially sensitive data
+    let inputRepr: string;
+    if (typeof input === 'string') {
+      // Truncate long strings, show first and last few chars for addresses
+      if (input.length > 50) {
+        inputRepr = `"${input.substring(0, 20)}...${input.substring(input.length - 10)}"`;
+      } else {
+        inputRepr = JSON.stringify(input);
+      }
+    } else if (input === null || input === undefined) {
+      inputRepr = String(input);
+    } else if (typeof input === 'object') {
+      // For objects, just show the type to avoid exposing internal structure
+      inputRepr = `[object ${input.constructor?.name ?? 'Unknown'}]`;
+    } else {
+      // For primitives (number, boolean), show type and value
+      inputRepr = `${typeof input}(${String(input)})`;
+    }
+    
+    throw new Error(`Invalid address (${ctx}): ${inputRepr} - ${origMsg}`);
   }
 }
