@@ -89,7 +89,41 @@ function getOptionalEnvNum(key: string): number | undefined {
     borrowUsd: Number(c.borrowUsd).toFixed(2),
   })));
 
+  // PR: Build plans from candidates
   const plans = filtered.map((c) => buildPlanFromCandidate(c, 'USDC'));
-  const queued = enqueuePlans(plans);
-  console.log(`\n✅ Scheduled ${plans.length} plan(s). Queue size: ${queued.length}`);
+  
+  // PR: Validate plans - drop those missing reserve pubkeys with reason
+  const validPlans = [];
+  const droppedPlans = [];
+  
+  for (const plan of plans) {
+    const missingFields: string[] = [];
+    if (!plan.repayReservePubkey) missingFields.push('repayReservePubkey');
+    if (!plan.collateralReservePubkey) missingFields.push('collateralReservePubkey');
+    
+    if (missingFields.length > 0) {
+      droppedPlans.push({
+        obligationPubkey: plan.obligationPubkey,
+        reason: `Missing fields: ${missingFields.join(', ')}`,
+      });
+    } else {
+      validPlans.push(plan);
+    }
+  }
+  
+  // PR: Report validation results
+  if (droppedPlans.length > 0) {
+    console.log(`\n⚠️  Plan Validation: Dropped ${droppedPlans.length} plan(s) due to missing reserve pubkeys:`);
+    droppedPlans.slice(0, 5).forEach((dp) => {
+      console.log(`  - ${dp.obligationPubkey}: ${dp.reason}`);
+    });
+    if (droppedPlans.length > 5) {
+      console.log(`  ... and ${droppedPlans.length - 5} more`);
+    }
+  } else {
+    console.log('\n✅ Plan Validation: All plans have complete reserve pubkey information');
+  }
+  
+  const queued = enqueuePlans(validPlans);
+  console.log(`\n✅ Scheduled ${validPlans.length} plan(s). Queue size: ${queued.length}`);
 })();
