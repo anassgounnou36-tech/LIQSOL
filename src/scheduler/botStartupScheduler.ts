@@ -14,6 +14,7 @@ import { logger } from '../observability/logger.js';
 // Singleton guard to prevent double initialization
 let isInitialized = false;
 let orchestratorInstance: EventRefreshOrchestrator | null = null;
+let initPromise: Promise<EventRefreshOrchestrator> | null = null;
 
 function getEnvNum(key: string, def: number): number {
   const v = process.env[key];
@@ -41,77 +42,94 @@ async function deriveOraclePubkeysFromReserves(env: any): Promise<{ oraclePubkey
 
 // Initialize listeners and orchestrator for event-driven refresh
 async function initRealtime(): Promise<EventRefreshOrchestrator> {
+  // Check if already initialized
   if (isInitialized && orchestratorInstance) {
     logger.info('Real-time listeners already initialized (singleton guard), reusing existing instance');
     return orchestratorInstance;
   }
   
-  const env = loadEnv();
-  const grpcUrl = env.YELLOWSTONE_GRPC_URL;
-  const token = env.YELLOWSTONE_X_TOKEN;
-
-  const obligationPubkeys = deriveObligationPubkeysFromQueue();
-  logger.info({ count: obligationPubkeys.length }, 'Derived obligation pubkeys from queue');
-
-  const { oraclePubkeys, reserveCache } = await deriveOraclePubkeysFromReserves(env);
-  logger.info({ count: oraclePubkeys.length }, 'Derived oracle pubkeys from reserves');
-
-  // Build oracle→mint mapping for price listener
-  const oracleToMints = new Map<string, string[]>();
-  for (const oracle of oraclePubkeys) {
-    const mints = getMintsByOracle(reserveCache, oracle);
-    if (mints.length > 0) {
-      oracleToMints.set(oracle, mints);
-    }
+  // Check if initialization is in progress
+  if (initPromise) {
+    logger.info('Real-time initialization already in progress, awaiting existing promise');
+    return await initPromise;
   }
-  logger.info({ uniqueOracles: oracleToMints.size }, 'Built oracle→mint mapping');
+  
+  // Start new initialization
+  initPromise = (async () => {
+    const env = loadEnv();
+    const grpcUrl = env.YELLOWSTONE_GRPC_URL;
+    const token = env.YELLOWSTONE_X_TOKEN;
 
-  const orchestrator = new EventRefreshOrchestrator({
-    minHealthDelta: Number(process.env.MIN_HEALTH_DELTA ?? 0.01),
-    minRefreshIntervalMs: Number(process.env.EVENT_MIN_REFRESH_INTERVAL_MS ?? 3000),
-    batchLimit: Number(process.env.EVENT_REFRESH_BATCH_LIMIT ?? 50),
-  });
+    const obligationPubkeys = deriveObligationPubkeysFromQueue();
+    logger.info({ count: obligationPubkeys.length }, 'Derived obligation pubkeys from queue');
 
-  const accountListener = new YellowstoneAccountListener({
-    grpcUrl,
-    authToken: token,
-    accountPubkeys: obligationPubkeys,
-    reconnectMs: 5000,
-    debounceMs: 150,
-  });
+    const { oraclePubkeys, reserveCache } = await deriveOraclePubkeysFromReserves(env);
+    logger.info({ count: oraclePubkeys.length }, 'Derived oracle pubkeys from reserves');
 
-  const priceListener = new YellowstonePriceListener({
-    grpcUrl,
-    authToken: token,
-    oraclePubkeys,
-    reconnectMs: 5000,
-    debounceMs: 150,
-  });
-
-  accountListener.on('ready', info => logger.info(info, 'Account listener ready'));
-  accountListener.on('account-update', ev => orchestrator.handleAccountUpdate(ev));
-  accountListener.on('error', err => logger.error({ err }, 'Account listener error'));
-
-  priceListener.on('ready', info => logger.info(info, 'Price listener ready'));
-  priceListener.on('price-update', ev => {
-    // Resolve mint from oracle pubkey using oracle→mint map
-    const mints = oracleToMints.get(ev.oraclePubkey) ?? [];
-    for (const mint of mints) {
-      orchestrator.handlePriceUpdate({ ...ev, mint });
+    // Build oracle→mint mapping for price listener
+    const oracleToMints = new Map<string, string[]>();
+    for (const oracle of oraclePubkeys) {
+      const mints = getMintsByOracle(reserveCache, oracle);
+      if (mints.length > 0) {
+        oracleToMints.set(oracle, mints);
+      }
     }
-  });
-  priceListener.on('error', err => logger.error({ err }, 'Price listener error'));
+    logger.info({ uniqueOracles: oracleToMints.size }, 'Built oracle→mint mapping');
 
-  await accountListener.start();
-  await priceListener.start();
+    const orchestrator = new EventRefreshOrchestrator({
+      minHealthDelta: Number(process.env.MIN_HEALTH_DELTA ?? 0.01),
+      minRefreshIntervalMs: Number(process.env.EVENT_MIN_REFRESH_INTERVAL_MS ?? 3000),
+      batchLimit: Number(process.env.EVENT_REFRESH_BATCH_LIMIT ?? 50),
+    });
 
-  logger.info('Real-time listeners initialized and started');
+    const accountListener = new YellowstoneAccountListener({
+      grpcUrl,
+      authToken: token,
+      accountPubkeys: obligationPubkeys,
+      reconnectMs: 5000,
+      debounceMs: 150,
+    });
 
-  // Set singleton guards
-  isInitialized = true;
-  orchestratorInstance = orchestrator;
+    const priceListener = new YellowstonePriceListener({
+      grpcUrl,
+      authToken: token,
+      oraclePubkeys,
+      reconnectMs: 5000,
+      debounceMs: 150,
+    });
 
-  return orchestrator;
+    accountListener.on('ready', info => logger.info(info, 'Account listener ready'));
+    accountListener.on('account-update', ev => orchestrator.handleAccountUpdate(ev));
+    accountListener.on('error', err => logger.error({ err }, 'Account listener error'));
+
+    priceListener.on('ready', info => logger.info(info, 'Price listener ready'));
+    priceListener.on('price-update', ev => {
+      // Resolve mint from oracle pubkey using oracle→mint map
+      const mints = oracleToMints.get(ev.oraclePubkey) ?? [];
+      for (const mint of mints) {
+        orchestrator.handlePriceUpdate({ ...ev, mint });
+      }
+    });
+    priceListener.on('error', err => logger.error({ err }, 'Price listener error'));
+
+    await accountListener.start();
+    await priceListener.start();
+
+    logger.info('Real-time listeners initialized and started');
+
+    // Set singleton guards
+    isInitialized = true;
+    orchestratorInstance = orchestrator;
+
+    return orchestrator;
+  })();
+  
+  try {
+    return await initPromise;
+  } finally {
+    // Clear the promise so future calls after completion use the cached instance
+    initPromise = null;
+  }
 }
 
 export async function startBotStartupScheduler(): Promise<void> {
@@ -248,7 +266,15 @@ export async function startBotStartupScheduler(): Promise<void> {
         const res = await runDryExecutor({ dry: true });
         console.log('[Executor] Dry-run completed:', res?.status ?? 'ok');
       } catch (e) {
-        console.warn('[Executor] Dry-run failed:', (e as Error).message);
+        const err = e instanceof Error ? e : new Error(String(e));
+        console.warn('[Executor] Dry-run failed:', err.message);
+        // Always print full stack trace for dry-run failures
+        if (err.stack) {
+          console.warn('[Executor] Stack trace:');
+          console.warn(err.stack);
+        }
+        // Re-throw the typed Error object to preserve stack and type information
+        throw err;
       }
     }
 
