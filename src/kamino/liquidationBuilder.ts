@@ -128,18 +128,41 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }
   
   // 2) Select repay reserve from obligation borrows
-  // Strategy: If repayMintPreference is set, use it; otherwise use highest USD value borrow
+  // PR: Strategy - prioritize expected reserve pubkey (deterministic), fallback to preference or highest USD
   let repayReserve;
   let repayMint: PublicKey | null = null;
   
-  const borrows = obligation.state.borrows.filter((b: any) => b.borrowReserve.toString() !== PublicKey.default.toString());
+  const borrows = obligation.state.borrows.filter((b: any) => b.borrowReserve.toString() !== PublicKey.default.toString()); // SDK obligation state doesn't export specific types
   
   if (borrows.length === 0) {
     throw new Error(`Obligation ${p.obligationPubkey.toBase58()} has no active borrows`);
   }
   
-  if (p.repayMintPreference) {
-    // Find borrow matching preference
+  // PR: Prioritize expected reserve pubkey if provided (deterministic selection)
+  if (p.expectedRepayReservePubkey) {
+    const expectedReservePubkey = p.expectedRepayReservePubkey.toBase58();
+    console.log(`[LiqBuilder] Using deterministic repay reserve from plan: ${expectedReservePubkey}`);
+    
+    // Validate that obligation has a borrow leg for this reserve
+    const borrowHasReserve = borrows.some((b: any) => b.borrowReserve.toString() === expectedReservePubkey); // SDK type
+    if (!borrowHasReserve) {
+      throw new Error(
+        `[LiqBuilder] preflight_reserve_mismatch: Expected repay reserve ${expectedReservePubkey} ` +
+        `not found in obligation ${p.obligationPubkey.toBase58()} borrows`
+      );
+    }
+    
+    // Load reserve directly from market
+    repayReserve = market.getReserveByAddress(address(expectedReservePubkey));
+    if (!repayReserve) {
+      throw new Error(
+        `[LiqBuilder] Failed to load expected repay reserve ${expectedReservePubkey} from market`
+      );
+    }
+    
+    repayMint = new PublicKey(repayReserve.getLiquidityMint());
+  } else if (p.repayMintPreference) {
+    // Fallback to mint preference
     for (const borrow of borrows) {
       const reserve = market.getReserveByAddress(address(borrow.borrowReserve.toString()));
       if (reserve && reserve.getLiquidityMint() === p.repayMintPreference.toBase58()) {
@@ -156,7 +179,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       );
     }
   } else {
-    // Select borrow with highest USD value
+    // Final fallback: select borrow with highest USD value
+    // NOTE: This uses float math and may be nondeterministic - prefer providing expectedRepayReservePubkey
+    console.log(`[LiqBuilder] Warning: Using USD-based reserve selection (nondeterministic) - prefer providing expectedRepayReservePubkey in plan`);
     let maxBorrowValue = 0;
     
     for (const borrow of borrows) {
@@ -188,35 +213,63 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   let collateralReserve;
   let collateralMint: PublicKey | null = null;
   
-  const deposits = obligation.state.deposits.filter((d: any) => d.depositReserve.toString() !== PublicKey.default.toString());
+  const deposits = obligation.state.deposits.filter((d: any) => d.depositReserve.toString() !== PublicKey.default.toString()); // SDK obligation state doesn't export specific types
   
   if (deposits.length === 0) {
     throw new Error(`Obligation ${p.obligationPubkey.toBase58()} has no active deposits`);
   }
   
-  let maxDepositValue = 0;
-  
-  for (const deposit of deposits) {
-    const reserve = market.getReserveByAddress(address(deposit.depositReserve.toString()));
-    if (reserve) {
-      // Get deposit value in USD using oracle price
-      const depositedAmount = deposit.depositedAmount.toString();
-      const price = reserve.getOracleMarketPrice().toNumber();
-      const decimals = reserve.stats.decimals;
-      
-      // Rough USD value estimate
-      const depositValue = (Number(depositedAmount) / Math.pow(10, decimals)) * price;
-      
-      if (depositValue > maxDepositValue) {
-        maxDepositValue = depositValue;
-        collateralReserve = reserve;
-        collateralMint = new PublicKey(reserve.getLiquidityMint());
+  // PR: Prioritize expected reserve pubkey if provided (deterministic selection)
+  if (p.expectedCollateralReservePubkey) {
+    const expectedReservePubkey = p.expectedCollateralReservePubkey.toBase58();
+    console.log(`[LiqBuilder] Using deterministic collateral reserve from plan: ${expectedReservePubkey}`);
+    
+    // Validate that obligation has a deposit leg for this reserve
+    const depositHasReserve = deposits.some((d: any) => d.depositReserve.toString() === expectedReservePubkey); // SDK type
+    if (!depositHasReserve) {
+      throw new Error(
+        `[LiqBuilder] preflight_reserve_mismatch: Expected collateral reserve ${expectedReservePubkey} ` +
+        `not found in obligation ${p.obligationPubkey.toBase58()} deposits`
+      );
+    }
+    
+    // Load reserve directly from market
+    collateralReserve = market.getReserveByAddress(address(expectedReservePubkey));
+    if (!collateralReserve) {
+      throw new Error(
+        `[LiqBuilder] Failed to load expected collateral reserve ${expectedReservePubkey} from market`
+      );
+    }
+    
+    collateralMint = new PublicKey(collateralReserve.getLiquidityMint());
+  } else {
+    // Fallback: select deposit with highest USD value
+    // NOTE: This uses float math and may be nondeterministic - prefer providing expectedCollateralReservePubkey
+    console.log(`[LiqBuilder] Warning: Using USD-based collateral selection (nondeterministic) - prefer providing expectedCollateralReservePubkey in plan`);
+    let maxDepositValue = 0;
+    
+    for (const deposit of deposits) {
+      const reserve = market.getReserveByAddress(address(deposit.depositReserve.toString()));
+      if (reserve) {
+        // Get deposit value in USD using oracle price
+        const depositedAmount = deposit.depositedAmount.toString();
+        const price = reserve.getOracleMarketPrice().toNumber();
+        const decimals = reserve.stats.decimals;
+        
+        // Rough USD value estimate
+        const depositValue = (Number(depositedAmount) / Math.pow(10, decimals)) * price;
+        
+        if (depositValue > maxDepositValue) {
+          maxDepositValue = depositValue;
+          collateralReserve = reserve;
+          collateralMint = new PublicKey(reserve.getLiquidityMint());
+        }
       }
     }
-  }
-  
-  if (!collateralReserve) {
-    throw new Error(`Could not select collateral reserve from obligation deposits`);
+    
+    if (!collateralReserve) {
+      throw new Error(`Could not select collateral reserve from obligation deposits`);
+    }
   }
   
   // Ensure mints are definitely assigned before use
@@ -230,6 +283,8 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   console.log(`[LiqBuilder] Selected repay: ${repayMint.toBase58()}, collateral: ${collateralMint.toBase58()}`);
   
   // PR: Strict preflight validation - check that selected reserves match expected reserves from plan
+  // NOTE: This validation is now redundant when using expectedRepayReservePubkey/expectedCollateralReservePubkey
+  // but kept for backward compatibility with old plans that don't provide expected reserves
   if (p.expectedRepayReservePubkey && !p.expectedRepayReservePubkey.equals(new PublicKey(repayReserve.address))) {
     throw new Error(
       `[LiqBuilder] Preflight validation failed: repay reserve mismatch. ` +

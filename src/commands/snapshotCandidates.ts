@@ -175,38 +175,59 @@ async function main() {
         // Select repay reserve: prefer USDC, otherwise take first borrow
         const borrows = entry.decoded.borrows.filter((b) => b.reserve !== PublicKey.default.toString());
         if (borrows.length > 0) {
-          // Try to find USDC borrow first
-          const usdcBorrow = borrows.find((b) => {
-            const reserve = reserveCache.byMint.get(b.mint);
-            return reserve && reserve.liquidityMint === USDC_MINT;
-          });
+          // Extract reserve pubkeys from obligation borrows
+          const borrowReserves = borrows.map((b) => b.reserve);
           
-          const selectedBorrow = usdcBorrow || borrows[0];
-          repayReservePubkey = selectedBorrow.reserve;
-          // Borrows already use liquidity mint directly (not cToken)
-          primaryBorrowMint = selectedBorrow.mint;
+          // Lookup reserves using byReserve (not byMint which can have placeholder values)
+          const borrowEntries = borrowReserves.map((rpk) => ({
+            reservePubkey: rpk,
+            entry: reserveCache.byReserve.get(rpk)
+          }));
+          
+          // Prefer USDC borrow if available
+          const usdcBorrow = borrowEntries.find((be) => be.entry && be.entry.liquidityMint === USDC_MINT);
+          const selectedBorrow = usdcBorrow ?? borrowEntries.find((be) => be.entry) ?? null;
+          
+          if (selectedBorrow && selectedBorrow.entry) {
+            repayReservePubkey = selectedBorrow.reservePubkey;
+            primaryBorrowMint = selectedBorrow.entry.liquidityMint;
+          } else {
+            // No cache entry found - still record reserve pubkey, log warning
+            repayReservePubkey = borrowReserves[0];
+            primaryBorrowMint = borrows[0].mint; // Use mint from obligation (may be placeholder)
+            logger.warn(
+              { obligationPubkey: o.obligationPubkey, repayReservePubkey },
+              "Repay reserve not found in cache - using reserve pubkey with placeholder mint"
+            );
+          }
         }
         
         // Select collateral reserve: prefer SOL, otherwise take first deposit
         const deposits = entry.decoded.deposits.filter((d) => d.reserve !== PublicKey.default.toString());
         if (deposits.length > 0) {
-          // Try to find SOL deposit first
-          const solDeposit = deposits.find((d) => {
-            const reserve = reserveCache.byMint.get(d.mint);
-            return reserve && reserve.liquidityMint === SOL_MINT;
-          });
+          // Extract reserve pubkeys from obligation deposits
+          const depositReserves = deposits.map((d) => d.reserve);
           
-          const selectedDeposit = solDeposit || deposits[0];
-          collateralReservePubkey = selectedDeposit.reserve;
-          // Use underlying liquidity mint from reserve, not the collateral mint (cToken)
-          const collateralReserve = reserveCache.byMint.get(selectedDeposit.mint);
-          if (collateralReserve) {
-            primaryCollateralMint = collateralReserve.liquidityMint;
+          // Lookup reserves using byReserve (not byMint which can have placeholder values)
+          const depositEntries = depositReserves.map((rpk) => ({
+            reservePubkey: rpk,
+            entry: reserveCache.byReserve.get(rpk)
+          }));
+          
+          // Prefer SOL deposit if available
+          const solDeposit = depositEntries.find((de) => de.entry && de.entry.liquidityMint === SOL_MINT);
+          const selectedDeposit = solDeposit ?? depositEntries.find((de) => de.entry) ?? null;
+          
+          if (selectedDeposit && selectedDeposit.entry) {
+            collateralReservePubkey = selectedDeposit.reservePubkey;
+            primaryCollateralMint = selectedDeposit.entry.liquidityMint;
           } else {
-            // If reserve not found in cache, log warning and skip (incomplete data)
+            // No cache entry found - still record reserve pubkey, log warning
+            collateralReservePubkey = depositReserves[0];
+            primaryCollateralMint = deposits[0].mint; // Use mint from obligation (may be placeholder)
             logger.warn(
-              { obligationPubkey: o.obligationPubkey, depositMint: selectedDeposit.mint },
-              "Collateral reserve not found in cache - obligation will have incomplete mint data"
+              { obligationPubkey: o.obligationPubkey, collateralReservePubkey },
+              "Collateral reserve not found in cache - using reserve pubkey with placeholder mint"
             );
           }
         }
@@ -265,6 +286,40 @@ async function main() {
       );
     });
 
+    console.log("\n");
+
+    // PR: Add guardrails - report % of candidates with reserve pubkeys
+    const withRepayReserve = topN.filter(c => c.repayReservePubkey).length;
+    const withCollateralReserve = topN.filter(c => c.collateralReservePubkey).length;
+    const withBothReserves = topN.filter(c => c.repayReservePubkey && c.collateralReservePubkey).length;
+    
+    console.log("=== RESERVE PUBKEY COVERAGE ===\n");
+    
+    // Guard against division by zero
+    if (topN.length > 0) {
+      const repayPct = ((withRepayReserve / topN.length) * 100).toFixed(1);
+      const collateralPct = ((withCollateralReserve / topN.length) * 100).toFixed(1);
+      const bothPct = ((withBothReserves / topN.length) * 100).toFixed(1);
+      
+      console.log(`Candidates with repayReservePubkey:      ${withRepayReserve}/${topN.length} (${repayPct}%)`);
+      console.log(`Candidates with collateralReservePubkey: ${withCollateralReserve}/${topN.length} (${collateralPct}%)`);
+      console.log(`Candidates with BOTH reserve pubkeys:    ${withBothReserves}/${topN.length} (${bothPct}%)`);
+    } else {
+      console.log("No candidates selected - skipping coverage statistics");
+    }
+    
+    if (topN.length > 0 && withBothReserves < topN.length) {
+      logger.warn(
+        { 
+          total: topN.length, 
+          withBoth: withBothReserves, 
+          missing: topN.length - withBothReserves 
+        },
+        "Some candidates missing reserve pubkeys - may cause execution failures"
+      );
+    } else {
+      logger.info("All candidates have complete reserve pubkey information");
+    }
     console.log("\n");
 
     // Write machine-readable output
