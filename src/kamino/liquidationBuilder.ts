@@ -132,7 +132,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   let repayReserve;
   let repayMint: PublicKey | null = null;
   
-  const borrows = obligation.state.borrows.filter((b: any) => b.borrowReserve.toString() !== PublicKey.default.toString());
+  const borrows = obligation.state.borrows.filter((b: any) => b.borrowReserve.toString() !== PublicKey.default.toString()); // SDK obligation state doesn't export specific types
   
   if (borrows.length === 0) {
     throw new Error(`Obligation ${p.obligationPubkey.toBase58()} has no active borrows`);
@@ -144,7 +144,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     console.log(`[LiqBuilder] Using deterministic repay reserve from plan: ${expectedReservePubkey}`);
     
     // Validate that obligation has a borrow leg for this reserve
-    const borrowHasReserve = borrows.some((b: any) => b.borrowReserve.toString() === expectedReservePubkey);
+    const borrowHasReserve = borrows.some((b: any) => b.borrowReserve.toString() === expectedReservePubkey); // SDK type
     if (!borrowHasReserve) {
       throw new Error(
         `[LiqBuilder] preflight_reserve_mismatch: Expected repay reserve ${expectedReservePubkey} ` +
@@ -213,7 +213,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   let collateralReserve;
   let collateralMint: PublicKey | null = null;
   
-  const deposits = obligation.state.deposits.filter((d: any) => d.depositReserve.toString() !== PublicKey.default.toString());
+  const deposits = obligation.state.deposits.filter((d: any) => d.depositReserve.toString() !== PublicKey.default.toString()); // SDK obligation state doesn't export specific types
   
   if (deposits.length === 0) {
     throw new Error(`Obligation ${p.obligationPubkey.toBase58()} has no active deposits`);
@@ -225,7 +225,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     console.log(`[LiqBuilder] Using deterministic collateral reserve from plan: ${expectedReservePubkey}`);
     
     // Validate that obligation has a deposit leg for this reserve
-    const depositHasReserve = deposits.some((d: any) => d.depositReserve.toString() === expectedReservePubkey);
+    const depositHasReserve = deposits.some((d: any) => d.depositReserve.toString() === expectedReservePubkey); // SDK type
     if (!depositHasReserve) {
       throw new Error(
         `[LiqBuilder] preflight_reserve_mismatch: Expected collateral reserve ${expectedReservePubkey} ` +

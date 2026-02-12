@@ -294,11 +294,21 @@ async function main() {
     const withBothReserves = topN.filter(c => c.repayReservePubkey && c.collateralReservePubkey).length;
     
     console.log("=== RESERVE PUBKEY COVERAGE ===\n");
-    console.log(`Candidates with repayReservePubkey:      ${withRepayReserve}/${topN.length} (${((withRepayReserve / topN.length) * 100).toFixed(1)}%)`);
-    console.log(`Candidates with collateralReservePubkey: ${withCollateralReserve}/${topN.length} (${((withCollateralReserve / topN.length) * 100).toFixed(1)}%)`);
-    console.log(`Candidates with BOTH reserve pubkeys:    ${withBothReserves}/${topN.length} (${((withBothReserves / topN.length) * 100).toFixed(1)}%)`);
     
-    if (withBothReserves < topN.length) {
+    // Guard against division by zero
+    if (topN.length > 0) {
+      const repayPct = ((withRepayReserve / topN.length) * 100).toFixed(1);
+      const collateralPct = ((withCollateralReserve / topN.length) * 100).toFixed(1);
+      const bothPct = ((withBothReserves / topN.length) * 100).toFixed(1);
+      
+      console.log(`Candidates with repayReservePubkey:      ${withRepayReserve}/${topN.length} (${repayPct}%)`);
+      console.log(`Candidates with collateralReservePubkey: ${withCollateralReserve}/${topN.length} (${collateralPct}%)`);
+      console.log(`Candidates with BOTH reserve pubkeys:    ${withBothReserves}/${topN.length} (${bothPct}%)`);
+    } else {
+      console.log("No candidates selected - skipping coverage statistics");
+    }
+    
+    if (topN.length > 0 && withBothReserves < topN.length) {
       logger.warn(
         { 
           total: topN.length, 
