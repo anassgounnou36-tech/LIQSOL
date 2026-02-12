@@ -36,8 +36,9 @@ export function addressSafe(input: unknown, ctx: string): string {
     
     // Unsupported type
     throw new Error('type');
-  } catch {
-    // Include context and original value in error message
-    throw new Error(`Invalid address (${ctx}): ${JSON.stringify(input)}`);
+  } catch (origError) {
+    // Include context, original value, and original error message
+    const origMsg = origError instanceof Error ? origError.message : String(origError);
+    throw new Error(`Invalid address (${ctx}): ${JSON.stringify(input)} - ${origMsg}`);
   }
 }

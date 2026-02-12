@@ -266,11 +266,12 @@ export async function startBotStartupScheduler(): Promise<void> {
         const res = await runDryExecutor({ dry: true });
         console.log('[Executor] Dry-run completed:', res?.status ?? 'ok');
       } catch (e) {
-        console.warn('[Executor] Dry-run failed:', (e as Error).message);
+        const err = e instanceof Error ? e : new Error(String(e));
+        console.warn('[Executor] Dry-run failed:', err.message);
         // Always print full stack trace for dry-run failures
-        if (e && typeof (e as any).stack === 'string') {
+        if (err.stack) {
           console.warn('[Executor] Stack trace:');
-          console.warn((e as any).stack);
+          console.warn(err.stack);
         }
         // Re-throw to preserve stack for higher-level handlers
         throw e;
