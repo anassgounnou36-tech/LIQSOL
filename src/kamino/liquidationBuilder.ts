@@ -10,6 +10,7 @@ import { parseUiAmountToBaseUnits } from "../execute/amount.js";
 import { resolveTokenProgramId } from "../solana/tokenProgram.js";
 import { buildCreateAtaIdempotentIx } from "../solana/ata.js";
 import { addressSafe } from "../solana/addressSafe.js";
+import { toBigInt } from "../utils/bn.js";
 
 /**
  * PR62: Parameters for building Kamino liquidation instructions.
@@ -422,35 +423,42 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     // Get borrowed amount in base units (this is scaled by cumulative borrow rate)
     // For safety, we'll repay a portion of the debt (e.g., 50% close factor)
     const borrowedAmountSf = repayBorrow.borrowedAmountSf;
-    
-    // Convert from scaled fraction to base units
-    // borrowedAmountSf is in 1e18 scale, need to convert using cumulative borrow rate
-    // For simplicity, we'll use the obligation's method or a safe percentage
-    
-    // Close factor typically 50% for Kamino
-    const closeFactor = 0.5;
     const cumulativeBorrowRate = repayReserve.state.liquidity.cumulativeBorrowRateBsf;
     
-    // Calculate actual borrow amount in base units
+    // Convert from scaled fraction to base units using bigint-based math
+    // borrowedAmountSf is in 1e18 scale, need to convert using cumulative borrow rate
     // borrowAmount = borrowedAmountSf * cumulativeBorrowRate / 10^18 / 10^18
-    const borrowedSfBN = new BN(borrowedAmountSf.toString());
-    const cumulativeRateBN = new BN(cumulativeBorrowRate.toString());
-    
-    // Compute with proper scaling
-    const borrowAmountBase = borrowedSfBN.mul(cumulativeRateBN).div(new BN('1000000000000000000')).div(new BN('1000000000000000000'));
-    
-    // Apply close factor
-    liquidityAmount = borrowAmountBase.muln(closeFactor * 1000).divn(1000);
-    
-    // Ensure we have a minimum amount
-    if (liquidityAmount.isZero()) {
-      throw new Error(
-        `Derived repay amount is zero. Borrow may be too small to liquidate. ` +
-        `Please provide repayAmountUi explicitly.`
-      );
+    try {
+      const borrowedSf = toBigInt(borrowedAmountSf);
+      const cumRateBsf = toBigInt(cumulativeBorrowRate);
+      
+      const SCALE_1E18 = 10n ** 18n;
+      const borrowAmountBaseBig = (borrowedSf * cumRateBsf) / SCALE_1E18 / SCALE_1E18;
+      
+      // Close factor typically 50% for Kamino
+      const closeFactorBps = 500n; // 50% = 500 basis points out of 1000
+      const liquidityBaseBig = (borrowAmountBaseBig * closeFactorBps) / 1000n;
+      
+      // Ensure we have a minimum amount
+      if (liquidityBaseBig === 0n) {
+        throw new Error(
+          `Derived repay amount is zero. Borrow may be too small to liquidate. ` +
+          `Please provide repayAmountUi explicitly.`
+        );
+      }
+      
+      liquidityAmount = new BN(liquidityBaseBig.toString());
+      console.log(`[LiqBuilder] Derived repay amount: ${liquidityAmount.toString()} base units`);
+    } catch (err) {
+      console.error("[LiqBuilder] bigint conversion failed", {
+        borrowedAmountSfType: typeof borrowedAmountSf,
+        borrowedAmountSfRaw: borrowedAmountSf,
+        cumulativeBorrowRateBsfType: typeof cumulativeBorrowRate,
+        cumulativeBorrowRateBsfRaw: cumulativeBorrowRate,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     }
-    
-    console.log(`[LiqBuilder] Derived repay amount: ${liquidityAmount.toString()} base units`);
   }
   
   // Set minimum acceptable received collateral (0 for now, can be configured)
