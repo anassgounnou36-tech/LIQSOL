@@ -16,8 +16,13 @@ import { PublicKey } from '@solana/web3.js';
 export function addressSafe(input: unknown, ctx: string): string {
   try {
     // Handle PublicKey objects
-    if (input && typeof (input as any).toBase58 === 'function') {
-      return (input as any).toBase58();
+    if (input instanceof PublicKey) {
+      return input.toBase58();
+    }
+    
+    // Handle objects with toBase58 method (for SDK compatibility)
+    if (input && typeof input === 'object' && 'toBase58' in input && typeof input.toBase58 === 'function') {
+      return input.toBase58();
     }
     
     // Handle string addresses
@@ -26,7 +31,7 @@ export function addressSafe(input: unknown, ctx: string): string {
       
       // Basic length check (Solana addresses are typically 32-44 characters in base58)
       if (s.length < 32 || s.length > 44) {
-        throw new Error('length');
+        throw new Error('Invalid address length: must be 32-44 characters');
       }
       
       // Validate by attempting to create a PublicKey
@@ -35,7 +40,7 @@ export function addressSafe(input: unknown, ctx: string): string {
     }
     
     // Unsupported type
-    throw new Error('type');
+    throw new Error(`Unsupported input type: ${typeof input}`);
   } catch (origError) {
     // Include context, original value, and original error message
     const origMsg = origError instanceof Error ? origError.message : String(origError);

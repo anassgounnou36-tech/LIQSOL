@@ -54,11 +54,19 @@ export interface KaminoLiquidationResult {
 }
 
 /**
+ * Type for SDK instruction account structure
+ */
+interface SdkAccount {
+  address: unknown;
+  role: AccountRole;
+  name?: string;
+}
+
+/**
  * Convert SDK instruction account to web3.js AccountMeta using AccountRole enum
  * Uses addressSafe to provide context on invalid addresses
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function convertSdkAccount(a: any, ctx: string = 'sdkAccount') {
+function convertSdkAccount(a: SdkAccount, ctx: string = 'sdkAccount') {
   const role = a.role as AccountRole;
   const accountName = a.name ?? 'unknown';
   const addr = addressSafe(a.address, `${ctx}:${accountName}`);
@@ -346,7 +354,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }, [], address(p.programId.toBase58()));
   
   refreshIxs.push(new TransactionInstruction({
-    keys: (repayRefreshIx.accounts || []).map((a: any) => convertSdkAccount(a, 'repayRefresh')),
+    keys: (repayRefreshIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'repayRefresh')),
     programId: new PublicKey(addressSafe(repayRefreshIx.programAddress, 'repayRefresh.programAddress')),
     data: Buffer.from(repayRefreshIx.data || []),
   }));
@@ -370,7 +378,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }, [], address(p.programId.toBase58()));
   
   refreshIxs.push(new TransactionInstruction({
-    keys: (collateralRefreshIx.accounts || []).map((a: any) => convertSdkAccount(a, 'collateralRefresh')),
+    keys: (collateralRefreshIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'collateralRefresh')),
     programId: new PublicKey(addressSafe(collateralRefreshIx.programAddress, 'collateralRefresh.programAddress')),
     data: Buffer.from(collateralRefreshIx.data || []),
   }));
@@ -382,7 +390,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }, [], address(p.programId.toBase58()));
   
   refreshIxs.push(new TransactionInstruction({
-    keys: (obligationRefreshIx.accounts || []).map((a: any) => convertSdkAccount(a, 'obligationRefresh')),
+    keys: (obligationRefreshIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'obligationRefresh')),
     programId: new PublicKey(addressSafe(obligationRefreshIx.programAddress, 'obligationRefresh.programAddress')),
     data: Buffer.from(obligationRefreshIx.data || []),
   }));
@@ -506,7 +514,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   // Convert SDK instruction to web3.js TransactionInstruction
   liquidationIxs.push(new TransactionInstruction({
-    keys: (liquidateIx.accounts || []).map((a: any) => convertSdkAccount(a, 'liquidate')),
+    keys: (liquidateIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'liquidate')),
     programId: new PublicKey(addressSafe(liquidateIx.programAddress, 'liquidate.programAddress')),
     data: Buffer.from(liquidateIx.data || []),
   }));
