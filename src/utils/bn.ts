@@ -82,13 +82,45 @@ export function divBigintToNumber(
 
 export function toBigInt(v: unknown): bigint {
   if (typeof v === "bigint") return v;
-  if (typeof v === "number") return BigInt(v);
-  if (typeof v === "string") return BigInt(v);
+  
+  if (typeof v === "number") {
+    if (!Number.isFinite(v)) {
+      throw new Error(`toBigInt: non-finite number ${v}`);
+    }
+    // Reject decimal numbers to avoid silent data loss
+    if (!Number.isInteger(v)) {
+      throw new Error(`toBigInt: decimal numbers not supported, got ${v}`);
+    }
+    return BigInt(v);
+  }
+  
+  if (typeof v === "string") {
+    const s = v.trim();
+    // Accept both positive and negative integers; reject scientific notation or non-integer strings
+    if (!/^-?\d+$/.test(s)) {
+      throw new Error(`toBigInt: invalid integer string ${JSON.stringify(v)}`);
+    }
+    return BigInt(s);
+  }
   
   // Check if this is a BigFractionBytes (has value array)
   if (v && typeof v === "object") {
-    if ("value" in v && Array.isArray((v as { value: unknown }).value)) {
-      return bigFractionBytesToBigInt(v);
+    const obj = v as any;
+    
+    // Check for SF/BSF fields (scaled fraction/big scaled fraction)
+    if (obj.bsf != null) {
+      return toBigInt(obj.bsf);
+    }
+    if (obj.raw != null) {
+      return toBigInt(obj.raw);
+    }
+    if ("value" in obj) {
+      // Could be BigFractionBytes with array or a simple value field
+      if (Array.isArray(obj.value)) {
+        return bigFractionBytesToBigInt(v);
+      }
+      // Try to convert the value field directly
+      return toBigInt(obj.value);
     }
     
     // Validate BN-like object more carefully
@@ -101,7 +133,7 @@ export function toBigInt(v: unknown): bigint {
     }
   }
   
-  throw new Error(`Unsupported BN-like value: ${String(v)}`);
+  throw new Error(`toBigInt: unsupported type ${typeof v}, value: ${JSON.stringify(v)}`);
 }
 
 /**
