@@ -87,13 +87,17 @@ export function toBigInt(v: unknown): bigint {
     if (!Number.isFinite(v)) {
       throw new Error(`toBigInt: non-finite number ${v}`);
     }
-    return BigInt(Math.trunc(v));
+    // Reject decimal numbers to avoid silent data loss
+    if (!Number.isInteger(v)) {
+      throw new Error(`toBigInt: decimal numbers not supported, got ${v}`);
+    }
+    return BigInt(v);
   }
   
   if (typeof v === "string") {
     const s = v.trim();
-    // Only accept decimal digits; reject scientific notation or non-integer strings
-    if (!/^\d+$/.test(s)) {
+    // Accept both positive and negative integers; reject scientific notation or non-integer strings
+    if (!/^-?\d+$/.test(s)) {
       throw new Error(`toBigInt: invalid integer string ${JSON.stringify(v)}`);
     }
     return BigInt(s);

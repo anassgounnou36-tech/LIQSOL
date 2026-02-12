@@ -435,9 +435,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       const SCALE_1E18 = 10n ** 18n;
       const borrowAmountBaseBig = (borrowedSf * cumRateBsf) / SCALE_1E18 / SCALE_1E18;
       
-      // Close factor typically 50% for Kamino
-      const closeFactorBps = 500n; // 50% = 500 basis points out of 1000
-      const liquidityBaseBig = (borrowAmountBaseBig * closeFactorBps) / 1000n;
+      // Close factor typically 50% for Kamino (500 parts per thousand)
+      const closeFactorPermille = 500n; // 50% = 500/1000
+      const liquidityBaseBig = (borrowAmountBaseBig * closeFactorPermille) / 1000n;
       
       // Ensure we have a minimum amount
       if (liquidityBaseBig === 0n) {
