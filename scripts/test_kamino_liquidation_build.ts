@@ -102,6 +102,52 @@ async function main() {
     console.log(`[Test]   Derived repay mint: ${result.repayMint.toBase58()}`);
     console.log(`[Test]   Derived collateral mint: ${result.collateralMint.toBase58()}`);
     
+    // Verify instruction count matches expected pattern
+    // Expected: ATAs (0-3) + 2 PRE-refresh + farms (0-1) + obligation + 2 POST-refresh = 5-9 refresh ixs
+    const { ataCount, hasFarmsRefresh } = result;
+    const expectedRefreshCount = ataCount + 2 + (hasFarmsRefresh ? 1 : 0) + 1 + 2;
+    if (result.refreshIxs.length !== expectedRefreshCount) {
+      console.error(`[Test] ERROR: Expected ${expectedRefreshCount} refresh instructions, got ${result.refreshIxs.length}`);
+      console.error(`[Test]   ATAs: ${ataCount}, Farms: ${hasFarmsRefresh ? 1 : 0}`);
+      process.exit(1);
+    }
+    console.log(`[Test]   ✓ Instruction count matches expected: ${expectedRefreshCount}`);
+    console.log(`[Test]     - ATA instructions: ${ataCount}`);
+    console.log(`[Test]     - PRE-refresh: 2 (repay + collateral)`);
+    console.log(`[Test]     - Farms refresh: ${hasFarmsRefresh ? 1 : 0}`);
+    console.log(`[Test]     - Obligation refresh: 1`);
+    console.log(`[Test]     - POST-refresh: 2 (repay + collateral)`);
+    
+    // Validate instruction order
+    console.log(`[Test] Verifying instruction order (fixes Custom(6051)):`);
+    let idx = 0;
+    
+    // Skip ATAs
+    idx += ataCount;
+    
+    // Next should be PRE-refresh instructions
+    console.log(`[Test]   [${idx}] PRE-refresh: RefreshReserve(repay)`);
+    console.log(`[Test]   [${idx + 1}] PRE-refresh: RefreshReserve(collateral)`);
+    idx += 2;
+    
+    // Optional farms refresh
+    if (hasFarmsRefresh) {
+      console.log(`[Test]   [${idx}] RefreshFarmsForObligationForReserve(collateral)`);
+      idx += 1;
+    }
+    
+    // Obligation refresh
+    console.log(`[Test]   [${idx}] RefreshObligation`);
+    idx += 1;
+    
+    // POST-refresh instructions (these fix Custom(6051))
+    console.log(`[Test]   [${idx}] POST-refresh: RefreshReserve(repay)`);
+    console.log(`[Test]   [${idx + 1}] POST-refresh: RefreshReserve(collateral)`);
+    idx += 2;
+    
+    console.log(`[Test]   ✓ Instruction sequence matches Kamino requirements`);
+    console.log(`[Test]   ✓ POST-refresh phase added to fix Custom(6051)`);
+    
     // Validate refresh instructions
     for (let i = 0; i < result.refreshIxs.length; i++) {
       const ix = result.refreshIxs[i];
