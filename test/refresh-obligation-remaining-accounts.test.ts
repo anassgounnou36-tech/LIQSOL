@@ -106,13 +106,16 @@ describe("RefreshObligation Remaining Accounts Fix", () => {
     const mockDeposits = [];
     const mockBorrows = [];
     
-    // Create 7 unique deposit reserves (some will overlap with borrows)
+    // Create 7 deposit reserves with values 3-9 (i=2..8, buffer filled with i+1)
+    // This creates deposit reserves: 3, 4, 5, 6, 7, 8, 9
     for (let i = 2; i < 9; i++) {
       const pk = new PublicKey(Buffer.alloc(32, i + 1));
       mockDeposits.push({ depositReserve: pk });
     }
     
-    // Create 5 unique borrow reserves
+    // Create 5 borrow reserves with values 1-5 (i=0..4, buffer filled with i+1)
+    // This creates borrow reserves: 1, 2, 3, 4, 5
+    // Overlap: reserves 3, 4, 5 appear in both deposits and borrows (tests deduplication)
     for (let i = 0; i < 5; i++) {
       const pk = new PublicKey(Buffer.alloc(32, i + 1));
       mockBorrows.push({ borrowReserve: pk });
