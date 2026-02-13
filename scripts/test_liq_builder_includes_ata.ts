@@ -5,7 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * Test that liquidation builder includes ATA create instructions in refreshIxs
+ * Test that liquidation builder properly separates ATA create instructions
+ * TX Size Fix: ATAs should be in setupIxs, not refreshIxs
  */
 (async () => {
   loadEnv();
@@ -65,24 +66,46 @@ import path from "node:path";
     });
 
     console.log(`\n✓ Built instructions successfully`);
+    console.log(`  Setup ixs: ${result.setupIxs.length}`);
     console.log(`  Refresh ixs: ${result.refreshIxs.length}`);
     console.log(`  Liquidation ixs: ${result.liquidationIxs.length}`);
     console.log(`  Repay mint: ${result.repayMint.toBase58()}`);
     console.log(`  Collateral mint: ${result.collateralMint.toBase58()}`);
 
-    // Check if refreshIxs includes ATA create instructions
+    // TX Size Fix: Check that ATAs are in setupIxs, NOT in refreshIxs
     // ATA create instructions use the Associated Token Program
     const ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
-    const ataInstructions = result.refreshIxs.filter(
+    
+    const ataInSetup = result.setupIxs.filter(
+      ix => ix.programId.toBase58() === ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    
+    const ataInRefresh = result.refreshIxs.filter(
       ix => ix.programId.toBase58() === ASSOCIATED_TOKEN_PROGRAM_ID
     );
 
-    if (ataInstructions.length >= 3) {
-      console.log(`\n✓ SUCCESS: Found ${ataInstructions.length} ATA create instructions in refreshIxs`);
-      console.log("  Expected: 3 (source liquidity, destination collateral, destination liquidity)");
+    // Verify ATAs are NOT in refreshIxs (the fix)
+    if (ataInRefresh.length > 0) {
+      console.error(`\n✗ FAILURE: Found ${ataInRefresh.length} ATA instructions in refreshIxs`);
+      console.error("  ATAs should be in setupIxs to keep liquidation TX small");
+      process.exit(1);
+    }
+
+    console.log(`\n✓ Verification passed: refreshIxs contains NO ATA instructions`);
+    
+    // Verify setupIxs structure (may be empty if all ATAs exist)
+    if (result.setupIxs.length === 0) {
+      console.log(`\n✓ All ATAs already exist (no setup needed)`);
+      console.log("  This is expected when running test multiple times");
+      console.log("✓ SUCCESS: ATA separation working correctly!");
+      process.exit(0);
+    } else if (ataInSetup.length > 0) {
+      console.log(`\n✓ Found ${ataInSetup.length} ATA instructions in setupIxs`);
+      console.log("  Expected: up to 3 (repay, collateral, withdrawLiq)");
+      console.log("✓ SUCCESS: ATAs properly separated into setup transaction!");
       process.exit(0);
     } else {
-      console.error(`\n✗ FAILURE: Expected at least 3 ATA create instructions, found ${ataInstructions.length}`);
+      console.error(`\n✗ FAILURE: Setup contains non-ATA instructions`);
       process.exit(1);
     }
   } catch (err) {
