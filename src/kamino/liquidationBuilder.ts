@@ -429,7 +429,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     { name: 'withdrawLiq', ata: userDestinationLiquidityAta, mint: withdrawLiquidityMint, tokenProgram: withdrawLiquidityTokenProgramId },
   ];
   
-  // Optimize: Use single RPC call to check all ATAs at once
+  // Optimized: Single RPC call to check all ATAs at once (vs 3 sequential calls)
   const ataAddresses = ataChecks.map(c => c.ata);
   const accountInfos = await p.connection.getMultipleAccountsInfo(ataAddresses);
   

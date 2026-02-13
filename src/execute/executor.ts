@@ -550,11 +550,12 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     console.log(`[Executor] Setup will be processed in a separate transaction to keep liquidation TX small`);
     
     // Assertion: Verify setup labels match setup instructions
+    // This should never fail unless there's a bug in the label generation logic
     if (setupLabels.length !== setupIxs.length) {
       const errorMsg = 
-        `Internal error: Setup label count (${setupLabels.length}) does not match setup instruction count (${setupIxs.length}). ` +
-        `This indicates a bug in instruction building or labeling logic.`;
-      console.error(`[Executor] ❌ CRITICAL: Setup label/instruction count mismatch!`);
+        `Setup instruction/label count mismatch: ${setupIxs.length} instructions but ${setupLabels.length} labels. ` +
+        `This indicates a bug in the liquidation builder's setupAtaNames array generation.`;
+      console.error(`[Executor] ❌ Setup label/instruction count mismatch!`);
       throw new Error(errorMsg);
     }
     
