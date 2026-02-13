@@ -199,25 +199,34 @@ async function buildFullTransaction(
   ixs.push(...liquidationResult.refreshIxs);
   
   // Label refresh instructions using metadata from liquidationResult
-  const { ataCount, reserveRefreshCount, hasFarmsRefresh } = liquidationResult;
+  const { ataCount, hasFarmsRefresh } = liquidationResult;
   
   // ATAs first
   for (let i = 0; i < ataCount; i++) {
     labels.push(`ata:${i === 0 ? 'repay' : i === 1 ? 'collateral' : 'withdraw'}`);
   }
   
-  // Reserve refreshes (now first in refresh sequence after ATAs)
-  for (let i = 0; i < reserveRefreshCount; i++) {
-    labels.push(`refreshReserve:${i === 0 ? 'repay' : 'collateral'}`);
-  }
+  // Reserve refreshes in the order they appear in refreshIxs:
+  // PRE-refresh phase (first 2): repay:pre, collateral:pre
+  // Then farms refresh (optional)
+  // Then obligation refresh
+  // POST-refresh phase (last 2): repay:post, collateral:post
   
-  // Farms refresh (optional, after reserve refreshes)
+  // First 2 reserve refreshes (PRE-refresh phase)
+  labels.push('refreshReserve:repay:pre');
+  labels.push('refreshReserve:collateral:pre');
+  
+  // Farms refresh (optional, after PRE reserve refreshes)
   if (hasFarmsRefresh) {
     labels.push('refreshFarms');
   }
   
-  // Obligation refresh (always last in refreshIxs)
+  // Obligation refresh (after farms refresh)
   labels.push('refreshObligation');
+  
+  // Last 2 reserve refreshes (POST-refresh phase)
+  labels.push('refreshReserve:repay:post');
+  labels.push('refreshReserve:collateral:post');
   
   ixs.push(...liquidationResult.liquidationIxs);
   labels.push('liquidate');

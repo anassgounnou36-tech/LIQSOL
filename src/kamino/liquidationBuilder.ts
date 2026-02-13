@@ -450,12 +450,15 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // Prepend ATA create instructions to refreshIxs
   refreshIxs.push(...ataCreateIxs);
   
-  // PART B: Build refresh instructions in the order required to prevent ReserveStale
-  // Required order (to fix Custom(6009) ReserveStale):
+  // PART B: Build refresh instructions in the order required to prevent ReserveStale AND Custom(6051)
+  // PRE-REFRESH phase (to fix Custom(6009) ReserveStale):
   // 1. RefreshReserve (repay reserve) - MUST refresh before RefreshObligation
   // 2. RefreshReserve (collateral reserve) - MUST refresh before RefreshObligation
+  // POST-REFRESH phase (to fix Custom(6051) IncorrectInstructionInPosition):
   // 3. RefreshFarmsForObligationForReserve (collateral reserve, if exists)
   // 4. RefreshObligation (all reserves in canonical order)
+  // 5. RefreshReserve (repay reserve) - POST refresh immediately before liquidation
+  // 6. RefreshReserve (collateral reserve) - POST refresh immediately before liquidation
   
   const DEFAULT_PUBKEY = "11111111111111111111111111111111";
   
@@ -494,15 +497,16 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const repayReservePubkey = repayReserve.address;
   const collateralReservePubkey = collateralReserve.address;
   
+  // PRE-REFRESH PHASE: RefreshReserve instructions before RefreshObligation
   // STEP 1: RefreshReserve for repay reserve (MUST execute before RefreshObligation)
-  console.log(`[LiqBuilder] Adding RefreshReserve for repay reserve`);
-  const repayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'refreshRepay');
-  refreshIxs.push(repayRefreshIx);
+  console.log(`[LiqBuilder] Adding PRE-refresh RefreshReserve for repay reserve`);
+  const repayRefreshPreIx = buildRefreshReserveIx(repayReservePubkey, 'refreshRepay:pre');
+  refreshIxs.push(repayRefreshPreIx);
   
   // STEP 2: RefreshReserve for collateral reserve (MUST execute before RefreshObligation)
-  console.log(`[LiqBuilder] Adding RefreshReserve for collateral reserve`);
-  const collateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'refreshCollateral');
-  refreshIxs.push(collateralRefreshIx);
+  console.log(`[LiqBuilder] Adding PRE-refresh RefreshReserve for collateral reserve`);
+  const collateralRefreshPreIx = buildRefreshReserveIx(collateralReservePubkey, 'refreshCollateral:pre');
+  refreshIxs.push(collateralRefreshPreIx);
   
   // STEP 3: RefreshFarmsForObligationForReserve for collateral reserve (if farm exists)
   // Check if collateral reserve has a farm configured
@@ -579,6 +583,18 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     programId: new PublicKey(addressSafe(obligationRefreshIx.programAddress, 'obligationRefresh.programAddress')),
     data: Buffer.from(obligationRefreshIx.data || []),
   }));
+  
+  // POST-REFRESH PHASE: RefreshReserve instructions after RefreshObligation and before liquidation
+  // This is required by Kamino to pass Custom(6051) IncorrectInstructionInPosition check
+  // STEP 5: RefreshReserve for repay reserve (POST refresh)
+  console.log(`[LiqBuilder] Adding POST-refresh RefreshReserve for repay reserve`);
+  const repayRefreshPostIx = buildRefreshReserveIx(repayReservePubkey, 'refreshRepay:post');
+  refreshIxs.push(repayRefreshPostIx);
+  
+  // STEP 6: RefreshReserve for collateral reserve (POST refresh)
+  console.log(`[LiqBuilder] Adding POST-refresh RefreshReserve for collateral reserve`);
+  const collateralRefreshPostIx = buildRefreshReserveIx(collateralReservePubkey, 'refreshCollateral:post');
+  refreshIxs.push(collateralRefreshPostIx);
   
   // 4) Derive repay amount
   // If repayAmountUi provided, convert to base units with exact string→integer conversion
@@ -719,9 +735,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     collateralMint,
     // Metadata for instruction labeling
     ataCount: ataCreateIxs.length,
-    // Reserve refresh count: 2 reserve refreshes (repay + collateral)
+    // Reserve refresh count: 4 reserve refreshes (2 PRE + 2 POST)
     // Note: This doesn't include RefreshFarmsForObligationForReserve or RefreshObligation
-    reserveRefreshCount: 2,
+    reserveRefreshCount: 4,
     // Track whether farms refresh instruction was added
     hasFarmsRefresh,
     // lookupTables: undefined, // Can be added later if needed
