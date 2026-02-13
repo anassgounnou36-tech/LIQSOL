@@ -317,31 +317,35 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     }
   }
   
-  // PART A: Gather all obligation reserves (borrows + deposits)
+  // PART A: Gather all obligation reserves in CANONICAL ORDER (deposits first, then borrows)
   // Extract all reserve pubkeys from obligation state for refreshObligation remaining accounts
-  const allReservePubkeys = new Set<string>();
+  // FIX: Preserve canonical obligation order (deposits → borrows) and dedupe without reordering
+  const orderedReserves: string[] = [];
+  const seenReserves = new Set<string>();
   
-  // Add all borrow reserves
-  for (const borrow of borrows) {
-    const reservePubkey = borrow.borrowReserve.toString();
-    if (reservePubkey !== PublicKey.default.toString()) {
-      allReservePubkeys.add(reservePubkey);
-    }
-  }
-  
-  // Add all deposit reserves
+  // Add deposit reserves FIRST (in order) - Kamino expects deposits before borrows
   for (const deposit of deposits) {
     const reservePubkey = deposit.depositReserve.toString();
-    if (reservePubkey !== PublicKey.default.toString()) {
-      allReservePubkeys.add(reservePubkey);
+    if (reservePubkey !== PublicKey.default.toString() && !seenReserves.has(reservePubkey)) {
+      orderedReserves.push(reservePubkey);
+      seenReserves.add(reservePubkey);
     }
   }
   
-  // Convert to array for ordered processing
-  const uniqueReserves = Array.from(allReservePubkeys);
+  // Then add borrow reserves (in order) - skip duplicates already added from deposits
+  for (const borrow of borrows) {
+    const reservePubkey = borrow.borrowReserve.toString();
+    if (reservePubkey !== PublicKey.default.toString() && !seenReserves.has(reservePubkey)) {
+      orderedReserves.push(reservePubkey);
+      seenReserves.add(reservePubkey);
+    }
+  }
   
-  console.log(`[LiqBuilder] Gathered ${uniqueReserves.length} unique reserves from obligation`);
-  console.log(`[LiqBuilder]   Borrows: ${borrows.length}, Deposits: ${deposits.length}`);
+  // Use ordered reserves (preserves canonical order for refreshObligation)
+  const uniqueReserves = orderedReserves;
+  
+  console.log(`[LiqBuilder] Gathered ${uniqueReserves.length} unique reserves in canonical order (deposits→borrows)`);
+  console.log(`[LiqBuilder]   Deposits: ${deposits.length}, Borrows: ${borrows.length}`);
   
   // Validate that expected reserves are in the unique set
   if (p.expectedRepayReservePubkey) {

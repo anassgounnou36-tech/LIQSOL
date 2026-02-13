@@ -2,9 +2,11 @@
  * Test to verify the refreshObligation remaining accounts fix (Custom 6006)
  * 
  * This test validates that:
- * 1. All obligation reserves (borrows + deposits) are extracted correctly
- * 2. Reserves are deduplicated and default pubkeys filtered out
- * 3. The remainingAccounts array is properly constructed and passed to refreshObligation
+ * 1. All obligation reserves (borrows + deposits) are extracted in CANONICAL ORDER
+ * 2. Deposits are processed FIRST, then borrows (matching Kamino protocol expectations)
+ * 3. Reserves are deduplicated WITHOUT changing order (preserve first occurrence)
+ * 4. Default pubkeys are filtered out
+ * 5. The remainingAccounts array is properly constructed and passed to refreshObligation
  */
 
 import { describe, it, expect } from "vitest";
@@ -13,73 +15,87 @@ import { PublicKey } from "@solana/web3.js";
 describe("RefreshObligation Remaining Accounts Fix", () => {
   const DEFAULT_PUBKEY = PublicKey.default.toString();
   
-  it("should extract unique reserves from obligation borrows and deposits", () => {
+  it("should extract reserves in canonical order: deposits first, then borrows", () => {
     // Mock obligation data structure (use valid base58 keys)
-    const mockBorrows = [
-      { borrowReserve: new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix") },
-      { borrowReserve: new PublicKey("9vMJfxuKxXBoEa7rM12mYLMwTacLMLDJqHozw96WQL8i") },
-      { borrowReserve: PublicKey.default }, // Should be filtered out
-    ];
-    
     const mockDeposits = [
-      { depositReserve: new PublicKey("HE3WgTQTkNYmgPz4mYqQPJgYzwSXGzmfLBqSVJfAcKxz") },
-      { depositReserve: new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix") }, // Duplicate
+      { depositReserve: new PublicKey("HE3WgTQTkNYmgPz4mYqQPJgYzwSXGzmfLBqSVJfAcKxz") }, // deposit[0]
+      { depositReserve: new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix") }, // deposit[1]
       { depositReserve: PublicKey.default }, // Should be filtered out
     ];
     
-    // Extract reserves (same logic as liquidationBuilder.ts Part A)
-    const allReservePubkeys = new Set<string>();
+    const mockBorrows = [
+      { borrowReserve: new PublicKey("9vMJfxuKxXBoEa7rM12mYLMwTacLMLDJqHozw96WQL8i") }, // borrow[0]
+      { borrowReserve: new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix") }, // borrow[1] - duplicate, should be skipped
+      { borrowReserve: PublicKey.default }, // Should be filtered out
+    ];
     
-    for (const borrow of mockBorrows) {
-      const reservePubkey = borrow.borrowReserve.toString();
-      if (reservePubkey !== DEFAULT_PUBKEY) {
-        allReservePubkeys.add(reservePubkey);
-      }
-    }
+    // Extract reserves in CANONICAL ORDER (deposits first, then borrows) - NEW LOGIC
+    const orderedReserves: string[] = [];
+    const seenReserves = new Set<string>();
     
+    // Add deposit reserves FIRST (in order)
     for (const deposit of mockDeposits) {
       const reservePubkey = deposit.depositReserve.toString();
-      if (reservePubkey !== DEFAULT_PUBKEY) {
-        allReservePubkeys.add(reservePubkey);
+      if (reservePubkey !== DEFAULT_PUBKEY && !seenReserves.has(reservePubkey)) {
+        orderedReserves.push(reservePubkey);
+        seenReserves.add(reservePubkey);
       }
     }
     
-    const uniqueReserves = Array.from(allReservePubkeys);
+    // Then add borrow reserves (in order) - skip duplicates
+    for (const borrow of mockBorrows) {
+      const reservePubkey = borrow.borrowReserve.toString();
+      if (reservePubkey !== DEFAULT_PUBKEY && !seenReserves.has(reservePubkey)) {
+        orderedReserves.push(reservePubkey);
+        seenReserves.add(reservePubkey);
+      }
+    }
+    
+    const uniqueReserves = orderedReserves;
     
     // Verify results
     expect(uniqueReserves.length).toBe(3);
-    expect(uniqueReserves).toContain("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix");
-    expect(uniqueReserves).toContain("9vMJfxuKxXBoEa7rM12mYLMwTacLMLDJqHozw96WQL8i");
-    expect(uniqueReserves).toContain("HE3WgTQTkNYmgPz4mYqQPJgYzwSXGzmfLBqSVJfAcKxz");
+    
+    // CRITICAL: Verify canonical ordering (deposits before borrows)
+    expect(uniqueReserves[0]).toBe("HE3WgTQTkNYmgPz4mYqQPJgYzwSXGzmfLBqSVJfAcKxz"); // deposit[0]
+    expect(uniqueReserves[1]).toBe("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"); // deposit[1]
+    expect(uniqueReserves[2]).toBe("9vMJfxuKxXBoEa7rM12mYLMwTacLMLDJqHozw96WQL8i"); // borrow[0] (borrow[1] skipped as duplicate)
+    
     expect(uniqueReserves).not.toContain(DEFAULT_PUBKEY);
   });
   
   it("should handle obligation with single reserve (borrow and deposit same)", () => {
-    const mockBorrows = [
-      { borrowReserve: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA") },
-    ];
-    
     const mockDeposits = [
       { depositReserve: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA") },
     ];
     
-    const allReservePubkeys = new Set<string>();
+    const mockBorrows = [
+      { borrowReserve: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA") },
+    ];
     
-    for (const borrow of mockBorrows) {
-      const reservePubkey = borrow.borrowReserve.toString();
-      if (reservePubkey !== DEFAULT_PUBKEY) {
-        allReservePubkeys.add(reservePubkey);
-      }
-    }
+    // Extract reserves in CANONICAL ORDER
+    const orderedReserves: string[] = [];
+    const seenReserves = new Set<string>();
     
+    // Add deposit reserves FIRST
     for (const deposit of mockDeposits) {
       const reservePubkey = deposit.depositReserve.toString();
-      if (reservePubkey !== DEFAULT_PUBKEY) {
-        allReservePubkeys.add(reservePubkey);
+      if (reservePubkey !== DEFAULT_PUBKEY && !seenReserves.has(reservePubkey)) {
+        orderedReserves.push(reservePubkey);
+        seenReserves.add(reservePubkey);
       }
     }
     
-    const uniqueReserves = Array.from(allReservePubkeys);
+    // Then add borrow reserves - skip duplicates
+    for (const borrow of mockBorrows) {
+      const reservePubkey = borrow.borrowReserve.toString();
+      if (reservePubkey !== DEFAULT_PUBKEY && !seenReserves.has(reservePubkey)) {
+        orderedReserves.push(reservePubkey);
+        seenReserves.add(reservePubkey);
+      }
+    }
+    
+    const uniqueReserves = orderedReserves;
     
     // Should deduplicate to single reserve
     expect(uniqueReserves.length).toBe(1);
@@ -87,8 +103,14 @@ describe("RefreshObligation Remaining Accounts Fix", () => {
   });
   
   it("should handle obligation with many reserves (stress test)", () => {
-    const mockBorrows = [];
     const mockDeposits = [];
+    const mockBorrows = [];
+    
+    // Create 7 unique deposit reserves (some will overlap with borrows)
+    for (let i = 2; i < 9; i++) {
+      const pk = new PublicKey(Buffer.alloc(32, i + 1));
+      mockDeposits.push({ depositReserve: pk });
+    }
     
     // Create 5 unique borrow reserves
     for (let i = 0; i < 5; i++) {
@@ -96,61 +118,67 @@ describe("RefreshObligation Remaining Accounts Fix", () => {
       mockBorrows.push({ borrowReserve: pk });
     }
     
-    // Create 7 unique deposit reserves (some overlap with borrows)
-    for (let i = 2; i < 9; i++) {
-      const pk = new PublicKey(Buffer.alloc(32, i + 1));
-      mockDeposits.push({ depositReserve: pk });
-    }
+    // Extract reserves in CANONICAL ORDER
+    const orderedReserves: string[] = [];
+    const seenReserves = new Set<string>();
     
-    const allReservePubkeys = new Set<string>();
-    
-    for (const borrow of mockBorrows) {
-      const reservePubkey = borrow.borrowReserve.toString();
-      if (reservePubkey !== DEFAULT_PUBKEY) {
-        allReservePubkeys.add(reservePubkey);
-      }
-    }
-    
+    // Add deposit reserves FIRST
     for (const deposit of mockDeposits) {
       const reservePubkey = deposit.depositReserve.toString();
-      if (reservePubkey !== DEFAULT_PUBKEY) {
-        allReservePubkeys.add(reservePubkey);
+      if (reservePubkey !== DEFAULT_PUBKEY && !seenReserves.has(reservePubkey)) {
+        orderedReserves.push(reservePubkey);
+        seenReserves.add(reservePubkey);
       }
     }
     
-    const uniqueReserves = Array.from(allReservePubkeys);
+    // Then add borrow reserves - skip duplicates
+    for (const borrow of mockBorrows) {
+      const reservePubkey = borrow.borrowReserve.toString();
+      if (reservePubkey !== DEFAULT_PUBKEY && !seenReserves.has(reservePubkey)) {
+        orderedReserves.push(reservePubkey);
+        seenReserves.add(reservePubkey);
+      }
+    }
+    
+    const uniqueReserves = orderedReserves;
     
     // Should have 9 unique reserves (1-9)
     expect(uniqueReserves.length).toBe(9);
   });
   
   it("should validate expected reserves are present in unique set", () => {
+    const mockDeposits = [
+      { depositReserve: new PublicKey("7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs") }, // ETH
+    ];
+    
     const mockBorrows = [
       { borrowReserve: new PublicKey("So11111111111111111111111111111111111111112") }, // SOL
       { borrowReserve: new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v") }, // USDC
     ];
     
-    const mockDeposits = [
-      { depositReserve: new PublicKey("7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs") }, // ETH
-    ];
+    // Extract reserves in CANONICAL ORDER
+    const orderedReserves: string[] = [];
+    const seenReserves = new Set<string>();
     
-    const allReservePubkeys = new Set<string>();
-    
-    for (const borrow of mockBorrows) {
-      const reservePubkey = borrow.borrowReserve.toString();
-      if (reservePubkey !== DEFAULT_PUBKEY) {
-        allReservePubkeys.add(reservePubkey);
-      }
-    }
-    
+    // Add deposit reserves FIRST
     for (const deposit of mockDeposits) {
       const reservePubkey = deposit.depositReserve.toString();
-      if (reservePubkey !== DEFAULT_PUBKEY) {
-        allReservePubkeys.add(reservePubkey);
+      if (reservePubkey !== DEFAULT_PUBKEY && !seenReserves.has(reservePubkey)) {
+        orderedReserves.push(reservePubkey);
+        seenReserves.add(reservePubkey);
       }
     }
     
-    const uniqueReserves = Array.from(allReservePubkeys);
+    // Then add borrow reserves - skip duplicates
+    for (const borrow of mockBorrows) {
+      const reservePubkey = borrow.borrowReserve.toString();
+      if (reservePubkey !== DEFAULT_PUBKEY && !seenReserves.has(reservePubkey)) {
+        orderedReserves.push(reservePubkey);
+        seenReserves.add(reservePubkey);
+      }
+    }
+    
+    const uniqueReserves = orderedReserves;
     
     // Validate expected reserves are present (same as liquidationBuilder.ts validation)
     const expectedRepayReserve = "So11111111111111111111111111111111111111112";
