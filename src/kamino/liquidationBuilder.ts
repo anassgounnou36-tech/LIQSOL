@@ -61,6 +61,7 @@ export interface KaminoLiquidationResult {
   // Metadata for instruction labeling
   ataCount: number; // Number of ATA create instructions at start of refreshIxs
   reserveRefreshCount: number; // Number of reserve refresh instructions
+  hasFarmsRefresh: boolean; // Whether RefreshFarmsForObligationForReserve was included
 }
 
 /**
@@ -449,12 +450,12 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // Prepend ATA create instructions to refreshIxs
   refreshIxs.push(...ataCreateIxs);
   
-  // PART B: Build refresh instructions in the order required by Kamino
-  // Required order (per Kamino sysvar instructions validation):
-  // 1. RefreshFarmsForObligationForReserve (collateral reserve)
-  // 2. RefreshObligation (all reserves in canonical order)
-  // 3. RefreshReserve (repay reserve)
-  // 4. RefreshReserve (collateral reserve)
+  // PART B: Build refresh instructions in the order required to prevent ReserveStale
+  // Required order (to fix Custom(6009) ReserveStale):
+  // 1. RefreshReserve (repay reserve) - MUST refresh before RefreshObligation
+  // 2. RefreshReserve (collateral reserve) - MUST refresh before RefreshObligation
+  // 3. RefreshFarmsForObligationForReserve (collateral reserve, if exists)
+  // 4. RefreshObligation (all reserves in canonical order)
   
   const DEFAULT_PUBKEY = "11111111111111111111111111111111";
   
@@ -493,13 +494,25 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const repayReservePubkey = repayReserve.address;
   const collateralReservePubkey = collateralReserve.address;
   
-  // STEP 1: RefreshFarmsForObligationForReserve for collateral reserve (if farm exists)
+  // STEP 1: RefreshReserve for repay reserve (MUST execute before RefreshObligation)
+  console.log(`[LiqBuilder] Adding RefreshReserve for repay reserve`);
+  const repayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'refreshRepay');
+  refreshIxs.push(repayRefreshIx);
+  
+  // STEP 2: RefreshReserve for collateral reserve (MUST execute before RefreshObligation)
+  console.log(`[LiqBuilder] Adding RefreshReserve for collateral reserve`);
+  const collateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'refreshCollateral');
+  refreshIxs.push(collateralRefreshIx);
+  
+  // STEP 3: RefreshFarmsForObligationForReserve for collateral reserve (if farm exists)
   // Check if collateral reserve has a farm configured
   const collateralFarmState = collateralReserve.state.farmCollateral;
   console.log(`[LiqBuilder] Collateral reserve farm state: ${collateralFarmState}`);
   
+  let hasFarmsRefresh = false;
   if (collateralFarmState !== DEFAULT_PUBKEY) {
     console.log(`[LiqBuilder] Adding RefreshFarmsForObligationForReserve for collateral reserve`);
+    hasFarmsRefresh = true;
     
     // Derive the obligation farm state PDA
     const obligationFarmUserState = await obligationFarmStatePda(
@@ -546,7 +559,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     console.log(`[LiqBuilder] Collateral reserve has no farm, skipping RefreshFarmsForObligationForReserve`);
   }
   
-  // STEP 2: RefreshObligation with ALL reserves as remaining accounts
+  // STEP 4: RefreshObligation with ALL reserves as remaining accounts
   // Convert reserve pubkeys to AccountMeta format for SDK
   // According to Kamino SDK, reserves passed as remaining accounts should be read-only (role 0)
   const remainingAccounts = uniqueReserves.map(r => ({
@@ -566,16 +579,6 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     programId: new PublicKey(addressSafe(obligationRefreshIx.programAddress, 'obligationRefresh.programAddress')),
     data: Buffer.from(obligationRefreshIx.data || []),
   }));
-  
-  // STEP 3: RefreshReserve for repay reserve
-  console.log(`[LiqBuilder] Adding RefreshReserve for repay reserve`);
-  const repayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'refreshRepay');
-  refreshIxs.push(repayRefreshIx);
-  
-  // STEP 4: RefreshReserve for collateral reserve
-  console.log(`[LiqBuilder] Adding RefreshReserve for collateral reserve`);
-  const collateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'refreshCollateral');
-  refreshIxs.push(collateralRefreshIx);
   
   // 4) Derive repay amount
   // If repayAmountUi provided, convert to base units with exact string→integer conversion
@@ -719,6 +722,8 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     // Reserve refresh count: 2 reserve refreshes (repay + collateral)
     // Note: This doesn't include RefreshFarmsForObligationForReserve or RefreshObligation
     reserveRefreshCount: 2,
+    // Track whether farms refresh instruction was added
+    hasFarmsRefresh,
     // lookupTables: undefined, // Can be added later if needed
   };
 }
