@@ -52,6 +52,9 @@ export interface KaminoLiquidationResult {
   lookupTables?: AddressLookupTableAccount[];
   repayMint: PublicKey;
   collateralMint: PublicKey;
+  // Metadata for instruction labeling
+  ataCount: number; // Number of ATA create instructions at start of refreshIxs
+  reserveRefreshCount: number; // Number of reserve refresh instructions
 }
 
 /**
@@ -314,6 +317,53 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     }
   }
   
+  // PART A: Gather all obligation reserves (borrows + deposits)
+  // Extract all reserve pubkeys from obligation state for refreshObligation remaining accounts
+  const allReservePubkeys = new Set<string>();
+  
+  // Add all borrow reserves
+  for (const borrow of borrows) {
+    const reservePubkey = borrow.borrowReserve.toString();
+    if (reservePubkey !== PublicKey.default.toString()) {
+      allReservePubkeys.add(reservePubkey);
+    }
+  }
+  
+  // Add all deposit reserves
+  for (const deposit of deposits) {
+    const reservePubkey = deposit.depositReserve.toString();
+    if (reservePubkey !== PublicKey.default.toString()) {
+      allReservePubkeys.add(reservePubkey);
+    }
+  }
+  
+  // Convert to array for ordered processing
+  const uniqueReserves = Array.from(allReservePubkeys);
+  
+  console.log(`[LiqBuilder] Gathered ${uniqueReserves.length} unique reserves from obligation`);
+  console.log(`[LiqBuilder]   Borrows: ${borrows.length}, Deposits: ${deposits.length}`);
+  
+  // Validate that expected reserves are in the unique set
+  if (p.expectedRepayReservePubkey) {
+    const expectedRepayStr = p.expectedRepayReservePubkey.toBase58();
+    if (!uniqueReserves.includes(expectedRepayStr)) {
+      throw new Error(
+        `[LiqBuilder] Expected repay reserve ${expectedRepayStr} not found in obligation reserves. ` +
+        `This should have been caught earlier - logic error.`
+      );
+    }
+  }
+  
+  if (p.expectedCollateralReservePubkey) {
+    const expectedCollateralStr = p.expectedCollateralReservePubkey.toBase58();
+    if (!uniqueReserves.includes(expectedCollateralStr)) {
+      throw new Error(
+        `[LiqBuilder] Expected collateral reserve ${expectedCollateralStr} not found in obligation reserves. ` +
+        `This should have been caught earlier - logic error.`
+      );
+    }
+  }
+  
   // Get reserve states early - needed for mint resolution and later for refresh/liquidation ixs
   const repayReserveState = repayReserve.state;
   const collateralReserveState = collateralReserve.state;
@@ -389,61 +439,93 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // Prepend ATA create instructions to refreshIxs
   refreshIxs.push(...ataCreateIxs);
   
-  // D) Build refresh instructions
-  // 1. Refresh repay reserve
+  // PART B: Build refresh instructions for ALL reserves used by obligation
+  // Kamino's refresh_obligation requires ALL deposit + borrow reserves to be passed and refreshed
   const DEFAULT_PUBKEY = "11111111111111111111111111111111";
-  const repayRefreshIx = refreshReserve({
-    reserve: repayReserve.address,
-    lendingMarket: address(p.marketPubkey.toBase58()),
-    pythOracle: (repayReserveState.config.tokenInfo.pythConfiguration.price && 
-                 repayReserveState.config.tokenInfo.pythConfiguration.price !== DEFAULT_PUBKEY) ? 
-      some(repayReserveState.config.tokenInfo.pythConfiguration.price) : none(),
-    switchboardPriceOracle: (repayReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator &&
-                             repayReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator !== DEFAULT_PUBKEY) ?
-      some(repayReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator) : none(),
-    switchboardTwapOracle: (repayReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator &&
-                           repayReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator !== DEFAULT_PUBKEY) ?
-      some(repayReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator) : none(),
-    scopePrices: (repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed &&
-                 repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed !== DEFAULT_PUBKEY) ?
-      some(repayReserveState.config.tokenInfo.scopeConfiguration.priceFeed) : none(),
-  }, [], address(p.programId.toBase58()));
   
-  refreshIxs.push(new TransactionInstruction({
-    keys: (repayRefreshIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'repayRefresh')),
-    programId: new PublicKey(addressSafe(repayRefreshIx.programAddress, 'repayRefresh.programAddress')),
-    data: Buffer.from(repayRefreshIx.data || []),
+  // Helper to build refresh instruction for a reserve
+  const buildRefreshReserveIx = (reservePubkeyStr: string, label: string): TransactionInstruction => {
+    const reserve = market.getReserveByAddress(address(reservePubkeyStr));
+    if (!reserve) {
+      throw new Error(`[LiqBuilder] Failed to load reserve ${reservePubkeyStr} from market for refresh`);
+    }
+    
+    const reserveState = reserve.state;
+    const sdkIx = refreshReserve({
+      reserve: reserve.address,
+      lendingMarket: address(p.marketPubkey.toBase58()),
+      pythOracle: (reserveState.config.tokenInfo.pythConfiguration.price && 
+                   reserveState.config.tokenInfo.pythConfiguration.price !== DEFAULT_PUBKEY) ? 
+        some(reserveState.config.tokenInfo.pythConfiguration.price) : none(),
+      switchboardPriceOracle: (reserveState.config.tokenInfo.switchboardConfiguration.priceAggregator &&
+                               reserveState.config.tokenInfo.switchboardConfiguration.priceAggregator !== DEFAULT_PUBKEY) ?
+        some(reserveState.config.tokenInfo.switchboardConfiguration.priceAggregator) : none(),
+      switchboardTwapOracle: (reserveState.config.tokenInfo.switchboardConfiguration.twapAggregator &&
+                             reserveState.config.tokenInfo.switchboardConfiguration.twapAggregator !== DEFAULT_PUBKEY) ?
+        some(reserveState.config.tokenInfo.switchboardConfiguration.twapAggregator) : none(),
+      scopePrices: (reserveState.config.tokenInfo.scopeConfiguration.priceFeed &&
+                   reserveState.config.tokenInfo.scopeConfiguration.priceFeed !== DEFAULT_PUBKEY) ?
+        some(reserveState.config.tokenInfo.scopeConfiguration.priceFeed) : none(),
+    }, [], address(p.programId.toBase58()));
+    
+    return new TransactionInstruction({
+      keys: (sdkIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, label)),
+      programId: new PublicKey(addressSafe(sdkIx.programAddress, `${label}.programAddress`)),
+      data: Buffer.from(sdkIx.data || []),
+    });
+  };
+  
+  // Prioritize repay and collateral reserves first (critical for liquidation)
+  const repayReservePubkey = repayReserve.address;
+  const collateralReservePubkey = collateralReserve.address;
+  
+  const prioritizedReserves: string[] = [repayReservePubkey, collateralReservePubkey];
+  const otherReserves = uniqueReserves.filter(
+    r => r !== repayReservePubkey && r !== collateralReservePubkey
+  );
+  
+  // Build refresh instructions for all reserves (prioritized first)
+  const allReservesToRefresh = [...prioritizedReserves, ...otherReserves];
+  
+  // TX size safety: Cap to reasonable max while ALWAYS including repay + collateral
+  // Typical Kamino obligations have 1-4 reserves, so this shouldn't be an issue
+  // Solana transaction size limit: ~1232 bytes for accounts, ~10KB total with data
+  // Each reserve refresh adds ~5 accounts (reserve, oracles, vault, etc) ≈ 160 bytes
+  // With 10 reserves we're well under limits (~1600 bytes for reserves alone)
+  const MAX_RESERVES_PER_TX = 10; // Conservative limit (tune higher if needed, max ~20 before hitting TX limits)
+  const reservesToRefresh = allReservesToRefresh.slice(0, MAX_RESERVES_PER_TX);
+  
+  if (allReservesToRefresh.length > MAX_RESERVES_PER_TX) {
+    console.warn(
+      `[LiqBuilder] WARNING: Obligation has ${allReservesToRefresh.length} reserves, ` +
+      `capping to ${MAX_RESERVES_PER_TX} (repay+collateral always included). ` +
+      `This may cause Custom(6006) if Kamino expects all reserves.`
+    );
+  }
+  
+  console.log(`[LiqBuilder] Building refresh instructions for ${reservesToRefresh.length} reserves`);
+  
+  for (let i = 0; i < reservesToRefresh.length; i++) {
+    const reservePubkey = reservesToRefresh[i];
+    const label = i === 0 ? 'refreshRepay' : i === 1 ? 'refreshCollateral' : `refreshReserve${i}`;
+    const ix = buildRefreshReserveIx(reservePubkey, label);
+    refreshIxs.push(ix);
+  }
+  
+  // PART C: Refresh obligation with ALL reserves as remaining accounts (CRITICAL FIX)
+  // Convert reserve pubkeys to AccountMeta format for SDK
+  // According to Kamino SDK, reserves passed as remaining accounts should be read-only (role 0)
+  const remainingAccounts = uniqueReserves.map(r => ({
+    address: address(r),
+    role: 0 as const, // READONLY
   }));
   
-  // 2. Refresh collateral reserve
-  const collateralRefreshIx = refreshReserve({
-    reserve: collateralReserve.address,
-    lendingMarket: address(p.marketPubkey.toBase58()),
-    pythOracle: (collateralReserveState.config.tokenInfo.pythConfiguration.price &&
-                 collateralReserveState.config.tokenInfo.pythConfiguration.price !== DEFAULT_PUBKEY) ?
-      some(collateralReserveState.config.tokenInfo.pythConfiguration.price) : none(),
-    switchboardPriceOracle: (collateralReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator &&
-                             collateralReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator !== DEFAULT_PUBKEY) ?
-      some(collateralReserveState.config.tokenInfo.switchboardConfiguration.priceAggregator) : none(),
-    switchboardTwapOracle: (collateralReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator &&
-                           collateralReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator !== DEFAULT_PUBKEY) ?
-      some(collateralReserveState.config.tokenInfo.switchboardConfiguration.twapAggregator) : none(),
-    scopePrices: (collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed &&
-                 collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed !== DEFAULT_PUBKEY) ?
-      some(collateralReserveState.config.tokenInfo.scopeConfiguration.priceFeed) : none(),
-  }, [], address(p.programId.toBase58()));
+  console.log(`[LiqBuilder] Passing ${remainingAccounts.length} reserves as remaining accounts to refreshObligation`);
   
-  refreshIxs.push(new TransactionInstruction({
-    keys: (collateralRefreshIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'collateralRefresh')),
-    programId: new PublicKey(addressSafe(collateralRefreshIx.programAddress, 'collateralRefresh.programAddress')),
-    data: Buffer.from(collateralRefreshIx.data || []),
-  }));
-  
-  // 3. Refresh obligation
   const obligationRefreshIx = refreshObligation({
     lendingMarket: address(p.marketPubkey.toBase58()),
     obligation: address(p.obligationPubkey.toBase58()),
-  }, [], address(p.programId.toBase58()));
+  }, remainingAccounts, address(p.programId.toBase58()));
   
   refreshIxs.push(new TransactionInstruction({
     keys: (obligationRefreshIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'obligationRefresh')),
@@ -588,6 +670,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     liquidationIxs,
     repayMint,
     collateralMint,
+    // Metadata for instruction labeling
+    ataCount: ataCreateIxs.length,
+    reserveRefreshCount: reservesToRefresh.length,
     // lookupTables: undefined, // Can be added later if needed
   };
 }
