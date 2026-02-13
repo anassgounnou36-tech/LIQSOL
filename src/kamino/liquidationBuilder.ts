@@ -56,6 +56,7 @@ export interface BuildKaminoLiquidationParams {
  */
 export interface KaminoLiquidationResult {
   setupIxs: TransactionInstruction[]; // ATA create instructions (only for missing ATAs)
+  setupAtaNames: string[]; // Names of ATAs in setupIxs for labeling (e.g., ['repay', 'collateral'])
   refreshIxs: TransactionInstruction[];
   liquidationIxs: TransactionInstruction[];
   lookupTables?: AddressLookupTableAccount[];
@@ -428,10 +429,17 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     { name: 'withdrawLiq', ata: userDestinationLiquidityAta, mint: withdrawLiquidityMint, tokenProgram: withdrawLiquidityTokenProgramId },
   ];
   
-  const setupIxs: TransactionInstruction[] = [];
+  // Optimize: Use single RPC call to check all ATAs at once
+  const ataAddresses = ataChecks.map(c => c.ata);
+  const accountInfos = await p.connection.getMultipleAccountsInfo(ataAddresses);
   
-  for (const check of ataChecks) {
-    const accountInfo = await p.connection.getAccountInfo(check.ata);
+  const setupIxs: TransactionInstruction[] = [];
+  const setupAtaNames: string[] = [];
+  
+  for (let i = 0; i < ataChecks.length; i++) {
+    const check = ataChecks[i];
+    const accountInfo = accountInfos[i];
+    
     if (!accountInfo) {
       console.log(`[LiqBuilder] ATA ${check.name} does not exist: ${check.ata.toBase58()}, adding to setupIxs`);
       setupIxs.push(buildCreateAtaIdempotentIx({
@@ -441,6 +449,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
         mint: check.mint,
         tokenProgramId: check.tokenProgram,
       }));
+      setupAtaNames.push(check.name);
     } else {
       console.log(`[LiqBuilder] ATA ${check.name} exists: ${check.ata.toBase58()}`);
     }
@@ -738,6 +747,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // F) Return setup, refresh and liquidation instructions with derived mints
   return {
     setupIxs,
+    setupAtaNames,
     refreshIxs,
     liquidationIxs,
     repayMint,
