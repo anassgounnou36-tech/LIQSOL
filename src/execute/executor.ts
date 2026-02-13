@@ -194,16 +194,21 @@ async function buildFullTransaction(
   ixs.push(...liquidationResult.refreshIxs);
   
   // Label refresh instructions using metadata from liquidationResult
-  const { ataCount, reserveRefreshCount } = liquidationResult;
+  const { ataCount, reserveRefreshCount, hasFarmsRefresh } = liquidationResult;
   
   // ATAs first
   for (let i = 0; i < ataCount; i++) {
     labels.push(`ata:${i === 0 ? 'repay' : i === 1 ? 'collateral' : 'withdraw'}`);
   }
   
-  // Reserve refreshes
+  // Reserve refreshes (now first in refresh sequence after ATAs)
   for (let i = 0; i < reserveRefreshCount; i++) {
-    labels.push(`refreshReserve:${i}`);
+    labels.push(`refreshReserve:${i === 0 ? 'repay' : 'collateral'}`);
+  }
+  
+  // Farms refresh (optional, after reserve refreshes)
+  if (hasFarmsRefresh) {
+    labels.push('refreshFarms');
   }
   
   // Obligation refresh (always last in refreshIxs)
@@ -520,6 +525,24 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   
   const buildMs = Date.now() - buildStart;
   console.log(`[Executor] Built ${ixs.length} instructions in ${buildMs}ms`);
+  
+  // Assertion: Verify labels match instructions
+  if (labels.length !== ixs.length) {
+    console.error(`[Executor] ❌ CRITICAL: Label/Instruction count mismatch!`);
+    console.error(`[Executor]    Instructions: ${ixs.length}`);
+    console.error(`[Executor]    Labels: ${labels.length}`);
+    throw new Error(
+      `Internal error: Instruction label count (${labels.length}) does not match instruction count (${ixs.length}). ` +
+      `This indicates a bug in instruction building or labeling logic.`
+    );
+  }
+  
+  // Print instruction map for debugging
+  console.log('\n[Executor] ═══ INSTRUCTION MAP ═══');
+  labels.forEach((label, idx) => {
+    console.log(`  [${idx}] ${label}`);
+  });
+  console.log('═══════════════════════════════\n');
 
   // Build and sign transaction
   const bh = await connection.getLatestBlockhash();
