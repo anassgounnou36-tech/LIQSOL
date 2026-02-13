@@ -588,7 +588,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
           
           // Decode known Kamino error codes
           const knownErrors: Record<number, string> = {
-            6006: 'InvalidAccountInput - Account mismatch (repay/collateral reserves likely wrong)',
+            6006: 'InvalidAccountInput - Remaining accounts order or reserve mismatch',
+            6015: 'LiquidationTooSmall - Liquidation amount below minimum',
             6016: 'ObligationHealthy - Cannot liquidate healthy obligation',
             6017: 'ObligationStale - Obligation needs refresh',
             6018: 'ObligationReserveLimit - Reserve limit reached',
