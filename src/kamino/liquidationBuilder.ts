@@ -511,10 +511,16 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     const lendingMarketAuthority = await market.getLendingMarketAuthority();
     
     // Build the refresh farms instruction (mode 0 = Collateral)
+    // The crank parameter expects a TransactionSigner, but we only need the address for instruction building
+    // The actual signing happens later when the transaction is submitted
+    const crankSigner = {
+      address: address(p.liquidatorPubkey.toBase58()),
+    };
+    
     const refreshFarmsIx = refreshObligationFarmsForReserve(
       { mode: 0 }, // 0 = Collateral, 1 = Debt
       {
-        crank: { address: address(p.liquidatorPubkey.toBase58()) } as any, // Liquidator acts as crank
+        crank: crankSigner as any, // TransactionSigner type - liquidator acts as crank
         baseAccounts: {
           obligation: address(p.obligationPubkey.toBase58()),
           lendingMarketAuthority,
@@ -710,7 +716,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     collateralMint,
     // Metadata for instruction labeling
     ataCount: ataCreateIxs.length,
-    reserveRefreshCount: 2, // Always 2: repay reserve + collateral reserve
+    // Reserve refresh count: 2 reserve refreshes (repay + collateral)
+    // Note: This doesn't include RefreshFarmsForObligationForReserve or RefreshObligation
+    reserveRefreshCount: 2,
     // lookupTables: undefined, // Can be added later if needed
   };
 }
