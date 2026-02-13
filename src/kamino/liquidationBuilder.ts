@@ -1,5 +1,5 @@
 import { Connection, PublicKey, TransactionInstruction, AddressLookupTableAccount, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
-import { KaminoMarket, KaminoObligation, refreshReserve, refreshObligation, liquidateObligationAndRedeemReserveCollateral } from "@kamino-finance/klend-sdk";
+import { KaminoMarket, KaminoObligation, refreshReserve, refreshObligation, liquidateObligationAndRedeemReserveCollateral, refreshObligationFarmsForReserve, obligationFarmStatePda } from "@kamino-finance/klend-sdk";
 import { createSolanaRpc, address } from "@solana/kit";
 import { AccountRole } from "@solana/instructions";
 import { none, some } from "@solana/options";
@@ -11,6 +11,12 @@ import { resolveTokenProgramId } from "../solana/tokenProgram.js";
 import { buildCreateAtaIdempotentIx } from "../solana/ata.js";
 import { addressSafe } from "../solana/addressSafe.js";
 import { toBigInt } from "../utils/bn.js";
+import { SYSVAR_RENT_ADDRESS } from "@solana/sysvars";
+
+// Kamino Farms program ID (mainnet)
+const FARMS_PROGRAM_ID = "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr";
+// System program ID (well-known constant)
+const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
 
 /**
  * PR62: Parameters for building Kamino liquidation instructions.
@@ -443,8 +449,13 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // Prepend ATA create instructions to refreshIxs
   refreshIxs.push(...ataCreateIxs);
   
-  // PART B: Build refresh instructions for ALL reserves used by obligation
-  // Kamino's refresh_obligation requires ALL deposit + borrow reserves to be passed and refreshed
+  // PART B: Build refresh instructions in the order required by Kamino
+  // Required order (per Kamino sysvar instructions validation):
+  // 1. RefreshFarmsForObligationForReserve (collateral reserve)
+  // 2. RefreshObligation (all reserves in canonical order)
+  // 3. RefreshReserve (repay reserve)
+  // 4. RefreshReserve (collateral reserve)
+  
   const DEFAULT_PUBKEY = "11111111111111111111111111111111";
   
   // Helper to build refresh instruction for a reserve
@@ -479,44 +490,57 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     });
   };
   
-  // Prioritize repay and collateral reserves first (critical for liquidation)
   const repayReservePubkey = repayReserve.address;
   const collateralReservePubkey = collateralReserve.address;
   
-  const prioritizedReserves: string[] = [repayReservePubkey, collateralReservePubkey];
-  const otherReserves = uniqueReserves.filter(
-    r => r !== repayReservePubkey && r !== collateralReservePubkey
-  );
+  // STEP 1: RefreshFarmsForObligationForReserve for collateral reserve (if farm exists)
+  // Check if collateral reserve has a farm configured
+  const collateralFarmState = collateralReserve.state.farmCollateral;
+  console.log(`[LiqBuilder] Collateral reserve farm state: ${collateralFarmState}`);
   
-  // Build refresh instructions for all reserves (prioritized first)
-  const allReservesToRefresh = [...prioritizedReserves, ...otherReserves];
-  
-  // TX size safety: Cap to reasonable max while ALWAYS including repay + collateral
-  // Typical Kamino obligations have 1-4 reserves, so this shouldn't be an issue
-  // Solana transaction size limit: ~1232 bytes for accounts, ~10KB total with data
-  // Each reserve refresh adds ~5 accounts (reserve, oracles, vault, etc) ≈ 160 bytes
-  // With 10 reserves we're well under limits (~1600 bytes for reserves alone)
-  const MAX_RESERVES_PER_TX = 10; // Conservative limit (tune higher if needed, max ~20 before hitting TX limits)
-  const reservesToRefresh = allReservesToRefresh.slice(0, MAX_RESERVES_PER_TX);
-  
-  if (allReservesToRefresh.length > MAX_RESERVES_PER_TX) {
-    console.warn(
-      `[LiqBuilder] WARNING: Obligation has ${allReservesToRefresh.length} reserves, ` +
-      `capping to ${MAX_RESERVES_PER_TX} (repay+collateral always included). ` +
-      `This may cause Custom(6006) if Kamino expects all reserves.`
+  if (collateralFarmState !== DEFAULT_PUBKEY) {
+    console.log(`[LiqBuilder] Adding RefreshFarmsForObligationForReserve for collateral reserve`);
+    
+    // Derive the obligation farm state PDA
+    const obligationFarmUserState = await obligationFarmStatePda(
+      address(collateralFarmState),
+      address(p.obligationPubkey.toBase58())
     );
+    
+    // Get lending market authority
+    const lendingMarketAuthority = await market.getLendingMarketAuthority();
+    
+    // Build the refresh farms instruction (mode 0 = Collateral)
+    const refreshFarmsIx = refreshObligationFarmsForReserve(
+      { mode: 0 }, // 0 = Collateral, 1 = Debt
+      {
+        crank: { address: address(p.liquidatorPubkey.toBase58()) } as any, // Liquidator acts as crank
+        baseAccounts: {
+          obligation: address(p.obligationPubkey.toBase58()),
+          lendingMarketAuthority,
+          reserve: collateralReserve.address,
+          reserveFarmState: address(collateralFarmState),
+          obligationFarmUserState,
+          lendingMarket: address(p.marketPubkey.toBase58()),
+        },
+        farmsProgram: address(FARMS_PROGRAM_ID),
+        rent: SYSVAR_RENT_ADDRESS,
+        systemProgram: address(SYSTEM_PROGRAM_ID),
+      },
+      [],
+      address(p.programId.toBase58())
+    );
+    
+    refreshIxs.push(new TransactionInstruction({
+      keys: (refreshFarmsIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'refreshFarms')),
+      programId: new PublicKey(addressSafe(refreshFarmsIx.programAddress, 'refreshFarms.programAddress')),
+      data: Buffer.from(refreshFarmsIx.data || []),
+    }));
+  } else {
+    console.log(`[LiqBuilder] Collateral reserve has no farm, skipping RefreshFarmsForObligationForReserve`);
   }
   
-  console.log(`[LiqBuilder] Building refresh instructions for ${reservesToRefresh.length} reserves`);
-  
-  for (let i = 0; i < reservesToRefresh.length; i++) {
-    const reservePubkey = reservesToRefresh[i];
-    const label = i === 0 ? 'refreshRepay' : i === 1 ? 'refreshCollateral' : `refreshReserve${i}`;
-    const ix = buildRefreshReserveIx(reservePubkey, label);
-    refreshIxs.push(ix);
-  }
-  
-  // PART C: Refresh obligation with ALL reserves as remaining accounts (CRITICAL FIX)
+  // STEP 2: RefreshObligation with ALL reserves as remaining accounts
   // Convert reserve pubkeys to AccountMeta format for SDK
   // According to Kamino SDK, reserves passed as remaining accounts should be read-only (role 0)
   const remainingAccounts = uniqueReserves.map(r => ({
@@ -536,6 +560,16 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     programId: new PublicKey(addressSafe(obligationRefreshIx.programAddress, 'obligationRefresh.programAddress')),
     data: Buffer.from(obligationRefreshIx.data || []),
   }));
+  
+  // STEP 3: RefreshReserve for repay reserve
+  console.log(`[LiqBuilder] Adding RefreshReserve for repay reserve`);
+  const repayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'refreshRepay');
+  refreshIxs.push(repayRefreshIx);
+  
+  // STEP 4: RefreshReserve for collateral reserve
+  console.log(`[LiqBuilder] Adding RefreshReserve for collateral reserve`);
+  const collateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'refreshCollateral');
+  refreshIxs.push(collateralRefreshIx);
   
   // 4) Derive repay amount
   // If repayAmountUi provided, convert to base units with exact string→integer conversion
@@ -676,7 +710,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     collateralMint,
     // Metadata for instruction labeling
     ataCount: ataCreateIxs.length,
-    reserveRefreshCount: reservesToRefresh.length,
+    reserveRefreshCount: 2, // Always 2: repay reserve + collateral reserve
     // lookupTables: undefined, // Can be added later if needed
   };
 }
