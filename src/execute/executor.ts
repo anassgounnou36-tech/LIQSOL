@@ -193,17 +193,21 @@ async function buildFullTransaction(
   // Add labels for liquidation instructions
   ixs.push(...liquidationResult.refreshIxs);
   
-  // Label refresh instructions (ATAs + reserve refreshes + obligation refresh)
-  for (let i = 0; i < liquidationResult.refreshIxs.length; i++) {
-    // First 3 are ATAs, then reserve refreshes, last is obligation refresh
-    if (i < 3) {
-      labels.push(`ata:${i === 0 ? 'repay' : i === 1 ? 'collateral' : 'withdraw'}`);
-    } else if (i === liquidationResult.refreshIxs.length - 1) {
-      labels.push('refreshObligation');
-    } else {
-      labels.push(`refreshReserve:${i - 3}`);
-    }
+  // Label refresh instructions using metadata from liquidationResult
+  const { ataCount, reserveRefreshCount } = liquidationResult;
+  
+  // ATAs first
+  for (let i = 0; i < ataCount; i++) {
+    labels.push(`ata:${i === 0 ? 'repay' : i === 1 ? 'collateral' : 'withdraw'}`);
   }
+  
+  // Reserve refreshes
+  for (let i = 0; i < reserveRefreshCount; i++) {
+    labels.push(`refreshReserve:${i}`);
+  }
+  
+  // Obligation refresh (always last in refreshIxs)
+  labels.push('refreshObligation');
   
   ixs.push(...liquidationResult.liquidationIxs);
   labels.push('liquidate');

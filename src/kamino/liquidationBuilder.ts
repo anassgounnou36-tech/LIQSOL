@@ -52,6 +52,9 @@ export interface KaminoLiquidationResult {
   lookupTables?: AddressLookupTableAccount[];
   repayMint: PublicKey;
   collateralMint: PublicKey;
+  // Metadata for instruction labeling
+  ataCount: number; // Number of ATA create instructions at start of refreshIxs
+  reserveRefreshCount: number; // Number of reserve refresh instructions
 }
 
 /**
@@ -486,7 +489,10 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   // TX size safety: Cap to reasonable max while ALWAYS including repay + collateral
   // Typical Kamino obligations have 1-4 reserves, so this shouldn't be an issue
-  const MAX_RESERVES_PER_TX = 10; // Conservative limit (can tune higher if needed)
+  // Solana transaction size limit: ~1232 bytes for accounts, ~10KB total with data
+  // Each reserve refresh adds ~5 accounts (reserve, oracles, vault, etc) ≈ 160 bytes
+  // With 10 reserves we're well under limits (~1600 bytes for reserves alone)
+  const MAX_RESERVES_PER_TX = 10; // Conservative limit (tune higher if needed, max ~20 before hitting TX limits)
   const reservesToRefresh = allReservesToRefresh.slice(0, MAX_RESERVES_PER_TX);
   
   if (allReservesToRefresh.length > MAX_RESERVES_PER_TX) {
@@ -664,6 +670,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     liquidationIxs,
     repayMint,
     collateralMint,
+    // Metadata for instruction labeling
+    ataCount: ataCreateIxs.length,
+    reserveRefreshCount: reservesToRefresh.length,
     // lookupTables: undefined, // Can be added later if needed
   };
 }
