@@ -528,21 +528,24 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   
   // Assertion: Verify labels match instructions
   if (labels.length !== ixs.length) {
+    const errorMsg = 
+      `Internal error: Instruction label count (${labels.length}) does not match instruction count (${ixs.length}). ` +
+      `This indicates a bug in instruction building or labeling logic. ` +
+      `Instructions: ${ixs.length}, Labels: ${labels.length}`;
     console.error(`[Executor] ❌ CRITICAL: Label/Instruction count mismatch!`);
     console.error(`[Executor]    Instructions: ${ixs.length}`);
     console.error(`[Executor]    Labels: ${labels.length}`);
-    throw new Error(
-      `Internal error: Instruction label count (${labels.length}) does not match instruction count (${ixs.length}). ` +
-      `This indicates a bug in instruction building or labeling logic.`
-    );
+    throw new Error(errorMsg);
   }
   
-  // Print instruction map for debugging
-  console.log('\n[Executor] ═══ INSTRUCTION MAP ═══');
-  labels.forEach((label, idx) => {
-    console.log(`  [${idx}] ${label}`);
-  });
-  console.log('═══════════════════════════════\n');
+  // Print instruction map for debugging (only in dry-run mode to avoid cluttering production logs)
+  if (dry) {
+    console.log('\n[Executor] ═══ INSTRUCTION MAP ═══');
+    labels.forEach((label, idx) => {
+      console.log(`  [${idx}] ${label}`);
+    });
+    console.log('═══════════════════════════════\n');
+  }
 
   // Build and sign transaction
   const bh = await connection.getLatestBlockhash();
