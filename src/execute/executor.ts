@@ -110,7 +110,12 @@ async function buildFullTransaction(
     cuPriceMicroLamports: cuPrice,
   });
   ixs.push(...computeIxs);
-  labels.push('computeBudget:limit', 'computeBudget:price');
+  
+  // Push matching labels based on actual number of compute budget instructions
+  labels.push('computeBudget:limit');
+  if (computeIxs.length > 1) {
+    labels.push('computeBudget:price');
+  }
   
   // Current instruction index for flashloan
   const borrowIxIndex = ixs.length;
