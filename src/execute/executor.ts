@@ -199,7 +199,10 @@ async function buildFullTransaction(
   ixs.push(...liquidationResult.refreshIxs);
   
   // Label refresh instructions using metadata from liquidationResult
-  const { ataCount, hasFarmsRefresh } = liquidationResult;
+  const { ataCount, reserveRefreshCount, hasFarmsRefresh } = liquidationResult;
+  
+  // Note: reserveRefreshCount is now 4 (2 PRE + 2 POST), but we use explicit labels
+  // for clarity rather than looping, since the sequence is critical for Kamino validation
   
   // ATAs first
   for (let i = 0; i < ataCount; i++) {
