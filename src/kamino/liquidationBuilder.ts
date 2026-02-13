@@ -507,8 +507,12 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }
   
   // PART C: Refresh obligation with ALL reserves as remaining accounts (CRITICAL FIX)
-  // Convert reserve pubkeys to SDK address format for remaining accounts
-  const remainingAccounts = uniqueReserves.map(r => address(r));
+  // Convert reserve pubkeys to AccountMeta format for SDK
+  // According to Kamino SDK, reserves passed as remaining accounts should be read-only (role 0)
+  const remainingAccounts = uniqueReserves.map(r => ({
+    address: address(r),
+    role: 0 as const, // READONLY
+  }));
   
   console.log(`[LiqBuilder] Passing ${remainingAccounts.length} reserves as remaining accounts to refreshObligation`);
   

@@ -191,7 +191,6 @@ async function buildFullTransaction(
   });
   
   // Add labels for liquidation instructions
-  const startRefreshIdx = ixs.length;
   ixs.push(...liquidationResult.refreshIxs);
   
   // Label refresh instructions (ATAs + reserve refreshes + obligation refresh)
