@@ -198,7 +198,7 @@ async function buildFullTransaction(
   // TX Size Fix: Extract setupIxs and labels separately
   const setupIxs = liquidationResult.setupIxs;
   const setupLabels: string[] = [];
-  const { ataCount, hasFarmsRefresh, setupAtaNames } = liquidationResult;
+  const { hasFarmsRefresh, setupAtaNames } = liquidationResult;
   
   // Build labels for setup instructions (ATA creates) using names from builder
   for (const ataName of setupAtaNames) {
