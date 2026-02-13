@@ -86,6 +86,8 @@ function loadPlans(): Plan[] {
  * - If swap needed, run pre-simulation to estimate seized collateral
  * - Build real Jupiter swap with estimated amount (minus haircut)
  * - Fail-fast if swap required but sizing unavailable
+ * 
+ * PART D: Now returns instruction labels alongside instructions for debugging
  */
 async function buildFullTransaction(
   plan: FlashloanPlan,
@@ -93,8 +95,9 @@ async function buildFullTransaction(
   market: PublicKey,
   programId: PublicKey,
   opts: { includeSwap?: boolean; useRealSwapSizing?: boolean } = {}
-): Promise<TransactionInstruction[]> {
+): Promise<{ ixs: TransactionInstruction[]; labels: string[] }> {
   const ixs: TransactionInstruction[] = [];
+  const labels: string[] = [];
   const connection = getConnection();
   
   // Get env for config
@@ -107,6 +110,7 @@ async function buildFullTransaction(
     cuPriceMicroLamports: cuPrice,
   });
   ixs.push(...computeIxs);
+  labels.push('computeBudget:limit', 'computeBudget:price');
   
   // Current instruction index for flashloan
   const borrowIxIndex = ixs.length;
@@ -126,6 +130,7 @@ async function buildFullTransaction(
   });
   
   ixs.push(flashloan.flashBorrowIx);
+  labels.push('flashBorrow');
   
   // 3) Liquidation refresh + repay/seize (PR62: derives reserves from obligation)
   // Build with obligation pubkey only - reserves are derived from on-chain data
@@ -185,8 +190,24 @@ async function buildFullTransaction(
     expectedCollateralReservePubkey,
   });
   
+  // Add labels for liquidation instructions
+  const startRefreshIdx = ixs.length;
   ixs.push(...liquidationResult.refreshIxs);
+  
+  // Label refresh instructions (ATAs + reserve refreshes + obligation refresh)
+  for (let i = 0; i < liquidationResult.refreshIxs.length; i++) {
+    // First 3 are ATAs, then reserve refreshes, last is obligation refresh
+    if (i < 3) {
+      labels.push(`ata:${i === 0 ? 'repay' : i === 1 ? 'collateral' : 'withdraw'}`);
+    } else if (i === liquidationResult.refreshIxs.length - 1) {
+      labels.push('refreshObligation');
+    } else {
+      labels.push(`refreshReserve:${i - 3}`);
+    }
+  }
+  
   ixs.push(...liquidationResult.liquidationIxs);
+  labels.push('liquidate');
   
   // Get derived mints for downstream validation
   const { repayMint, collateralMint } = liquidationResult;
@@ -270,7 +291,17 @@ async function buildFullTransaction(
           console.log(`[Executor]   Estimated output: ${estimatedOutUi} ${repayMint.toBase58().slice(0, 8)}`);
         }
         
+        // Add labels for swap instructions
         ixs.push(...allSwapIxs);
+        for (let i = 0; i < swapResult.setupIxs.length; i++) {
+          labels.push(`swap:setup:${i}`);
+        }
+        for (let i = 0; i < swapResult.swapIxs.length; i++) {
+          labels.push(`swap:${i}`);
+        }
+        for (let i = 0; i < swapResult.cleanupIxs.length; i++) {
+          labels.push(`swap:cleanup:${i}`);
+        }
         
       } catch (err) {
         console.error('[Executor] Failed to estimate seized collateral or build swap:', err instanceof Error ? err.message : String(err));
@@ -291,8 +322,9 @@ async function buildFullTransaction(
   
   // 5) FlashRepay
   ixs.push(flashloan.flashRepayIx);
+  labels.push('flashRepay');
   
-  return ixs;
+  return { ixs, labels };
 }
 
 interface ExecutorOpts {
@@ -477,8 +509,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   // Final PR: Use real swap sizing when not in mock/test mode
   const useRealSwapSizing = !dry; // Use real sizing for broadcast mode, skip for dry-run
   
-  // PR2: Build full transaction pipeline
-  const ixs = await buildFullTransaction(target, signer, market, programId, {
+  // PR2: Build full transaction pipeline (now returns ixs + labels)
+  const { ixs, labels } = await buildFullTransaction(target, signer, market, programId, {
     includeSwap: true,
     useRealSwapSizing,
   });
@@ -505,15 +537,27 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     
     console.log(`[Executor] Simulation completed in ${simMs}ms`);
     if (sim.value.err) {
-      // PR: Enhanced error logging for Custom errors (especially 6006 InvalidAccountInput)
+      // PART D: Enhanced error logging with instruction labels and sim logs
       const err = sim.value.err;
       console.error('[Executor] Simulation error:', err);
+      
+      // Print simulation logs for debugging (CRITICAL for troubleshooting)
+      if (sim.value.logs && sim.value.logs.length > 0) {
+        console.error('\n[Executor] ═══ SIMULATION LOGS ═══');
+        sim.value.logs.forEach((log, i) => {
+          console.error(`  [${i}] ${log}`);
+        });
+        console.error('═══════════════════════════════\n');
+      }
       
       // Check if it's an InstructionError with Custom error
       if (typeof err === 'object' && err !== null && 'InstructionError' in err) {
         const instructionError = (err as any).InstructionError;
         const ixIndex = instructionError[0];
         const innerError = instructionError[1];
+        
+        // Map instruction index to label for better debugging
+        const ixLabel = labels[ixIndex] || `unknown(${ixIndex})`;
         
         // Check for Custom error
         if (typeof innerError === 'object' && innerError !== null && 'Custom' in innerError) {
@@ -523,6 +567,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
           console.error('\n[Executor] ═══ CUSTOM ERROR DIAGNOSTIC ═══');
           console.error(`  Error Code: Custom(${customCode})`);
           console.error(`  Instruction Index: ${ixIndex}`);
+          console.error(`  Instruction Label: ${ixLabel}`);
           console.error(`  Obligation: ${target.obligationPubkey}`);
           if (target.repayReservePubkey) {
             console.error(`  Repay Reserve (from plan): ${target.repayReservePubkey}`);
@@ -530,6 +575,13 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
           if (target.collateralReservePubkey) {
             console.error(`  Collateral Reserve (from plan): ${target.collateralReservePubkey}`);
           }
+          
+          // Print instruction index map for context
+          console.error('\n  Instruction Map:');
+          labels.forEach((label, idx) => {
+            const marker = idx === ixIndex ? ' ← FAILED HERE' : '';
+            console.error(`    [${idx}] ${label}${marker}`);
+          });
           
           // Decode known Kamino error codes
           const knownErrors: Record<number, string> = {
@@ -540,7 +592,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
           };
           
           if (knownErrors[customCode]) {
-            console.error(`  Decoded: ${knownErrors[customCode]}`);
+            console.error(`\n  Decoded: ${knownErrors[customCode]}`);
           }
           
           // If it's 6006, provide specific guidance
@@ -551,12 +603,22 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
             console.error('     - Plan was created with generic USDC/SOL but obligation has different assets');
             console.error('     - Obligation changed since plan was created');
             console.error('     - Reserve pubkeys in plan are missing or incorrect');
+            console.error('     - refreshObligation missing required remaining accounts (ALL reserves)');
             console.error('\n  ✅ SOLUTION:');
             console.error('     Regenerate tx_queue.json with: npm run snapshot:candidates');
             console.error('     This will extract correct reserve pubkeys from each obligation.');
           }
           
           console.error('═══════════════════════════════════════\n');
+        } else {
+          // Non-Custom error: still print instruction label
+          console.error(`\n[Executor] Instruction ${ixIndex} (${ixLabel}) failed with error:`, innerError);
+          console.error('\n  Instruction Map:');
+          labels.forEach((label, idx) => {
+            const marker = idx === ixIndex ? ' ← FAILED HERE' : '';
+            console.error(`    [${idx}] ${label}${marker}`);
+          });
+          console.error('');
         }
       }
       
