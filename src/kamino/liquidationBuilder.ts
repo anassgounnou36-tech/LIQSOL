@@ -595,12 +595,12 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   // STEP 3: RefreshReserve for repay reserve (immediately before liquidation)
   console.log(`[LiqBuilder] Adding RefreshReserve for repay reserve`);
-  const repayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'refreshRepay');
+  const repayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'refreshReserve:repay');
   refreshIxs.push(repayRefreshIx);
   
   // STEP 4: RefreshReserve for collateral reserve (immediately before liquidation)
   console.log(`[LiqBuilder] Adding RefreshReserve for collateral reserve`);
-  const collateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'refreshCollateral');
+  const collateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'refreshReserve:collateral');
   refreshIxs.push(collateralRefreshIx);
   
   // 4) Derive repay amount
