@@ -9,13 +9,31 @@ export interface EstimateSeizedCollateralDeltaParams {
   liquidator: PublicKey;
   collateralMint: PublicKey;
   simulateTx: VersionedTransaction; // pre-sim tx: flashBorrow + refresh + liquidation only
+  instructionLabels?: string[]; // Optional labels for debugging failed simulations
 }
 
 /**
  * Deterministic seized collateral estimator using account post-state delta.
  * 
+ * IMPORTANT: The simulateTx MUST contain the COMPLETE liquidation instruction sequence
+ * to satisfy Kamino's check_refresh and state requirements:
+ * 
+ * Expected instruction order:
+ * 1. ComputeBudget instructions (limit, optional price)
+ * 2. FlashBorrow
+ * 3. PRE-REFRESH: RefreshReserve (repay reserve)
+ * 4. PRE-REFRESH: RefreshReserve (collateral reserve)
+ * 5. RefreshFarmsForObligationForReserve (collateral, if farm exists)
+ * 6. RefreshObligation (with ALL reserves as remaining accounts)
+ * 7. POST-REFRESH: RefreshReserve (repay reserve)
+ * 8. POST-REFRESH: RefreshReserve (collateral reserve)
+ * 9. LiquidateObligationAndRedeemReserveCollateral
+ * 
+ * DO NOT use a shortened "mini" liquidation sim - mirror the real sequence.
+ * 
  * Algorithm:
  * 1. Derive liquidator collateral ATA via getAssociatedTokenAddress(collateralMint, liquidator, true)
+ *    This is the user_destination_collateral used by liquidation redemption (NOT withdrawLiq ATA)
  * 2. Fetch pre-balance in base units:
  *    - If ATA exists: use getTokenAccountBalance → parse amount string as bigint
  *    - If ATA missing: preBalance = 0; include idempotent ATA create ix in pre-sim build so post-state exists
@@ -32,20 +50,22 @@ export interface EstimateSeizedCollateralDeltaParams {
 export async function estimateSeizedCollateralDeltaBaseUnits(
   params: EstimateSeizedCollateralDeltaParams
 ): Promise<bigint> {
-  const { connection, liquidator, collateralMint, simulateTx } = params;
+  const { connection, liquidator, collateralMint, simulateTx, instructionLabels } = params;
 
   console.log('[SeizedDelta] Estimating seized collateral using account-delta approach');
   console.log(`[SeizedDelta]   Liquidator: ${liquidator.toBase58()}`);
   console.log(`[SeizedDelta]   Collateral Mint: ${collateralMint.toBase58()}`);
 
   // 1) Derive liquidator collateral ATA
+  // IMPORTANT: This is the user_destination_collateral used by liquidation redemption
+  // (NOT the withdrawLiq ATA)
   const collateralATA = await getAssociatedTokenAddress(
     collateralMint,
     liquidator,
     true // allowOwnerOffCurve
   );
 
-  console.log(`[SeizedDelta]   Collateral ATA: ${collateralATA.toBase58()}`);
+  console.log(`[SeizedDelta]   Monitoring Collateral ATA (user_destination_collateral): ${collateralATA.toBase58()}`);
 
   // 2) Fetch pre-balance in base units
   let preBalance = 0n;
@@ -95,6 +115,16 @@ export async function estimateSeizedCollateralDeltaBaseUnits(
 
   if (sim.value.err) {
     console.error('[SeizedDelta] Simulation error:', JSON.stringify(sim.value.err, null, 2));
+    
+    // Print instruction map for debugging
+    if (instructionLabels && instructionLabels.length > 0) {
+      console.error('\n[SeizedDelta] ═══ SIMULATION INSTRUCTION MAP ═══');
+      instructionLabels.forEach((label, idx) => {
+        console.error(`  [${idx}] ${label}`);
+      });
+      console.error('═════════════════════════════════════════\n');
+    }
+    
     throw new Error(`Liquidation simulation failed: ${JSON.stringify(sim.value.err)}`);
   }
 

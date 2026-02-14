@@ -236,13 +236,16 @@ async function buildFullTransaction(
   labels.push('liquidate');
   
   // Get derived mints for downstream validation
-  const { repayMint, collateralMint } = liquidationResult;
+  const { repayMint, collateralMint, withdrawCollateralMint } = liquidationResult;
   
   // 4) Optional Jupiter swap (if collateral mint != repay mint)
   // Final PR: Real swap sizing via deterministic seized delta estimation (NO log parsing)
+  // NOTE: Use withdrawCollateralMint for seized-delta estimation (actual redemption mint)
+  // but collateralMint for swap (liquidity mint)
   if (opts.includeSwap && !collateralMint.equals(repayMint)) {
     console.log('[Executor] Swap required: collateral mint differs from repay mint');
-    console.log(`[Executor]   Collateral: ${collateralMint.toBase58()}`);
+    console.log(`[Executor]   Collateral (liquidity): ${collateralMint.toBase58()}`);
+    console.log(`[Executor]   Collateral (redemption): ${withdrawCollateralMint.toBase58()}`);
     console.log(`[Executor]   Repay: ${repayMint.toBase58()}`);
     
     // FIX: Gate seized-delta simulation behind ATA setup
@@ -280,11 +283,13 @@ async function buildFullTransaction(
         preSimTx.sign([signer]);
         
         // Estimate seized collateral via account-delta approach (NO log parsing)
+        // IMPORTANT: Use withdrawCollateralMint (actual redemption mint), not collateralMint (liquidity mint)
         const seizedCollateralBaseUnits = await estimateSeizedCollateralDeltaBaseUnits({
           connection,
           liquidator: signer.publicKey,
-          collateralMint,
+          collateralMint: withdrawCollateralMint, // Use redemption mint for ATA monitoring
           simulateTx: preSimTx,
+          instructionLabels: labels, // Pass labels for diagnostic instruction map on failure
         });
         
         console.log(`[Executor] Estimated seized: ${seizedCollateralBaseUnits} base units`);
@@ -341,12 +346,29 @@ async function buildFullTransaction(
         
       } catch (err) {
         console.error('[Executor] Failed to estimate seized collateral or build swap:', err instanceof Error ? err.message : String(err));
-        throw new Error(
-          'Swap required but sizing or building failed. ' +
-          'Cannot build transaction without knowing seized collateral amount. ' +
-          `Collateral: ${collateralMint.toBase58()}, Repay: ${repayMint.toBase58()}, ` +
-          `Error: ${err instanceof Error ? err.message : String(err)}`
-        );
+        
+        // Fallback behavior: Proceed with liquidation-only (no swap)
+        // This allows the bot to continue running 24/7 even when swap sizing fails
+        const enableFallback = (process.env.SWAP_SIZING_FALLBACK_ENABLED ?? 'true') === 'true';
+        
+        if (enableFallback) {
+          console.warn('[Executor] ⚠️  FALLBACK: Seized-delta sizing failed, proceeding with liquidation-only');
+          console.warn('[Executor] Swap will be skipped. Seized collateral will remain in destination ATA.');
+          console.warn(`[Executor]   Collateral: ${collateralMint.toBase58()}`);
+          console.warn(`[Executor]   Repay: ${repayMint.toBase58()}`);
+          console.warn(`[Executor]   Error: ${err instanceof Error ? err.message : String(err)}`);
+          console.warn('[Executor] Bot will continue with next cycle.');
+          // Skip swap - transaction will execute liquidation only
+          // The flashloan will still be repaid from the liquidator's repay token account
+        } else {
+          // Fail-fast mode (original behavior)
+          throw new Error(
+            'Swap required but sizing or building failed. ' +
+            'Cannot build transaction without knowing seized collateral amount. ' +
+            `Collateral: ${collateralMint.toBase58()}, Repay: ${repayMint.toBase58()}, ` +
+            `Error: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
       }
       
     } else {
@@ -769,6 +791,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
             6016: 'ObligationHealthy - Cannot liquidate healthy obligation',
             6017: 'ObligationStale - Obligation needs refresh',
             6018: 'ObligationReserveLimit - Reserve limit reached',
+            6032: 'NoFlashRepayFound - No corresponding repay found for flash borrow',
           };
           
           if (knownErrors[customCode]) {
@@ -787,6 +810,19 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
             console.error('\n  ✅ SOLUTION:');
             console.error('     Regenerate tx_queue.json with: npm run snapshot:candidates');
             console.error('     This will extract correct reserve pubkeys from each obligation.');
+          }
+          
+          // If it's 6032, provide specific guidance for flash loan mismatch
+          if (customCode === 6032) {
+            console.error('\n  💡 LIKELY CAUSE:');
+            console.error('     Flash loan borrow and repay instructions are mismatched.');
+            console.error('     This can happen when:');
+            console.error('     - FlashRepay instruction is missing or in wrong position');
+            console.error('     - Simulation uses incomplete instruction sequence');
+            console.error('     - Flash borrow amount doesn\'t match expected repay amount');
+            console.error('\n  ✅ SOLUTION:');
+            console.error('     Ensure transaction includes both FlashBorrow and FlashRepay instructions.');
+            console.error('     For seized-delta simulation, use the full liquidation sequence.');
           }
           
           console.error('═══════════════════════════════════════\n');
