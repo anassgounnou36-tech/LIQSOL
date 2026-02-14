@@ -265,10 +265,14 @@ export async function startBotStartupScheduler(): Promise<void> {
     const broadcast = (process.env.LIQSOL_BROADCAST === 'true') || (process.env.EXECUTOR_BROADCAST === 'true');
     const dry = !broadcast;
     
-    // Run executor when globally enabled (SCHEDULER_ENABLE_DRYRUN controls whether executor runs at all, regardless of mode)
-    const executorEnabled = (process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true') === 'true';
+    // SCHEDULER_ENABLE_EXECUTOR controls whether executor runs at all (in both dry-run and broadcast modes)
+    // Legacy name SCHEDULER_ENABLE_DRYRUN is kept for backward compatibility but now enables both modes
+    const executorEnabled = (process.env.SCHEDULER_ENABLE_EXECUTOR ?? process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true') === 'true';
     
     if (executorEnabled) {
+      // Log invocation with explicit mode flags
+      console.log(`[Scheduler] Invoking executor (dry=${dry}, broadcast=${broadcast})`);
+      
       try {
         const res = await runDryExecutor({ dry, broadcast });
         console.log('[Executor] Completed:', res?.status ?? 'ok');
@@ -283,6 +287,8 @@ export async function startBotStartupScheduler(): Promise<void> {
         // Re-throw the typed Error object to preserve stack and type information
         throw err;
       }
+    } else {
+      console.log('[Scheduler] Executor disabled (SCHEDULER_ENABLE_EXECUTOR=false)');
     }
 
     console.log('[Scheduler] Cycle end');

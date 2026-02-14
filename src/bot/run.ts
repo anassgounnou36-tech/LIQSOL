@@ -55,13 +55,14 @@ async function main() {
     console.log('\n🔴 BROADCAST MODE ENABLED: Transactions will be sent to the network!');
   }
   
-  // Set executor mode via env for scheduler to use
+  // Set executor broadcast mode via env for scheduler to use
+  // Note: SCHEDULER_ENABLE_DRYRUN controls whether executor runs at all (not the mode)
   if (opts.broadcast) {
-    process.env.SCHEDULER_ENABLE_DRYRUN = 'false';
     process.env.EXECUTOR_BROADCAST = 'true';
+    process.env.LIQSOL_BROADCAST = 'true';
   } else {
-    process.env.SCHEDULER_ENABLE_DRYRUN = 'true';
     process.env.EXECUTOR_BROADCAST = 'false';
+    process.env.LIQSOL_BROADCAST = 'false';
   }
   
   console.log('\n[Bot] Starting bot with scheduler and listeners...\n');
