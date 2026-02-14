@@ -581,7 +581,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     setupTx.sign([signer]);
     
     if (dry || !broadcast) {
-      // Dry-run mode: Simulate setup transaction for logging, then return without simulating liquidation
+      // Dry-run or non-broadcast mode: Simulate setup transaction for logging, then return without simulating liquidation
       console.log('[Executor] Simulating setup transaction...');
       const setupSim = await connection.simulateTransaction(setupTx);
       

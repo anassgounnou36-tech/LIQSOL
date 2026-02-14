@@ -265,7 +265,7 @@ export async function startBotStartupScheduler(): Promise<void> {
     const broadcast = (process.env.LIQSOL_BROADCAST === 'true') || (process.env.EXECUTOR_BROADCAST === 'true');
     const dry = !broadcast;
     
-    // Run executor when globally enabled (optionally gate with SCHEDULER_ENABLE_DRYRUN if needed)
+    // Run executor when globally enabled (SCHEDULER_ENABLE_DRYRUN controls whether executor runs at all, regardless of mode)
     const executorEnabled = (process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true') === 'true';
     
     if (executorEnabled) {
