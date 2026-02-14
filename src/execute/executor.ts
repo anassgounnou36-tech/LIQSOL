@@ -261,10 +261,17 @@ async function buildFullTransaction(
   // Validate the sequence
   let isValid = true;
   const actualSequence = labels.slice(startIdx, liquidateIdx);
-  for (let i = 0; i < expectedSequence.length; i++) {
-    if (actualSequence[i] !== expectedSequence[i]) {
-      isValid = false;
-      break;
+  
+  // Check length first
+  if (actualSequence.length !== expectedSequence.length) {
+    isValid = false;
+  } else {
+    // Check each label matches
+    for (let i = 0; i < expectedSequence.length; i++) {
+      if (actualSequence[i] !== expectedSequence[i]) {
+        isValid = false;
+        break;
+      }
     }
   }
   

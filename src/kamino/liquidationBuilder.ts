@@ -469,8 +469,8 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // They will be sent in a separate setup transaction if needed
   
   // PART B: Build refresh instructions in the order required to fix Custom(6051)
-  // REQUIRED SEQUENCE (immediately before liquidation):
-  // 1. RefreshFarmsForObligationForReserve (collateral reserve, if exists)
+  // REQUIRED SEQUENCE (3 or 4 instructions depending on farm existence, immediately before liquidation):
+  // 1. RefreshFarmsForObligationForReserve (collateral reserve, if farm exists) [OPTIONAL]
   // 2. RefreshObligation (all reserves in canonical order)
   // 3. RefreshReserve (repay reserve) - MUST be immediately before liquidation
   // 4. RefreshReserve (collateral reserve) - MUST be immediately before liquidation
