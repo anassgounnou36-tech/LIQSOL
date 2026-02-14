@@ -5,8 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * Test that liquidation builder properly separates ATA create instructions
- * TX Size Fix: ATAs should be in setupIxs, not refreshIxs
+ * Test that liquidation builder properly separates ATA setup instructions
+ * from the main liquidation flow to reduce transaction size
  */
 (async () => {
   loadEnv();
@@ -17,12 +17,23 @@ import path from "node:path";
     process.exit(1);
   }
 
-  const marketStr = process.env.KAMINO_MARKET;
-  const programIdStr = process.env.KAMINO_PROGRAM_ID;
-  const liquidatorStr = process.env.LIQUIDATOR_PUBKEY;
+  const marketStr = process.env.KAMINO_MARKET_PUBKEY;
+  const programIdStr = process.env.KAMINO_KLEND_PROGRAM_ID;
+  const liquidatorStr = process.env.BOT_KEYPAIR_PATH;
 
-  if (!marketStr || !programIdStr || !liquidatorStr) {
-    console.error("ERROR: Required env vars not set (KAMINO_MARKET, KAMINO_PROGRAM_ID, LIQUIDATOR_PUBKEY)");
+  if (!marketStr || !programIdStr) {
+    console.error("ERROR: Required env vars not set (KAMINO_MARKET_PUBKEY, KAMINO_KLEND_PROGRAM_ID)");
+    process.exit(1);
+  }
+
+  // Get liquidator pubkey from keypair file
+  let liquidatorPubkey: PublicKey;
+  if (liquidatorStr && fs.existsSync(liquidatorStr)) {
+    const secret = JSON.parse(fs.readFileSync(liquidatorStr, "utf8"));
+    const keypair = await import("@solana/web3.js").then(m => m.Keypair.fromSecretKey(Uint8Array.from(secret)));
+    liquidatorPubkey = keypair.publicKey;
+  } else {
+    console.error("ERROR: BOT_KEYPAIR_PATH not set or file not found");
     process.exit(1);
   }
 
@@ -48,10 +59,10 @@ import path from "node:path";
     process.exit(1);
   }
 
-  console.log("Testing liquidation builder includes ATA create instructions...");
+  console.log("Testing ATA setup separation in liquidation builder...");
   console.log(`Market: ${marketStr}`);
   console.log(`Program: ${programIdStr}`);
-  console.log(`Liquidator: ${liquidatorStr}`);
+  console.log(`Liquidator: ${liquidatorPubkey.toBase58()}`);
   console.log(`Obligation: ${obligationStr}`);
 
   const conn = new Connection(rpcUrl, "processed");
@@ -62,7 +73,7 @@ import path from "node:path";
       marketPubkey: new PublicKey(marketStr),
       programId: new PublicKey(programIdStr),
       obligationPubkey: new PublicKey(obligationStr),
-      liquidatorPubkey: new PublicKey(liquidatorStr),
+      liquidatorPubkey: liquidatorPubkey,
     });
 
     console.log(`\n✓ Built instructions successfully`);
@@ -71,43 +82,44 @@ import path from "node:path";
     console.log(`  Liquidation ixs: ${result.liquidationIxs.length}`);
     console.log(`  Repay mint: ${result.repayMint.toBase58()}`);
     console.log(`  Collateral mint: ${result.collateralMint.toBase58()}`);
+    console.log(`  ATA count (metadata): ${result.ataCount}`);
 
-    // TX Size Fix: Check that ATAs are in setupIxs, NOT in refreshIxs
-    // ATA create instructions use the Associated Token Program
+    // Verify that setupIxs contains ATA creates
     const ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
-    
     const ataInSetup = result.setupIxs.filter(
       ix => ix.programId.toBase58() === ASSOCIATED_TOKEN_PROGRAM_ID
     );
-    
+
+    // Verify that refreshIxs does NOT contain ATA creates
     const ataInRefresh = result.refreshIxs.filter(
       ix => ix.programId.toBase58() === ASSOCIATED_TOKEN_PROGRAM_ID
     );
 
-    // Verify ATAs are NOT in refreshIxs (the fix)
+    console.log(`\n✓ Verification:`);
+    console.log(`  ATA instructions in setupIxs: ${ataInSetup.length}`);
+    console.log(`  ATA instructions in refreshIxs: ${ataInRefresh.length}`);
+
     if (ataInRefresh.length > 0) {
       console.error(`\n✗ FAILURE: Found ${ataInRefresh.length} ATA instructions in refreshIxs`);
-      console.error("  ATAs should be in setupIxs to keep liquidation TX small");
+      console.error("  ATAs should only be in setupIxs, not in refreshIxs");
       process.exit(1);
     }
 
-    console.log(`\n✓ Verification passed: refreshIxs contains NO ATA instructions`);
-    
-    // Verify setupIxs structure (may be empty if all ATAs exist)
     if (result.setupIxs.length === 0) {
-      console.log(`\n✓ All ATAs already exist (no setup needed)`);
-      console.log("  This is expected when running test multiple times");
-      console.log("✓ SUCCESS: ATA separation working correctly!");
-      process.exit(0);
-    } else if (ataInSetup.length > 0) {
-      console.log(`\n✓ Found ${ataInSetup.length} ATA instructions in setupIxs`);
-      console.log("  Expected: up to 3 (repay, collateral, withdrawLiq)");
-      console.log("✓ SUCCESS: ATAs properly separated into setup transaction!");
-      process.exit(0);
+      console.log(`\n✓ SUCCESS: All ATAs already exist, no setup needed`);
+      console.log("  This is expected when running the test multiple times");
+      console.log("  The first run would have created the ATAs");
+    } else if (result.setupIxs.length === ataInSetup.length && ataInSetup.length > 0) {
+      console.log(`\n✓ SUCCESS: Setup contains ${ataInSetup.length} ATA create instruction(s)`);
+      console.log("  ATAs are properly separated from liquidation transaction");
     } else {
       console.error(`\n✗ FAILURE: Setup contains non-ATA instructions`);
+      console.error(`  Setup ixs: ${result.setupIxs.length}, ATA ixs: ${ataInSetup.length}`);
       process.exit(1);
     }
+
+    console.log(`\n✓ SUCCESS: ATA setup separation working correctly!`);
+    process.exit(0);
   } catch (err) {
     console.error(`\n✗ FAILURE: ${err instanceof Error ? err.message : String(err)}`);
     if (err instanceof Error && err.stack) {

@@ -51,15 +51,19 @@ export interface BuildKaminoLiquidationParams {
 /**
  * PR62: Result containing refresh and liquidation instructions
  * Now includes derived repayMint and collateralMint for downstream validation
+ * 
+ * TX Size Fix: Added setupIxs for out-of-band ATA creation
  */
 export interface KaminoLiquidationResult {
+  setupIxs: TransactionInstruction[]; // ATA create instructions (only for missing ATAs)
+  setupAtaNames: string[]; // Names of ATAs in setupIxs for labeling (e.g., ['repay', 'collateral'])
   refreshIxs: TransactionInstruction[];
   liquidationIxs: TransactionInstruction[];
   lookupTables?: AddressLookupTableAccount[];
   repayMint: PublicKey;
   collateralMint: PublicKey;
   // Metadata for instruction labeling
-  ataCount: number; // Number of ATA create instructions at start of refreshIxs
+  ataCount: number; // Number of ATA create instructions in setupIxs
   reserveRefreshCount: number; // Number of reserve refresh instructions
   hasFarmsRefresh: boolean; // Whether RefreshFarmsForObligationForReserve was included
 }
@@ -415,40 +419,53 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     withdrawLiquidityTokenProgramId
   );
   
-  // Build ATA idempotent create instructions
-  const ataCreateIxs: TransactionInstruction[] = [];
+  // TX Size Fix: Check ATA existence before creating instructions
+  // Only create ATAs that don't exist to keep liquidation TX small
+  console.log('[LiqBuilder] Checking ATA existence...');
   
-  ataCreateIxs.push(buildCreateAtaIdempotentIx({
-    payer: p.liquidatorPubkey,
-    owner: p.liquidatorPubkey,
-    ata: userSourceLiquidityAta,
-    mint: repayLiquidityMint,
-    tokenProgramId: repayTokenProgramId,
-  }));
+  const ataChecks = [
+    { name: 'repay', ata: userSourceLiquidityAta, mint: repayLiquidityMint, tokenProgram: repayTokenProgramId },
+    { name: 'collateral', ata: userDestinationCollateralAta, mint: withdrawCollateralMint, tokenProgram: collateralTokenProgramId },
+    { name: 'withdrawLiq', ata: userDestinationLiquidityAta, mint: withdrawLiquidityMint, tokenProgram: withdrawLiquidityTokenProgramId },
+  ];
   
-  ataCreateIxs.push(buildCreateAtaIdempotentIx({
-    payer: p.liquidatorPubkey,
-    owner: p.liquidatorPubkey,
-    ata: userDestinationCollateralAta,
-    mint: withdrawCollateralMint,
-    tokenProgramId: collateralTokenProgramId,
-  }));
+  // Optimized: Single RPC call to check all ATAs at once (vs 3 sequential calls)
+  const ataAddresses = ataChecks.map(c => c.ata);
+  const accountInfos = await p.connection.getMultipleAccountsInfo(ataAddresses);
   
-  ataCreateIxs.push(buildCreateAtaIdempotentIx({
-    payer: p.liquidatorPubkey,
-    owner: p.liquidatorPubkey,
-    ata: userDestinationLiquidityAta,
-    mint: withdrawLiquidityMint,
-    tokenProgramId: withdrawLiquidityTokenProgramId,
-  }));
+  const setupIxs: TransactionInstruction[] = [];
+  const setupAtaNames: string[] = [];
   
-  console.log(`[LiqBuilder] Created ${ataCreateIxs.length} ATA idempotent instructions`);
+  for (let i = 0; i < ataChecks.length; i++) {
+    const check = ataChecks[i];
+    const accountInfo = accountInfos[i];
+    
+    if (!accountInfo) {
+      console.log(`[LiqBuilder] ATA ${check.name} does not exist: ${check.ata.toBase58()}, adding to setupIxs`);
+      setupIxs.push(buildCreateAtaIdempotentIx({
+        payer: p.liquidatorPubkey,
+        owner: p.liquidatorPubkey,
+        ata: check.ata,
+        mint: check.mint,
+        tokenProgramId: check.tokenProgram,
+      }));
+      setupAtaNames.push(check.name);
+    } else {
+      console.log(`[LiqBuilder] ATA ${check.name} exists: ${check.ata.toBase58()}`);
+    }
+  }
+  
+  if (setupIxs.length > 0) {
+    console.log(`[LiqBuilder] Created ${setupIxs.length} ATA setup instructions (missing ATAs)`);
+  } else {
+    console.log(`[LiqBuilder] All ATAs exist, no setup instructions needed`);
+  }
   
   const refreshIxs: TransactionInstruction[] = [];
   const liquidationIxs: TransactionInstruction[] = [];
   
-  // Prepend ATA create instructions to refreshIxs
-  refreshIxs.push(...ataCreateIxs);
+  // TX Size Fix: DO NOT add ATA creates to refreshIxs
+  // They will be sent in a separate setup transaction if needed
   
   // PART B: Build refresh instructions in the order required to prevent ReserveStale AND Custom(6051)
   // PRE-REFRESH phase (to fix Custom(6009) ReserveStale):
@@ -727,14 +744,16 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     data: Buffer.from(liquidateIx.data || []),
   }));
   
-  // F) Return refresh and liquidation instructions with derived mints
+  // F) Return setup, refresh and liquidation instructions with derived mints
   return {
+    setupIxs,
+    setupAtaNames,
     refreshIxs,
     liquidationIxs,
     repayMint,
     collateralMint,
     // Metadata for instruction labeling
-    ataCount: ataCreateIxs.length,
+    ataCount: setupIxs.length,
     // Reserve refresh count: 4 reserve refreshes (2 PRE + 2 POST)
     // Note: This doesn't include RefreshFarmsForObligationForReserve or RefreshObligation
     reserveRefreshCount: 4,

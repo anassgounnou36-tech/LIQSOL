@@ -95,7 +95,7 @@ async function buildFullTransaction(
   market: PublicKey,
   programId: PublicKey,
   opts: { includeSwap?: boolean; useRealSwapSizing?: boolean } = {}
-): Promise<{ ixs: TransactionInstruction[]; labels: string[] }> {
+): Promise<{ setupIxs: TransactionInstruction[]; setupLabels: string[]; ixs: TransactionInstruction[]; labels: string[] }> {
   const ixs: TransactionInstruction[] = [];
   const labels: string[] = [];
   const connection = getConnection();
@@ -195,16 +195,20 @@ async function buildFullTransaction(
     expectedCollateralReservePubkey,
   });
   
-  // Add labels for liquidation instructions
+  // TX Size Fix: Extract setupIxs and labels separately
+  const setupIxs = liquidationResult.setupIxs;
+  const setupLabels: string[] = [];
+  const { hasFarmsRefresh, setupAtaNames } = liquidationResult;
+  
+  // Build labels for setup instructions (ATA creates) using names from builder
+  for (const ataName of setupAtaNames) {
+    setupLabels.push(`setup:ata:${ataName}`);
+  }
+  
+  // Add labels for liquidation instructions (refreshIxs now contains NO ATA creates)
   ixs.push(...liquidationResult.refreshIxs);
   
-  // Label refresh instructions using metadata from liquidationResult
-  const { ataCount, hasFarmsRefresh } = liquidationResult;
-  
-  // ATAs first
-  for (let i = 0; i < ataCount; i++) {
-    labels.push(`ata:${i === 0 ? 'repay' : i === 1 ? 'collateral' : 'withdraw'}`);
-  }
+  // Label refresh instructions (NO ATA labels needed here anymore)
   
   // Reserve refreshes in the order they appear in refreshIxs:
   // PRE-refresh phase (first 2): repay:pre, collateral:pre
@@ -346,7 +350,7 @@ async function buildFullTransaction(
   ixs.push(flashloan.flashRepayIx);
   labels.push('flashRepay');
   
-  return { ixs, labels };
+  return { setupIxs, setupLabels, ixs, labels };
 }
 
 interface ExecutorOpts {
@@ -531,14 +535,115 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   // Final PR: Use real swap sizing when not in mock/test mode
   const useRealSwapSizing = !dry; // Use real sizing for broadcast mode, skip for dry-run
   
-  // PR2: Build full transaction pipeline (now returns ixs + labels)
-  const { ixs, labels } = await buildFullTransaction(target, signer, market, programId, {
+  // PR2: Build full transaction pipeline (now returns setupIxs + ixs + labels)
+  const { setupIxs, setupLabels, ixs, labels } = await buildFullTransaction(target, signer, market, programId, {
     includeSwap: true,
     useRealSwapSizing,
   });
   
   const buildMs = Date.now() - buildStart;
-  console.log(`[Executor] Built ${ixs.length} instructions in ${buildMs}ms`);
+  console.log(`[Executor] Built ${ixs.length} liquidation instructions in ${buildMs}ms`);
+  
+  // TX Size Fix: Handle setup transaction if needed
+  if (setupIxs.length > 0) {
+    console.log(`\n[Executor] ⚠️  Setup required: ${setupIxs.length} ATA(s) need to be created`);
+    console.log(`[Executor] Setup will be processed in a separate transaction to keep liquidation TX small`);
+    
+    // Assertion: Verify setup labels match setup instructions
+    // This should never fail unless there's a bug in the label generation logic
+    if (setupLabels.length !== setupIxs.length) {
+      const errorMsg = 
+        `Setup instruction/label count mismatch: ${setupIxs.length} instructions but ${setupLabels.length} labels. ` +
+        `This indicates a bug in the liquidation builder's setupAtaNames array generation.`;
+      console.error(`[Executor] ❌ Setup label/instruction count mismatch!`);
+      throw new Error(errorMsg);
+    }
+    
+    // Print setup instruction map
+    console.log('\n[Executor] ═══ SETUP INSTRUCTION MAP ═══');
+    setupLabels.forEach((label, idx) => {
+      console.log(`  [${idx}] ${label}`);
+    });
+    console.log('═══════════════════════════════════\n');
+    
+    // Build and sign setup transaction
+    const setupBh = await connection.getLatestBlockhash();
+    const setupMsg = new TransactionMessage({
+      payerKey: signer.publicKey,
+      recentBlockhash: setupBh.blockhash,
+      instructions: setupIxs,
+    });
+    const setupCompiledMsg = setupMsg.compileToLegacyMessage();
+    const setupTx = new VersionedTransaction(setupCompiledMsg);
+    setupTx.sign([signer]);
+    
+    if (dry || !broadcast) {
+      // Simulate setup transaction
+      console.log('[Executor] Simulating setup transaction...');
+      const setupSim = await connection.simulateTransaction(setupTx);
+      
+      if (setupSim.value.err) {
+        console.error('[Executor] Setup simulation error:', setupSim.value.err);
+        if (setupSim.value.logs && setupSim.value.logs.length > 0) {
+          console.error('\n[Executor] ═══ SETUP SIMULATION LOGS ═══');
+          setupSim.value.logs.forEach((log, i) => {
+            console.error(`  [${i}] ${log}`);
+          });
+          console.error('═══════════════════════════════════\n');
+        }
+        return { status: 'setup-sim-error' };
+      }
+      
+      console.log('[Executor] Setup simulation success');
+      console.log(`  CU used: ${setupSim.value.unitsConsumed ?? 'unknown'}`);
+      console.log(`  Logs: ${setupSim.value.logs?.length ?? 0} entries`);
+      
+      // In dry-run mode, we continue to simulate the liquidation TX
+      console.log('[Executor] Setup would be required. In broadcast mode, this cycle would create ATAs and skip liquidation.');
+      console.log('[Executor] Continuing with liquidation simulation for validation...\n');
+      
+    } else {
+      // Broadcast setup transaction
+      console.log('[Executor] Broadcasting setup transaction...');
+      
+      try {
+        const setupAttempts = await sendWithBoundedRetry(
+          connection,
+          setupTx,
+          signer,
+          setupMsg,
+          {
+            maxAttempts: 2,
+            cuLimit: 200_000, // Setup TX is small
+            cuPrice: Number(process.env.EXEC_CU_PRICE ?? 0),
+            cuLimitBumpFactor: 1.5,
+            cuPriceBumpMicrolamports: 50000,
+          }
+        );
+        
+        console.log(formatAttemptResults(setupAttempts));
+        
+        const finalSetupAttempt = setupAttempts[setupAttempts.length - 1];
+        
+        if (finalSetupAttempt && finalSetupAttempt.success) {
+          console.log('[Executor] ✅ Setup transaction confirmed successfully!');
+          console.log(`[Executor] Signature: ${finalSetupAttempt.signature}`);
+          console.log('[Executor] ATAs created. Liquidation will proceed in next cycle.');
+          return { 
+            status: 'setup-completed', 
+            signature: finalSetupAttempt.signature
+          };
+        } else {
+          console.error('[Executor] ❌ Setup transaction failed');
+          return { status: 'setup-failed' };
+        }
+        
+      } catch (err) {
+        console.error('[Executor] Setup broadcast error:', err instanceof Error ? err.message : String(err));
+        return { status: 'setup-error' };
+      }
+    }
+  }
   
   // Assertion: Verify labels match instructions
   if (labels.length !== ixs.length) {
