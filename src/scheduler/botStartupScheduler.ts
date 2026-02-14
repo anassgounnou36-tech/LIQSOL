@@ -261,14 +261,21 @@ export async function startBotStartupScheduler(): Promise<void> {
       }
     }
 
-    if ((process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true') === 'true') {
+    // Determine mode from environment
+    const broadcast = (process.env.LIQSOL_BROADCAST === 'true') || (process.env.EXECUTOR_BROADCAST === 'true');
+    const dry = !broadcast;
+    
+    // Run executor when globally enabled (optionally gate with SCHEDULER_ENABLE_DRYRUN if needed)
+    const executorEnabled = (process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true') === 'true';
+    
+    if (executorEnabled) {
       try {
-        const res = await runDryExecutor({ dry: true });
-        console.log('[Executor] Dry-run completed:', res?.status ?? 'ok');
+        const res = await runDryExecutor({ dry, broadcast });
+        console.log('[Executor] Completed:', res?.status ?? 'ok');
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
-        console.warn('[Executor] Dry-run failed:', err.message);
-        // Always print full stack trace for dry-run failures
+        console.warn('[Executor] Failed:', err.message);
+        // Always print full stack trace for failures
         if (err.stack) {
           console.warn('[Executor] Stack trace:');
           console.warn(err.stack);

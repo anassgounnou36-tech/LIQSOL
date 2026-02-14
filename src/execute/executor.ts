@@ -365,6 +365,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   const dry = opts?.dry ?? true;
   const broadcast = opts?.broadcast ?? false;
 
+  // Log tick start with mode flags
+  console.log(`[Executor] Tick start (dry=${dry}, broadcast=${broadcast})`);
+
   const connection = getConnection();
 
   const minEv = Number(env.EXEC_MIN_EV ?? env.SCHED_MIN_EV ?? 0);
@@ -578,7 +581,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     setupTx.sign([signer]);
     
     if (dry || !broadcast) {
-      // Simulate setup transaction
+      // Dry-run mode: Simulate setup transaction for logging, then return without simulating liquidation
       console.log('[Executor] Simulating setup transaction...');
       const setupSim = await connection.simulateTransaction(setupTx);
       
@@ -598,9 +601,11 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
       console.log(`  CU used: ${setupSim.value.unitsConsumed ?? 'unknown'}`);
       console.log(`  Logs: ${setupSim.value.logs?.length ?? 0} entries`);
       
-      // In dry-run mode, we continue to simulate the liquidation TX
-      console.log('[Executor] Setup would be required. In broadcast mode, this cycle would create ATAs and skip liquidation.');
-      console.log('[Executor] Continuing with liquidation simulation for validation...\n');
+      // In dry-run mode, return 'setup-required' and skip liquidation simulation
+      // Rationale: simulateTransaction does not persist ATA state, so liquidation would fail with AccountNotInitialized (3012)
+      console.log('[Executor] Setup would be required in broadcast mode.');
+      console.log('[Executor] Returning status "setup-required" without simulating liquidation (ATAs do not persist in simulation).\n');
+      return { status: 'setup-required' };
       
     } else {
       // Broadcast setup transaction
