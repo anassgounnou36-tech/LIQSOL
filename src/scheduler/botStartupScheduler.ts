@@ -267,7 +267,8 @@ export async function startBotStartupScheduler(): Promise<void> {
     
     // SCHEDULER_ENABLE_EXECUTOR controls whether executor runs at all (in both dry-run and broadcast modes)
     // Legacy name SCHEDULER_ENABLE_DRYRUN is kept for backward compatibility but now enables both modes
-    const executorEnabled = (process.env.SCHEDULER_ENABLE_EXECUTOR ?? process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true') === 'true';
+    const enableExecutorFlag = process.env.SCHEDULER_ENABLE_EXECUTOR ?? process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true';
+    const executorEnabled = enableExecutorFlag === 'true';
     
     if (executorEnabled) {
       // Log invocation with explicit mode flags
