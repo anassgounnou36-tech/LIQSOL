@@ -245,8 +245,18 @@ async function buildFullTransaction(
     console.log(`[Executor]   Collateral: ${collateralMint.toBase58()}`);
     console.log(`[Executor]   Repay: ${repayMint.toBase58()}`);
     
-    if (opts.useRealSwapSizing) {
+    // FIX: Gate seized-delta simulation behind ATA setup
+    // If setupIxs exist, ATAs are missing. Skip swap sizing and return setup instructions.
+    // Setup will be handled in runDryExecutor (lines 551-651).
+    // Next cycle (after ATAs are created), sizing will proceed normally.
+    if (setupIxs.length > 0) {
+      console.log('[Executor] ⚠️  Swap sizing skipped: Setup required (ATAs missing)');
+      console.log('[Executor] Setup transaction must be sent first. Swap sizing will run in next cycle.');
+      // Skip swap sizing entirely - return instructions without swap
+      // The setup handling logic in runDryExecutor will handle the setup transaction
+    } else if (opts.useRealSwapSizing) {
       // Real swap sizing: simulate liquidation to estimate seized collateral using account-delta
+      // Only proceed when all ATAs exist (setupIxs.length === 0)
       console.log('[Executor] Using REAL swap sizing via deterministic seized-delta estimation...');
       
       // Import seized delta estimator
@@ -539,10 +549,26 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   const useRealSwapSizing = !dry; // Use real sizing for broadcast mode, skip for dry-run
   
   // PR2: Build full transaction pipeline (now returns setupIxs + ixs + labels)
-  const { setupIxs, setupLabels, ixs, labels } = await buildFullTransaction(target, signer, market, programId, {
-    includeSwap: true,
-    useRealSwapSizing,
-  });
+  // Wrap in try/catch to handle swap sizing failures gracefully without crashing the bot
+  let setupIxs: TransactionInstruction[];
+  let setupLabels: string[];
+  let ixs: TransactionInstruction[];
+  let labels: string[];
+  
+  try {
+    const result = await buildFullTransaction(target, signer, market, programId, {
+      includeSwap: true,
+      useRealSwapSizing,
+    });
+    setupIxs = result.setupIxs;
+    setupLabels = result.setupLabels;
+    ixs = result.ixs;
+    labels = result.labels;
+  } catch (err) {
+    console.error('[Executor] ❌ Failed to build transaction:', err instanceof Error ? err.message : String(err));
+    console.error('[Executor] This plan will be skipped. Bot will continue with next cycle.');
+    return { status: 'build-failed' };
+  }
   
   const buildMs = Date.now() - buildStart;
   console.log(`[Executor] Built ${ixs.length} liquidation instructions in ${buildMs}ms`);
