@@ -236,13 +236,16 @@ async function buildFullTransaction(
   labels.push('liquidate');
   
   // Get derived mints for downstream validation
-  const { repayMint, collateralMint } = liquidationResult;
+  const { repayMint, collateralMint, withdrawCollateralMint } = liquidationResult;
   
   // 4) Optional Jupiter swap (if collateral mint != repay mint)
   // Final PR: Real swap sizing via deterministic seized delta estimation (NO log parsing)
+  // NOTE: Use withdrawCollateralMint for seized-delta estimation (actual redemption mint)
+  // but collateralMint for swap (liquidity mint)
   if (opts.includeSwap && !collateralMint.equals(repayMint)) {
     console.log('[Executor] Swap required: collateral mint differs from repay mint');
-    console.log(`[Executor]   Collateral: ${collateralMint.toBase58()}`);
+    console.log(`[Executor]   Collateral (liquidity): ${collateralMint.toBase58()}`);
+    console.log(`[Executor]   Collateral (redemption): ${withdrawCollateralMint.toBase58()}`);
     console.log(`[Executor]   Repay: ${repayMint.toBase58()}`);
     
     // FIX: Gate seized-delta simulation behind ATA setup
@@ -263,9 +266,28 @@ async function buildFullTransaction(
       const { estimateSeizedCollateralDeltaBaseUnits } = await import('./seizedDeltaEstimator.js');
       const { formatBaseUnitsToUiString } = await import('./swapBuilder.js');
       
-      // Build pre-simulation transaction (everything up to and including liquidation)
-      // At this point ixs contains: ComputeBudget + FlashBorrow + Refresh + Liquidation
-      const preSimIxs = [...ixs];
+      // Build seized-delta simulation transaction WITHOUT flashBorrow/flashRepay
+      // This avoids error 6032 (NoFlashRepayFound) during simulation
+      // Simulation contains: ComputeBudget + PRE refresh + RefreshFarms + RefreshObligation + POST refresh + Liquidate
+      // Extract only the liquidation path instructions (skip flashBorrow at index after computeBudget)
+      const simIxs = [
+        ...computeIxs, // ComputeBudget instructions
+        ...liquidationResult.refreshIxs, // PRE refresh + farms + obligation + POST refresh
+        ...liquidationResult.liquidationIxs, // Liquidate instruction
+      ];
+      
+      // Build corresponding labels for the simulation (for diagnostic output)
+      const simLabels = [
+        'computeBudget:limit',
+        ...(computeIxs.length > 1 ? ['computeBudget:price'] : []),
+        'refreshReserve:repay:pre',
+        'refreshReserve:collateral:pre',
+        ...(hasFarmsRefresh ? ['refreshFarms'] : []),
+        'refreshObligation',
+        'refreshReserve:repay:post',
+        'refreshReserve:collateral:post',
+        'liquidate',
+      ];
       
       try {
         // Build pre-sim tx for account-delta estimation
@@ -273,18 +295,20 @@ async function buildFullTransaction(
         const msg = new TransactionMessage({
           payerKey: signer.publicKey,
           recentBlockhash: bh.blockhash,
-          instructions: preSimIxs,
+          instructions: simIxs,
         });
         const compiledMsg = msg.compileToLegacyMessage();
         const preSimTx = new VersionedTransaction(compiledMsg);
         preSimTx.sign([signer]);
         
         // Estimate seized collateral via account-delta approach (NO log parsing)
+        // IMPORTANT: Use withdrawCollateralMint (actual redemption mint), not collateralMint (liquidity mint)
         const seizedCollateralBaseUnits = await estimateSeizedCollateralDeltaBaseUnits({
           connection,
           liquidator: signer.publicKey,
-          collateralMint,
+          collateralMint: withdrawCollateralMint, // Use redemption mint for ATA monitoring
           simulateTx: preSimTx,
+          instructionLabels: simLabels, // Pass simulation-specific labels for diagnostic output
         });
         
         console.log(`[Executor] Estimated seized: ${seizedCollateralBaseUnits} base units`);
@@ -341,12 +365,29 @@ async function buildFullTransaction(
         
       } catch (err) {
         console.error('[Executor] Failed to estimate seized collateral or build swap:', err instanceof Error ? err.message : String(err));
-        throw new Error(
-          'Swap required but sizing or building failed. ' +
-          'Cannot build transaction without knowing seized collateral amount. ' +
-          `Collateral: ${collateralMint.toBase58()}, Repay: ${repayMint.toBase58()}, ` +
-          `Error: ${err instanceof Error ? err.message : String(err)}`
-        );
+        
+        // Fallback behavior: Proceed with liquidation-only (no swap)
+        // This allows the bot to continue running 24/7 even when swap sizing fails
+        const enableFallback = (process.env.SWAP_SIZING_FALLBACK_ENABLED ?? 'true') === 'true';
+        
+        if (enableFallback) {
+          console.warn('[Executor] ⚠️  FALLBACK: Seized-delta sizing failed, proceeding with liquidation-only');
+          console.warn('[Executor] Swap will be skipped. Seized collateral will remain in destination ATA.');
+          console.warn(`[Executor]   Collateral: ${collateralMint.toBase58()}`);
+          console.warn(`[Executor]   Repay: ${repayMint.toBase58()}`);
+          console.warn(`[Executor]   Error: ${err instanceof Error ? err.message : String(err)}`);
+          console.warn('[Executor] Bot will continue with next cycle.');
+          // Skip swap - transaction will execute liquidation only
+          // The flashloan will still be repaid from the liquidator's repay token account
+        } else {
+          // Fail-fast mode (original behavior)
+          throw new Error(
+            'Swap required but sizing or building failed. ' +
+            'Cannot build transaction without knowing seized collateral amount. ' +
+            `Collateral: ${collateralMint.toBase58()}, Repay: ${repayMint.toBase58()}, ` +
+            `Error: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
       }
       
     } else {
@@ -368,42 +409,55 @@ interface ExecutorOpts {
   broadcast?: boolean;
 }
 
+// Tick mutex to prevent overlapping executor runs
+let tickInProgress = false;
+
 // Exported API for scheduler
 export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: string; signature?: string } | void> {
-  // Load env early to ensure .env variables exist under WSL
-  const env = loadEnv();
-  const dry = opts?.dry ?? true;
-  const broadcast = opts?.broadcast ?? false;
-
-  // Log tick start with mode flags
-  console.log(`[Executor] Tick start (dry=${dry}, broadcast=${broadcast})`);
-
-  const connection = getConnection();
-
-  const minEv = Number(env.EXEC_MIN_EV ?? env.SCHED_MIN_EV ?? 0);
-  const maxTtlMin = Number(env.EXEC_MAX_TTL_MIN ?? env.SCHED_MAX_TTL_MIN ?? 999999);
-  const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
-  const ttlGraceMs = Number(env.TTL_GRACE_MS ?? 60_000);
-  const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
-  const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'true') === 'true';
-
-  console.log('[Executor] Filter thresholds:');
-  console.log(`  EXEC_MIN_EV: ${minEv}`);
-  console.log(`  EXEC_MAX_TTL_MIN: ${maxTtlMin}`);
-  console.log(`  TTL_GRACE_MS: ${ttlGraceMs}`);
-  console.log(`  TTL_UNKNOWN_PASSES: ${ttlUnknownPasses}`);
-  console.log(`  SCHED_FORCE_INCLUDE_LIQUIDATABLE: ${forceIncludeLiquidatable}`);
-
-  const plans = loadPlans();
-  if (!Array.isArray(plans) || plans.length === 0) {
-    console.log('No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
-    return { status: 'no-plans' };
+  // Check if previous tick is still in progress
+  if (tickInProgress) {
+    console.warn('[Executor] Tick skipped: previous tick still in progress');
+    return { status: 'skipped-busy' };
   }
+  
+  // Set mutex flag
+  tickInProgress = true;
+  
+  try {
+    // Load env early to ensure .env variables exist under WSL
+    const env = loadEnv();
+    const dry = opts?.dry ?? true;
+    const broadcast = opts?.broadcast ?? false;
 
-  // Filter with reason tracking
-  const nowMs = Date.now();
-  const filterReasons = {
-    total: plans.length,
+    // Log tick start with mode flags
+    console.log(`[Executor] Tick start (dry=${dry}, broadcast=${broadcast})`);
+
+    const connection = getConnection();
+
+    const minEv = Number(env.EXEC_MIN_EV ?? env.SCHED_MIN_EV ?? 0);
+    const maxTtlMin = Number(env.EXEC_MAX_TTL_MIN ?? env.SCHED_MAX_TTL_MIN ?? 999999);
+    const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
+    const ttlGraceMs = Number(env.TTL_GRACE_MS ?? 60_000);
+    const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
+    const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'true') === 'true';
+
+    console.log('[Executor] Filter thresholds:');
+    console.log(`  EXEC_MIN_EV: ${minEv}`);
+    console.log(`  EXEC_MAX_TTL_MIN: ${maxTtlMin}`);
+    console.log(`  TTL_GRACE_MS: ${ttlGraceMs}`);
+    console.log(`  TTL_UNKNOWN_PASSES: ${ttlUnknownPasses}`);
+    console.log(`  SCHED_FORCE_INCLUDE_LIQUIDATABLE: ${forceIncludeLiquidatable}`);
+
+    const plans = loadPlans();
+    if (!Array.isArray(plans) || plans.length === 0) {
+      console.log('No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
+      return { status: 'no-plans' };
+    }
+
+    // Filter with reason tracking
+    const nowMs = Date.now();
+    const filterReasons = {
+      total: plans.length,
     rejected_ev: 0,
     rejected_ttl_expired: 0,
     rejected_ttl_too_high: 0,
@@ -769,6 +823,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
             6016: 'ObligationHealthy - Cannot liquidate healthy obligation',
             6017: 'ObligationStale - Obligation needs refresh',
             6018: 'ObligationReserveLimit - Reserve limit reached',
+            6032: 'NoFlashRepayFound - No corresponding repay found for flash borrow',
           };
           
           if (knownErrors[customCode]) {
@@ -787,6 +842,19 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
             console.error('\n  ✅ SOLUTION:');
             console.error('     Regenerate tx_queue.json with: npm run snapshot:candidates');
             console.error('     This will extract correct reserve pubkeys from each obligation.');
+          }
+          
+          // If it's 6032, provide specific guidance for flash loan mismatch
+          if (customCode === 6032) {
+            console.error('\n  💡 LIKELY CAUSE:');
+            console.error('     Flash loan borrow and repay instructions are mismatched.');
+            console.error('     This can happen when:');
+            console.error('     - FlashRepay instruction is missing or in wrong position');
+            console.error('     - Simulation uses incomplete instruction sequence');
+            console.error('     - Flash borrow amount doesn\'t match expected repay amount');
+            console.error('\n  ✅ SOLUTION:');
+            console.error('     Ensure transaction includes both FlashBorrow and FlashRepay instructions.');
+            console.error('     For seized-delta simulation, use the full liquidation sequence.');
           }
           
           console.error('═══════════════════════════════════════\n');
@@ -859,6 +927,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
       console.error('[Executor] Broadcast error:', err instanceof Error ? err.message : String(err));
       return { status: 'broadcast-error' } as { status: string; signature?: string; [key: string]: unknown };
     }
+  }
+  } finally {
+    // Always release the tick mutex
+    tickInProgress = false;
   }
 }
 

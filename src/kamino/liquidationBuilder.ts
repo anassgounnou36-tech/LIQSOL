@@ -61,7 +61,8 @@ export interface KaminoLiquidationResult {
   liquidationIxs: TransactionInstruction[];
   lookupTables?: AddressLookupTableAccount[];
   repayMint: PublicKey;
-  collateralMint: PublicKey;
+  collateralMint: PublicKey; // Liquidity mint of collateral reserve
+  withdrawCollateralMint: PublicKey; // Actual collateral mint used for redemption (user_destination_collateral)
   // Metadata for instruction labeling
   ataCount: number; // Number of ATA create instructions in setupIxs
   reserveRefreshCount: number; // Number of reserve refresh instructions
@@ -752,6 +753,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     liquidationIxs,
     repayMint,
     collateralMint,
+    withdrawCollateralMint, // Actual collateral mint used for redemption
     // Metadata for instruction labeling
     ataCount: setupIxs.length,
     // Reserve refresh count: 4 reserve refreshes (2 PRE + 2 POST)
