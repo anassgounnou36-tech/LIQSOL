@@ -266,9 +266,28 @@ async function buildFullTransaction(
       const { estimateSeizedCollateralDeltaBaseUnits } = await import('./seizedDeltaEstimator.js');
       const { formatBaseUnitsToUiString } = await import('./swapBuilder.js');
       
-      // Build pre-simulation transaction (everything up to and including liquidation)
-      // At this point ixs contains: ComputeBudget + FlashBorrow + Refresh + Liquidation
-      const preSimIxs = [...ixs];
+      // Build seized-delta simulation transaction WITHOUT flashBorrow/flashRepay
+      // This avoids error 6032 (NoFlashRepayFound) during simulation
+      // Simulation contains: ComputeBudget + PRE refresh + RefreshFarms + RefreshObligation + POST refresh + Liquidate
+      // Extract only the liquidation path instructions (skip flashBorrow at index after computeBudget)
+      const simIxs = [
+        ...computeIxs, // ComputeBudget instructions
+        ...liquidationResult.refreshIxs, // PRE refresh + farms + obligation + POST refresh
+        ...liquidationResult.liquidationIxs, // Liquidate instruction
+      ];
+      
+      // Build corresponding labels for the simulation (for diagnostic output)
+      const simLabels = [
+        'computeBudget:limit',
+        ...(computeIxs.length > 1 ? ['computeBudget:price'] : []),
+        'refreshReserve:repay:pre',
+        'refreshReserve:collateral:pre',
+        ...(hasFarmsRefresh ? ['refreshFarms'] : []),
+        'refreshObligation',
+        'refreshReserve:repay:post',
+        'refreshReserve:collateral:post',
+        'liquidate',
+      ];
       
       try {
         // Build pre-sim tx for account-delta estimation
@@ -276,7 +295,7 @@ async function buildFullTransaction(
         const msg = new TransactionMessage({
           payerKey: signer.publicKey,
           recentBlockhash: bh.blockhash,
-          instructions: preSimIxs,
+          instructions: simIxs,
         });
         const compiledMsg = msg.compileToLegacyMessage();
         const preSimTx = new VersionedTransaction(compiledMsg);
@@ -289,7 +308,7 @@ async function buildFullTransaction(
           liquidator: signer.publicKey,
           collateralMint: withdrawCollateralMint, // Use redemption mint for ATA monitoring
           simulateTx: preSimTx,
-          instructionLabels: labels, // Pass labels for diagnostic instruction map on failure
+          instructionLabels: simLabels, // Pass simulation-specific labels for diagnostic output
         });
         
         console.log(`[Executor] Estimated seized: ${seizedCollateralBaseUnits} base units`);
@@ -390,42 +409,55 @@ interface ExecutorOpts {
   broadcast?: boolean;
 }
 
+// Tick mutex to prevent overlapping executor runs
+let tickInProgress = false;
+
 // Exported API for scheduler
 export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: string; signature?: string } | void> {
-  // Load env early to ensure .env variables exist under WSL
-  const env = loadEnv();
-  const dry = opts?.dry ?? true;
-  const broadcast = opts?.broadcast ?? false;
-
-  // Log tick start with mode flags
-  console.log(`[Executor] Tick start (dry=${dry}, broadcast=${broadcast})`);
-
-  const connection = getConnection();
-
-  const minEv = Number(env.EXEC_MIN_EV ?? env.SCHED_MIN_EV ?? 0);
-  const maxTtlMin = Number(env.EXEC_MAX_TTL_MIN ?? env.SCHED_MAX_TTL_MIN ?? 999999);
-  const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
-  const ttlGraceMs = Number(env.TTL_GRACE_MS ?? 60_000);
-  const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
-  const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'true') === 'true';
-
-  console.log('[Executor] Filter thresholds:');
-  console.log(`  EXEC_MIN_EV: ${minEv}`);
-  console.log(`  EXEC_MAX_TTL_MIN: ${maxTtlMin}`);
-  console.log(`  TTL_GRACE_MS: ${ttlGraceMs}`);
-  console.log(`  TTL_UNKNOWN_PASSES: ${ttlUnknownPasses}`);
-  console.log(`  SCHED_FORCE_INCLUDE_LIQUIDATABLE: ${forceIncludeLiquidatable}`);
-
-  const plans = loadPlans();
-  if (!Array.isArray(plans) || plans.length === 0) {
-    console.log('No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
-    return { status: 'no-plans' };
+  // Check if previous tick is still in progress
+  if (tickInProgress) {
+    console.warn('[Executor] Tick skipped: previous tick still in progress');
+    return { status: 'skipped-busy' };
   }
+  
+  // Set mutex flag
+  tickInProgress = true;
+  
+  try {
+    // Load env early to ensure .env variables exist under WSL
+    const env = loadEnv();
+    const dry = opts?.dry ?? true;
+    const broadcast = opts?.broadcast ?? false;
 
-  // Filter with reason tracking
-  const nowMs = Date.now();
-  const filterReasons = {
-    total: plans.length,
+    // Log tick start with mode flags
+    console.log(`[Executor] Tick start (dry=${dry}, broadcast=${broadcast})`);
+
+    const connection = getConnection();
+
+    const minEv = Number(env.EXEC_MIN_EV ?? env.SCHED_MIN_EV ?? 0);
+    const maxTtlMin = Number(env.EXEC_MAX_TTL_MIN ?? env.SCHED_MAX_TTL_MIN ?? 999999);
+    const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
+    const ttlGraceMs = Number(env.TTL_GRACE_MS ?? 60_000);
+    const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
+    const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'true') === 'true';
+
+    console.log('[Executor] Filter thresholds:');
+    console.log(`  EXEC_MIN_EV: ${minEv}`);
+    console.log(`  EXEC_MAX_TTL_MIN: ${maxTtlMin}`);
+    console.log(`  TTL_GRACE_MS: ${ttlGraceMs}`);
+    console.log(`  TTL_UNKNOWN_PASSES: ${ttlUnknownPasses}`);
+    console.log(`  SCHED_FORCE_INCLUDE_LIQUIDATABLE: ${forceIncludeLiquidatable}`);
+
+    const plans = loadPlans();
+    if (!Array.isArray(plans) || plans.length === 0) {
+      console.log('No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
+      return { status: 'no-plans' };
+    }
+
+    // Filter with reason tracking
+    const nowMs = Date.now();
+    const filterReasons = {
+      total: plans.length,
     rejected_ev: 0,
     rejected_ttl_expired: 0,
     rejected_ttl_too_high: 0,
@@ -895,6 +927,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
       console.error('[Executor] Broadcast error:', err instanceof Error ? err.message : String(err));
       return { status: 'broadcast-error' } as { status: string; signature?: string; [key: string]: unknown };
     }
+  }
+  } finally {
+    // Always release the tick mutex
+    tickInProgress = false;
   }
 }
 

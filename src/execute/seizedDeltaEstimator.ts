@@ -8,28 +8,28 @@ export interface EstimateSeizedCollateralDeltaParams {
   connection: Connection;
   liquidator: PublicKey;
   collateralMint: PublicKey;
-  simulateTx: VersionedTransaction; // pre-sim tx: flashBorrow + refresh + liquidation only
+  simulateTx: VersionedTransaction; // liquidation-only sim: NO flashBorrow/flashRepay
   instructionLabels?: string[]; // Optional labels for debugging failed simulations
 }
 
 /**
  * Deterministic seized collateral estimator using account post-state delta.
  * 
- * IMPORTANT: The simulateTx MUST contain the COMPLETE liquidation instruction sequence
- * to satisfy Kamino's check_refresh and state requirements:
+ * IMPORTANT: The simulateTx should contain ONLY the liquidation instruction sequence
+ * WITHOUT flashBorrow/flashRepay to avoid error 6032 (NoFlashRepayFound):
  * 
- * Expected instruction order:
+ * Expected instruction order (NO flash loan):
  * 1. ComputeBudget instructions (limit, optional price)
- * 2. FlashBorrow
- * 3. PRE-REFRESH: RefreshReserve (repay reserve)
- * 4. PRE-REFRESH: RefreshReserve (collateral reserve)
- * 5. RefreshFarmsForObligationForReserve (collateral, if farm exists)
- * 6. RefreshObligation (with ALL reserves as remaining accounts)
- * 7. POST-REFRESH: RefreshReserve (repay reserve)
- * 8. POST-REFRESH: RefreshReserve (collateral reserve)
- * 9. LiquidateObligationAndRedeemReserveCollateral
+ * 2. PRE-REFRESH: RefreshReserve (repay reserve)
+ * 3. PRE-REFRESH: RefreshReserve (collateral reserve)
+ * 4. RefreshFarmsForObligationForReserve (collateral, if farm exists)
+ * 5. RefreshObligation (with ALL reserves as remaining accounts)
+ * 6. POST-REFRESH: RefreshReserve (repay reserve)
+ * 7. POST-REFRESH: RefreshReserve (collateral reserve)
+ * 8. LiquidateObligationAndRedeemReserveCollateral
  * 
- * DO NOT use a shortened "mini" liquidation sim - mirror the real sequence.
+ * DO NOT include flashBorrow/flashRepay in the simulation - this isolates the
+ * liquidation path for delta measurement and avoids flash loan pairing issues.
  * 
  * Algorithm:
  * 1. Derive liquidator collateral ATA via getAssociatedTokenAddress(collateralMint, liquidator, true)
