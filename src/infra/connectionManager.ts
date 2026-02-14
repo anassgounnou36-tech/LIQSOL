@@ -7,10 +7,21 @@ export class ConnectionManager {
   private lastPrimaryMs = Infinity;
   private lastSecondaryMs = Infinity;
 
-  constructor(primaryUrl: string, secondaryUrl?: string) {
-    this._primary = new Connection(primaryUrl, "confirmed");
+  constructor(
+    primaryUrl: string, 
+    secondaryUrl?: string,
+    wsPrimaryUrl?: string,
+    wsSecondaryUrl?: string
+  ) {
+    this._primary = new Connection(primaryUrl, {
+      commitment: "confirmed",
+      wsEndpoint: wsPrimaryUrl,
+    });
     if (secondaryUrl) {
-      this._secondary = new Connection(secondaryUrl, "confirmed");
+      this._secondary = new Connection(secondaryUrl, {
+        commitment: "confirmed",
+        wsEndpoint: wsSecondaryUrl,
+      });
     }
   }
 

@@ -13,7 +13,12 @@ async function main() {
   logger.info({ event: "healthcheck_start" }, "starting healthcheck");
 
   // Test RPC connections
-  const connMgr = new ConnectionManager(env.RPC_PRIMARY, env.RPC_SECONDARY);
+  const connMgr = new ConnectionManager(
+    env.RPC_PRIMARY, 
+    env.RPC_SECONDARY,
+    env.WS_PRIMARY,
+    env.WS_SECONDARY
+  );
   await connMgr.refreshLatencies();
   logger.info(
     { 

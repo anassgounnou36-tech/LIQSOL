@@ -36,9 +36,18 @@ export function getConnection(): Connection {
       );
     }
     
+    const wsUrl = process.env.WS_PRIMARY;
+    
+    // Log RPC and WS endpoints for verification
+    console.log(`[Connection] RPC_PRIMARY=${rpcUrl} WS_PRIMARY=${wsUrl || '(not set)'}`);
+    
     // Use 'confirmed' as default commitment level for balance between speed and reliability
-    connectionInstance = new Connection(rpcUrl, 'confirmed');
-    console.log(`[Connection] Initialized shared Connection to ${rpcUrl} with 'confirmed' commitment`);
+    // Pass wsEndpoint to enable WebSocket subscriptions (e.g., signatureSubscribe)
+    connectionInstance = new Connection(rpcUrl, {
+      commitment: 'confirmed',
+      wsEndpoint: wsUrl,
+    });
+    console.log(`[Connection] Initialized shared Connection with 'confirmed' commitment and ${wsUrl ? 'WSS' : 'HTTP-derived WS'}`);
   }
   
   return connectionInstance;
