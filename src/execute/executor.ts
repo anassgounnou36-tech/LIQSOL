@@ -208,32 +208,87 @@ async function buildFullTransaction(
   // Add labels for liquidation instructions (refreshIxs now contains NO ATA creates)
   ixs.push(...liquidationResult.refreshIxs);
   
-  // Label refresh instructions (NO ATA labels needed here anymore)
+  // Label refresh instructions in the order they appear in refreshIxs:
+  // REQUIRED SEQUENCE (immediately before liquidation):
+  // 1. RefreshFarmsForObligationForReserve (collateral, optional)
+  // 2. RefreshObligation
+  // 3. RefreshReserve(repay)
+  // 4. RefreshReserve(collateral)
   
-  // Reserve refreshes in the order they appear in refreshIxs:
-  // PRE-refresh phase (first 2): repay:pre, collateral:pre
-  // Then farms refresh (optional)
-  // Then obligation refresh
-  // POST-refresh phase (last 2): repay:post, collateral:post
-  
-  // First 2 reserve refreshes (PRE-refresh phase)
-  labels.push('refreshReserve:repay:pre');
-  labels.push('refreshReserve:collateral:pre');
-  
-  // Farms refresh (optional, after PRE reserve refreshes)
+  // Farms refresh (optional, first instruction)
   if (hasFarmsRefresh) {
     labels.push('refreshFarms');
   }
   
-  // Obligation refresh (after farms refresh)
+  // Obligation refresh
   labels.push('refreshObligation');
   
-  // Last 2 reserve refreshes (POST-refresh phase)
+  // Reserve refreshes (immediately before liquidation)
   labels.push('refreshReserve:repay:post');
   labels.push('refreshReserve:collateral:post');
   
   ixs.push(...liquidationResult.liquidationIxs);
   labels.push('liquidate');
+  
+  // DEFENSIVE ASSERTION: Validate the 4-instruction sequence before liquidation
+  // KLend's check_refresh expects exact positions immediately before liquidation:
+  // - Position -4: refreshFarmsForObligationForReserve (collateral) [OPTIONAL]
+  // - Position -3: refreshObligation (or -4 if no farms)
+  // - Position -2: refreshReserve(repay) (or -3 if no farms)
+  // - Position -1: refreshReserve(collateral) (or -2 if no farms)
+  // - Position 0: liquidateObligationAndRedeemReserveCollateral
+  const liquidateIdx = labels.lastIndexOf('liquidate');
+  if (liquidateIdx === -1) {
+    throw new Error('[Executor] ASSERTION FAILED: liquidate instruction not found in labels');
+  }
+  
+  // Expected sequence immediately before liquidation
+  const expectedSequence = hasFarmsRefresh 
+    ? ['refreshFarms', 'refreshObligation', 'refreshReserve:repay:post', 'refreshReserve:collateral:post']
+    : ['refreshObligation', 'refreshReserve:repay:post', 'refreshReserve:collateral:post'];
+  
+  const startIdx = liquidateIdx - expectedSequence.length;
+  if (startIdx < 0) {
+    console.error('[Executor] ASSERTION FAILED: Not enough instructions before liquidation');
+    console.error(`[Executor] Expected ${expectedSequence.length} instructions before liquidate, but only ${liquidateIdx} exist`);
+    console.error('[Executor] Instruction map:');
+    labels.forEach((label, idx) => {
+      console.error(`  [${idx}] ${label}`);
+    });
+    throw new Error('[Executor] Invalid instruction sequence: insufficient instructions before liquidation');
+  }
+  
+  // Validate the sequence
+  let isValid = true;
+  const actualSequence = labels.slice(startIdx, liquidateIdx);
+  for (let i = 0; i < expectedSequence.length; i++) {
+    if (actualSequence[i] !== expectedSequence[i]) {
+      isValid = false;
+      break;
+    }
+  }
+  
+  if (!isValid) {
+    console.error('[Executor] ASSERTION FAILED: Required refresh sequence does not immediately precede liquidation');
+    console.error('[Executor] Expected sequence before liquidate:');
+    expectedSequence.forEach((label, idx) => {
+      console.error(`  [${startIdx + idx}] ${label}`);
+    });
+    console.error('[Executor] Actual sequence before liquidate:');
+    actualSequence.forEach((label, idx) => {
+      console.error(`  [${startIdx + idx}] ${label}`);
+    });
+    console.error('\n[Executor] Full instruction map (5-instruction window around liquidate):');
+    const windowStart = Math.max(0, liquidateIdx - 5);
+    const windowEnd = Math.min(labels.length, liquidateIdx + 2);
+    for (let i = windowStart; i < windowEnd; i++) {
+      const marker = i === liquidateIdx ? ' ← liquidate' : '';
+      console.error(`  [${i}] ${labels[i]}${marker}`);
+    }
+    throw new Error('[Executor] Invalid instruction sequence: required refresh sequence not immediately before liquidation');
+  }
+  
+  console.log('[Executor] ✓ Refresh sequence validation passed: required instructions immediately precede liquidation');
   
   // Get derived mints for downstream validation
   const { repayMint, collateralMint, withdrawCollateralMint } = liquidationResult;
@@ -268,11 +323,11 @@ async function buildFullTransaction(
       
       // Build seized-delta simulation transaction WITHOUT flashBorrow/flashRepay
       // This avoids error 6032 (NoFlashRepayFound) during simulation
-      // Simulation contains: ComputeBudget + PRE refresh + RefreshFarms + RefreshObligation + POST refresh + Liquidate
-      // Extract only the liquidation path instructions (skip flashBorrow at index after computeBudget)
+      // Simulation contains: ComputeBudget + RefreshFarms (optional) + RefreshObligation + RefreshReserve(repay) + RefreshReserve(collateral) + Liquidate
+      // NO PRE-refresh instructions in simulation
       const simIxs = [
         ...computeIxs, // ComputeBudget instructions
-        ...liquidationResult.refreshIxs, // PRE refresh + farms + obligation + POST refresh
+        ...liquidationResult.refreshIxs, // farms + obligation + reserve refreshes
         ...liquidationResult.liquidationIxs, // Liquidate instruction
       ];
       
@@ -280,8 +335,6 @@ async function buildFullTransaction(
       const simLabels = [
         'computeBudget:limit',
         ...(computeIxs.length > 1 ? ['computeBudget:price'] : []),
-        'refreshReserve:repay:pre',
-        'refreshReserve:collateral:pre',
         ...(hasFarmsRefresh ? ['refreshFarms'] : []),
         'refreshObligation',
         'refreshReserve:repay:post',
