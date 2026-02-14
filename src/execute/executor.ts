@@ -224,8 +224,8 @@ async function buildFullTransaction(
   labels.push('refreshObligation');
   
   // Reserve refreshes (immediately before liquidation)
-  labels.push('refreshReserve:repay:post');
-  labels.push('refreshReserve:collateral:post');
+  labels.push('refreshReserve:repay');
+  labels.push('refreshReserve:collateral');
   
   ixs.push(...liquidationResult.liquidationIxs);
   labels.push('liquidate');
@@ -244,8 +244,8 @@ async function buildFullTransaction(
   
   // Expected sequence immediately before liquidation
   const expectedSequence = hasFarmsRefresh 
-    ? ['refreshFarms', 'refreshObligation', 'refreshReserve:repay:post', 'refreshReserve:collateral:post']
-    : ['refreshObligation', 'refreshReserve:repay:post', 'refreshReserve:collateral:post'];
+    ? ['refreshFarms', 'refreshObligation', 'refreshReserve:repay', 'refreshReserve:collateral']
+    : ['refreshObligation', 'refreshReserve:repay', 'refreshReserve:collateral'];
   
   const startIdx = liquidateIdx - expectedSequence.length;
   if (startIdx < 0) {
@@ -337,8 +337,8 @@ async function buildFullTransaction(
         ...(computeIxs.length > 1 ? ['computeBudget:price'] : []),
         ...(hasFarmsRefresh ? ['refreshFarms'] : []),
         'refreshObligation',
-        'refreshReserve:repay:post',
-        'refreshReserve:collateral:post',
+        'refreshReserve:repay',
+        'refreshReserve:collateral',
         'liquidate',
       ];
       
