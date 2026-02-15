@@ -360,7 +360,7 @@ export function validateCompiledInstructionWindow(
     actualPreSequence.forEach((kind, idx) => {
       diagnostics += `  [${preStartIdx + idx}] ${kind}\n`;
     });
-    diagnostics += '\nFull instruction window (8-instruction window around liquidation):\n';
+    diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
     const windowStart = Math.max(0, liquidateIdx - 6);
     const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
     for (let i = windowStart; i < windowEnd; i++) {
@@ -386,7 +386,7 @@ export function validateCompiledInstructionWindow(
       let diagnostics = 'POST instruction after liquidation does not match expected farms refresh\n\n';
       diagnostics += `Expected: refreshObligationFarmsForReserve\n`;
       diagnostics += `Actual: ${postKind}\n`;
-      diagnostics += '\nFull instruction window (8-instruction window around liquidation):\n';
+      diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
       const windowStart = Math.max(0, liquidateIdx - 6);
       const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
       for (let i = windowStart; i < windowEnd; i++) {

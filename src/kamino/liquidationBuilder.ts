@@ -539,7 +539,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   // ========================================================================
   // STEP 1: Build PRE-RESERVE refresh instructions (for RefreshObligation slot freshness)
-  // Order: collateral FIRST, then repay (matches KLend's expected order)
+  // Order: collateral then repay (matches KLend's expected order)
   // ========================================================================
   const preReserveIxs: TransactionInstruction[] = [];
   
