@@ -9,6 +9,13 @@ import {
 import { buildComputeBudgetIxs } from "../execution/computeBudget.js";
 import { buildKaminoFlashloanIxs } from "../flashloan/kaminoFlashloan.js";
 import { buildKaminoLiquidationIxs } from "./liquidationBuilder.js";
+import {
+  KAMINO_DISCRIMINATORS,
+  KNOWN_PROGRAM_IDS,
+  decodeInstructionKind,
+  extractDiscriminator,
+  type InstructionKind as KaminoInstructionKind,
+} from "../execute/decodeKaminoKindFromCompiled.js";
 
 /**
  * Canonical liquidation instruction sequence configuration
@@ -227,54 +234,11 @@ export function decodeCompiledInstructionKinds(tx: VersionedTransaction): Instru
     const programIdKey = accountKeys[ix.programIdIndex];
     const programId = programIdKey.toBase58();
     
-    // Extract first 8 bytes of data as discriminator (if available)
-    let discriminator: string | undefined;
-    if (ix.data.length >= 8) {
-      discriminator = Buffer.from(ix.data.slice(0, 8)).toString('hex');
-    }
+    // Extract discriminator using centralized helper
+    const discriminator = extractDiscriminator(ix.data);
     
-    // Map known program IDs to human-readable names
-    let kind = 'unknown';
-    
-    // Kamino KLend program
-    if (programId === 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD') {
-      // Decode Kamino instruction discriminators
-      // These are anchor discriminators: first 8 bytes of sha256("global:instruction_name")
-      if (discriminator === '07930aa66d3aa710') kind = 'refreshReserve';
-      else if (discriminator === 'a8e5e45f8c4c29c0') kind = 'refreshObligation';
-      else if (discriminator === 'd88378ff5e9e5028') kind = 'liquidateObligationAndRedeemReserveCollateral';
-      else if (discriminator === 'd79cf84dbd8fe9e2') kind = 'refreshObligationFarmsForReserve';
-      else if (discriminator === 'd60e1307b8c6ef35') kind = 'flashBorrowReserveLiquidity';
-      else if (discriminator === 'f69c6e18b02e3e8d') kind = 'flashRepayReserveLiquidity';
-      else kind = `kamino:${discriminator ?? 'unknown'}`;
-    }
-    // Compute Budget program
-    else if (programId === 'ComputeBudget111111111111111111111111111111') {
-      if (discriminator) {
-        const firstByte = ix.data[0];
-        if (firstByte === 0x02) kind = 'computeBudget:limit';
-        else if (firstByte === 0x03) kind = 'computeBudget:price';
-        else kind = 'computeBudget:unknown';
-      } else {
-        kind = 'computeBudget';
-      }
-    }
-    // Jupiter V6 program
-    else if (programId === 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4') {
-      kind = 'jupiter:swap';
-    }
-    // Token program
-    else if (programId === 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') {
-      kind = 'token:instruction';
-    }
-    // Token-2022 program
-    else if (programId === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb') {
-      kind = 'token2022:instruction';
-    }
-    // ATA program
-    else if (programId === 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL') {
-      kind = 'ata:create';
-    }
+    // Decode kind using centralized decoder
+    const kind = decodeInstructionKind(programId, discriminator, ix.data);
     
     return {
       programId,
@@ -308,6 +272,8 @@ export function decodeCompiledInstructionKinds(tx: VersionedTransaction): Instru
  * 2. First instruction after liquidation must be farms refresh (or nothing/swap if no farms)
  * 3. The 4 instructions before liquidation (or 2-3 if no farms) must match canonical PRE order
  * 
+ * Uses semantic matching by programId + discriminator for reliable v0 transaction validation.
+ * 
  * @param tx - Compiled versioned transaction
  * @param hasFarmsRefresh - Whether farms refresh instruction should be present
  * @returns Validation result with detailed diagnostics
@@ -318,13 +284,28 @@ export function validateCompiledInstructionWindow(
 ): { valid: boolean; diagnostics: string } {
   const kinds = decodeCompiledInstructionKinds(tx);
   
-  // Find liquidation instruction
-  const liquidateIdx = kinds.findIndex(k => k.kind === 'liquidateObligationAndRedeemReserveCollateral');
+  // Find liquidation instruction using semantic matching (programId + discriminator)
+  const klendProgramId = KNOWN_PROGRAM_IDS.KAMINO_KLEND;
+  const liquidateDiscriminator = KAMINO_DISCRIMINATORS.liquidateObligationAndRedeemReserveCollateral;
+  const liquidateIdx = kinds.findIndex(k => 
+    k.programId === klendProgramId && 
+    k.discriminator === liquidateDiscriminator
+  );
   
   if (liquidateIdx === -1) {
+    // Enhanced diagnostics: show what instructions we found
+    let diagnostics = 'Liquidation instruction not found in compiled transaction.\n\n';
+    diagnostics += 'Searched for:\n';
+    diagnostics += `  Program ID: ${klendProgramId}\n`;
+    diagnostics += `  Discriminator: ${liquidateDiscriminator}\n\n`;
+    diagnostics += 'Instructions in compiled message:\n';
+    kinds.forEach((kind, idx) => {
+      const discStr = kind.discriminator ?? 'none';
+      diagnostics += `  [${idx}] ${kind.kind} (program: ${kind.programId.slice(0, 12)}..., disc: ${discStr})\n`;
+    });
     return {
       valid: false,
-      diagnostics: 'Liquidation instruction not found in compiled transaction',
+      diagnostics,
     };
   }
   
