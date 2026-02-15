@@ -18,20 +18,22 @@ export interface EstimateSeizedCollateralDeltaParams {
  * IMPORTANT: The simulateTx should contain ONLY the liquidation instruction sequence
  * WITHOUT flashBorrow/flashRepay to avoid error 6032 (NoFlashRepayFound):
  * 
- * Expected instruction order (NO flash loan, NO PRE-refresh):
+ * Expected instruction order (NO flash loan, WITH PRE-refresh):
  * 1. ComputeBudget instructions (limit, optional price)
- * 2. RefreshFarmsForObligationForReserve (collateral, if farm exists) [OPTIONAL]
- * 3. RefreshObligation (with ALL reserves as remaining accounts)
- * 4. RefreshReserve (repay reserve) - immediately before liquidation
- * 5. RefreshReserve (collateral reserve) - immediately before liquidation
- * 6. LiquidateObligationAndRedeemReserveCollateral
+ * 2. RefreshReserve (repay reserve) - PRE-refresh for RefreshObligation slot freshness
+ * 3. RefreshReserve (collateral reserve) - PRE-refresh for RefreshObligation slot freshness
+ * 4. RefreshFarmsForObligationForReserve (collateral, if farm exists) [OPTIONAL]
+ * 5. RefreshObligation (with ALL reserves as remaining accounts)
+ * 6. RefreshReserve (repay reserve) - POST-refresh immediately before liquidation
+ * 7. RefreshReserve (collateral reserve) - POST-refresh immediately before liquidation
+ * 8. LiquidateObligationAndRedeemReserveCollateral
  * 
  * DO NOT include flashBorrow/flashRepay in the simulation - this isolates the
  * liquidation path for delta measurement and avoids flash loan pairing issues.
  * 
- * DO NOT include PRE-refresh reserve instructions - KLend's check_refresh validation
- * expects the refresh sequence at exact positions immediately before liquidation.
- * Duplicate refreshReserve instructions cause the validator to match the wrong occurrence.
+ * PRE-refresh instructions (steps 2-3) are required to prevent ReserveStale (6009)
+ * during RefreshObligation. POST-refresh instructions (steps 6-7) are required
+ * to satisfy KLend's check_refresh validation. Both sequences are necessary.
  * 
  * Algorithm:
  * 1. Derive liquidator collateral ATA via getAssociatedTokenAddress(collateralMint, liquidator, true)

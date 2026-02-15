@@ -198,22 +198,24 @@ async function buildFullTransaction(
   // TX Size Fix: Extract setupIxs and labels separately
   const setupIxs = liquidationResult.setupIxs;
   const setupLabels: string[] = [];
-  const { hasFarmsRefresh, setupAtaNames } = liquidationResult;
+  const { hasFarmsRefresh, setupAtaNames, preRefreshIxs, refreshIxs, postRefreshIxs } = liquidationResult;
   
   // Build labels for setup instructions (ATA creates) using names from builder
   for (const ataName of setupAtaNames) {
     setupLabels.push(`setup:ata:${ataName}`);
   }
   
-  // Add labels for liquidation instructions (refreshIxs now contains NO ATA creates)
-  ixs.push(...liquidationResult.refreshIxs);
+  // Add PRE-REFRESH instructions (for RefreshObligation slot freshness)
+  ixs.push(...preRefreshIxs);
+  labels.push('preRefreshReserve:repay');
+  labels.push('preRefreshReserve:collateral');
   
-  // Label refresh instructions in the order they appear in refreshIxs:
-  // REQUIRED SEQUENCE (immediately before liquidation):
+  // Add CORE REFRESH instructions (RefreshFarms + RefreshObligation)
+  ixs.push(...refreshIxs);
+  
+  // Label core refresh instructions:
   // 1. RefreshFarmsForObligationForReserve (collateral, optional)
   // 2. RefreshObligation
-  // 3. RefreshReserve(repay)
-  // 4. RefreshReserve(collateral)
   
   // Farms refresh (optional, first instruction)
   if (hasFarmsRefresh) {
@@ -223,9 +225,10 @@ async function buildFullTransaction(
   // Obligation refresh
   labels.push('refreshObligation');
   
-  // Reserve refreshes (immediately before liquidation)
-  labels.push('refreshReserve:repay');
-  labels.push('refreshReserve:collateral');
+  // Add POST-REFRESH instructions (for check_refresh validation, immediately before liquidation)
+  ixs.push(...postRefreshIxs);
+  labels.push('postRefreshReserve:repay');
+  labels.push('postRefreshReserve:collateral');
   
   ixs.push(...liquidationResult.liquidationIxs);
   labels.push('liquidate');
@@ -234,8 +237,8 @@ async function buildFullTransaction(
   // KLend's check_refresh expects exact positions immediately before liquidation:
   // - Position -4: refreshFarmsForObligationForReserve (collateral) [OPTIONAL]
   // - Position -3: refreshObligation (or -4 if no farms)
-  // - Position -2: refreshReserve(repay) (or -3 if no farms)
-  // - Position -1: refreshReserve(collateral) (or -2 if no farms)
+  // - Position -2: postRefreshReserve(repay) (or -3 if no farms)
+  // - Position -1: postRefreshReserve(collateral) (or -2 if no farms)
   // - Position 0: liquidateObligationAndRedeemReserveCollateral
   const liquidateIdx = labels.lastIndexOf('liquidate');
   if (liquidateIdx === -1) {
@@ -244,8 +247,8 @@ async function buildFullTransaction(
   
   // Expected sequence immediately before liquidation
   const expectedSequence = hasFarmsRefresh 
-    ? ['refreshFarms', 'refreshObligation', 'refreshReserve:repay', 'refreshReserve:collateral']
-    : ['refreshObligation', 'refreshReserve:repay', 'refreshReserve:collateral'];
+    ? ['refreshFarms', 'refreshObligation', 'postRefreshReserve:repay', 'postRefreshReserve:collateral']
+    : ['refreshObligation', 'postRefreshReserve:repay', 'postRefreshReserve:collateral'];
   
   const startIdx = liquidateIdx - expectedSequence.length;
   if (startIdx < 0) {
@@ -330,11 +333,13 @@ async function buildFullTransaction(
       
       // Build seized-delta simulation transaction WITHOUT flashBorrow/flashRepay
       // This avoids error 6032 (NoFlashRepayFound) during simulation
-      // Simulation contains: ComputeBudget + RefreshFarms (optional) + RefreshObligation + RefreshReserve(repay) + RefreshReserve(collateral) + Liquidate
-      // NO PRE-refresh instructions in simulation
+      // Simulation contains: ComputeBudget + PRE-REFRESH + RefreshFarms (optional) + RefreshObligation + POST-REFRESH + Liquidate
+      // PRE-REFRESH is required to prevent 6009 (ReserveStale) at RefreshObligation
       const simIxs = [
         ...computeIxs, // ComputeBudget instructions
-        ...liquidationResult.refreshIxs, // farms + obligation + reserve refreshes
+        ...liquidationResult.preRefreshIxs, // Pre-refresh for slot freshness
+        ...liquidationResult.refreshIxs, // farms + obligation refreshes
+        ...liquidationResult.postRefreshIxs, // Post-refresh for check_refresh
         ...liquidationResult.liquidationIxs, // Liquidate instruction
       ];
       
@@ -342,10 +347,12 @@ async function buildFullTransaction(
       const simLabels = [
         'computeBudget:limit',
         ...(computeIxs.length > 1 ? ['computeBudget:price'] : []),
+        'preRefreshReserve:repay',
+        'preRefreshReserve:collateral',
         ...(hasFarmsRefresh ? ['refreshFarms'] : []),
         'refreshObligation',
-        'refreshReserve:repay',
-        'refreshReserve:collateral',
+        'postRefreshReserve:repay',
+        'postRefreshReserve:collateral',
         'liquidate',
       ];
       

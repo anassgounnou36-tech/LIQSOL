@@ -53,11 +53,15 @@ export interface BuildKaminoLiquidationParams {
  * Now includes derived repayMint and collateralMint for downstream validation
  * 
  * TX Size Fix: Added setupIxs for out-of-band ATA creation
+ * 
+ * ReserveStale Fix: Added preRefreshIxs for slot freshness before RefreshObligation
  */
 export interface KaminoLiquidationResult {
   setupIxs: TransactionInstruction[]; // ATA create instructions (only for missing ATAs)
   setupAtaNames: string[]; // Names of ATAs in setupIxs for labeling (e.g., ['repay', 'collateral'])
-  refreshIxs: TransactionInstruction[];
+  preRefreshIxs: TransactionInstruction[]; // Pre-refresh reserves to satisfy RefreshObligation slot freshness
+  refreshIxs: TransactionInstruction[]; // RefreshFarms + RefreshObligation
+  postRefreshIxs: TransactionInstruction[]; // Reserve refreshes immediately before liquidation (for check_refresh)
   liquidationIxs: TransactionInstruction[];
   lookupTables?: AddressLookupTableAccount[];
   repayMint: PublicKey;
@@ -468,17 +472,24 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // TX Size Fix: DO NOT add ATA creates to refreshIxs
   // They will be sent in a separate setup transaction if needed
   
-  // PART B: Build refresh instructions in the order required to fix Custom(6051)
-  // REQUIRED SEQUENCE (3 or 4 instructions depending on farm existence, immediately before liquidation):
-  // 1. RefreshFarmsForObligationForReserve (collateral reserve, if farm exists) [OPTIONAL]
-  // 2. RefreshObligation (all reserves in canonical order)
-  // 3. RefreshReserve (repay reserve) - MUST be immediately before liquidation
-  // 4. RefreshReserve (collateral reserve) - MUST be immediately before liquidation
+  // PART B: Build refresh instructions in the order required to fix Custom(6051) and Custom(6009)
+  // 
+  // ARCHITECTURE:
+  // 1. PRE-REFRESH: RefreshReserve(repay) + RefreshReserve(collateral) BEFORE RefreshObligation
+  //    - Ensures reserves are fresh in the same slot when RefreshObligation runs
+  //    - Fixes Custom(6009) ReserveStale at RefreshObligation
+  // 
+  // 2. CORE REFRESH: RefreshFarms (optional) + RefreshObligation
+  //    - RefreshObligation now finds fresh reserves from pre-refresh
+  // 
+  // 3. POST-REFRESH: RefreshReserve(repay) + RefreshReserve(collateral) IMMEDIATELY before liquidation
+  //    - Required sequence for KLend's check_refresh validation
+  //    - MUST be contiguous with liquidation (no instructions in between)
+  //    - Fixes Custom(6051) if this sequence is not present
   //
-  // NOTE: PRE-refresh instructions have been REMOVED to fix Custom(6051).
-  // KLend's check_refresh validation expects the refresh sequence at exact positions
-  // immediately before liquidation. Duplicate refreshReserve instructions cause the
-  // validator to match the wrong occurrence, resulting in 6051.
+  // NOTE: We need BOTH pre-refresh and post-refresh to satisfy:
+  //   - RefreshObligation's slot freshness requirement (pre-refresh)
+  //   - check_refresh's positional validation (post-refresh)
   
   const DEFAULT_PUBKEY = "11111111111111111111111111111111";
   
@@ -517,7 +528,19 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const repayReservePubkey = repayReserve.address;
   const collateralReservePubkey = collateralReserve.address;
   
-  // STEP 1: RefreshFarmsForObligationForReserve for collateral reserve (if farm exists)
+  // STEP 1: Build PRE-REFRESH instructions (to satisfy RefreshObligation's slot freshness)
+  const preRefreshIxs: TransactionInstruction[] = [];
+  
+  console.log(`[LiqBuilder] Adding PRE-REFRESH RefreshReserve for repay reserve (slot freshness)`);
+  const preRepayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'preRefreshReserve:repay');
+  preRefreshIxs.push(preRepayRefreshIx);
+  
+  console.log(`[LiqBuilder] Adding PRE-REFRESH RefreshReserve for collateral reserve (slot freshness)`);
+  const preCollateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'preRefreshReserve:collateral');
+  preRefreshIxs.push(preCollateralRefreshIx);
+  
+  // STEP 2: Build CORE REFRESH instructions (RefreshFarms + RefreshObligation)
+  // STEP 2: Build CORE REFRESH instructions (RefreshFarms + RefreshObligation)
   // Check if collateral reserve has a farm configured
   const collateralFarmState = collateralReserve.state.farmCollateral;
   console.log(`[LiqBuilder] Collateral reserve farm state: ${collateralFarmState}`);
@@ -572,7 +595,8 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     console.log(`[LiqBuilder] Collateral reserve has no farm, skipping RefreshFarmsForObligationForReserve`);
   }
   
-  // STEP 2: RefreshObligation with ALL reserves as remaining accounts
+  // STEP 3: RefreshObligation with ALL reserves as remaining accounts
+  // STEP 3: RefreshObligation with ALL reserves as remaining accounts
   // Convert reserve pubkeys to AccountMeta format for SDK
   // According to Kamino SDK, reserves passed as remaining accounts should be read-only (role 0)
   const remainingAccounts = uniqueReserves.map(r => ({
@@ -593,15 +617,17 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     data: Buffer.from(obligationRefreshIx.data || []),
   }));
   
-  // STEP 3: RefreshReserve for repay reserve (immediately before liquidation)
-  console.log(`[LiqBuilder] Adding RefreshReserve for repay reserve`);
-  const repayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'refreshReserve:repay');
-  refreshIxs.push(repayRefreshIx);
+  // STEP 4: Build POST-REFRESH instructions (for check_refresh validation)
+  // These MUST be placed immediately before liquidation with no instructions in between
+  const postRefreshIxs: TransactionInstruction[] = [];
   
-  // STEP 4: RefreshReserve for collateral reserve (immediately before liquidation)
-  console.log(`[LiqBuilder] Adding RefreshReserve for collateral reserve`);
-  const collateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'refreshReserve:collateral');
-  refreshIxs.push(collateralRefreshIx);
+  console.log(`[LiqBuilder] Adding POST-REFRESH RefreshReserve for repay reserve (check_refresh)`);
+  const postRepayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'postRefreshReserve:repay');
+  postRefreshIxs.push(postRepayRefreshIx);
+  
+  console.log(`[LiqBuilder] Adding POST-REFRESH RefreshReserve for collateral reserve (check_refresh)`);
+  const postCollateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'postRefreshReserve:collateral');
+  postRefreshIxs.push(postCollateralRefreshIx);
   
   // 4) Derive repay amount
   // If repayAmountUi provided, convert to base units with exact string→integer conversion
@@ -738,16 +764,18 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   return {
     setupIxs,
     setupAtaNames,
-    refreshIxs,
+    preRefreshIxs, // Reserve refreshes BEFORE RefreshObligation (slot freshness)
+    refreshIxs, // RefreshFarms + RefreshObligation
+    postRefreshIxs, // Reserve refreshes IMMEDIATELY before liquidation (check_refresh)
     liquidationIxs,
     repayMint,
     collateralMint,
     withdrawCollateralMint, // Actual collateral mint used for redemption
     // Metadata for instruction labeling
     ataCount: setupIxs.length,
-    // Reserve refresh count: 2 reserve refreshes (immediately before liquidation)
+    // Reserve refresh count: 2 pre-refresh + 2 post-refresh = 4 total
     // Note: This doesn't include RefreshFarmsForObligationForReserve or RefreshObligation
-    reserveRefreshCount: 2,
+    reserveRefreshCount: 4,
     // Track whether farms refresh instruction was added
     hasFarmsRefresh,
     // lookupTables: undefined, // Can be added later if needed
