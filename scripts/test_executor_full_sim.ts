@@ -133,9 +133,12 @@ async function main() {
       repayMintPreference,
       repayAmountUi: amountUi,
     });
+    allIxs.push(...liquidationResult.preRefreshIxs);
     allIxs.push(...liquidationResult.refreshIxs);
+    allIxs.push(...liquidationResult.postRefreshIxs);
     allIxs.push(...liquidationResult.liquidationIxs);
-    console.log(`[Test]   ✓ Added ${liquidationResult.refreshIxs.length} Refresh instruction(s)`);
+    const totalRefreshIxs = liquidationResult.preRefreshIxs.length + liquidationResult.refreshIxs.length + liquidationResult.postRefreshIxs.length;
+    console.log(`[Test]   ✓ Added ${totalRefreshIxs} Refresh instruction(s) (pre: ${liquidationResult.preRefreshIxs.length}, core: ${liquidationResult.refreshIxs.length}, post: ${liquidationResult.postRefreshIxs.length})`);
     console.log(`[Test]   ✓ Added ${liquidationResult.liquidationIxs.length} Liquidation instruction(s)`);
     console.log(`[Test]   Derived repay: ${liquidationResult.repayMint.toBase58()}`);
     console.log(`[Test]   Derived collateral: ${liquidationResult.collateralMint.toBase58()}`);

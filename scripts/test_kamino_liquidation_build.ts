@@ -95,37 +95,49 @@ async function main() {
       repayMintPreference,
     });
     
-    const totalIxs = result.refreshIxs.length + result.liquidationIxs.length;
+    const totalRefreshIxs = result.preRefreshIxs.length + result.refreshIxs.length + result.postRefreshIxs.length;
+    const totalIxs = totalRefreshIxs + result.liquidationIxs.length;
     console.log(`[Test] ✓ Successfully built ${totalIxs} instruction(s)`);
-    console.log(`[Test]   Refresh: ${result.refreshIxs.length} instruction(s)`);
+    console.log(`[Test]   Pre-refresh: ${result.preRefreshIxs.length} instruction(s)`);
+    console.log(`[Test]   Core refresh: ${result.refreshIxs.length} instruction(s)`);
+    console.log(`[Test]   Post-refresh: ${result.postRefreshIxs.length} instruction(s)`);
     console.log(`[Test]   Liquidation: ${result.liquidationIxs.length} instruction(s)`);
     console.log(`[Test]   Derived repay mint: ${result.repayMint.toBase58()}`);
     console.log(`[Test]   Derived collateral mint: ${result.collateralMint.toBase58()}`);
     
     // Verify instruction count matches expected pattern
-    // Expected: ATAs (0-3) + 2 PRE-refresh + farms (0-1) + obligation + 2 POST-refresh = 5-9 refresh ixs
+    // Expected: 2 PRE-refresh + farms (0-1) + obligation + 2 POST-refresh = 5-6 total refresh ixs
     const { ataCount, hasFarmsRefresh } = result;
-    const expectedRefreshCount = ataCount + 2 + (hasFarmsRefresh ? 1 : 0) + 1 + 2;
-    if (result.refreshIxs.length !== expectedRefreshCount) {
-      console.error(`[Test] ERROR: Expected ${expectedRefreshCount} refresh instructions, got ${result.refreshIxs.length}`);
-      console.error(`[Test]   ATAs: ${ataCount}, Farms: ${hasFarmsRefresh ? 1 : 0}`);
+    const expectedPreRefreshCount = 2; // repay + collateral
+    const expectedCoreRefreshCount = (hasFarmsRefresh ? 1 : 0) + 1; // farms (optional) + obligation
+    const expectedPostRefreshCount = 2; // repay + collateral
+    const expectedTotalRefreshCount = expectedPreRefreshCount + expectedCoreRefreshCount + expectedPostRefreshCount;
+    
+    if (result.preRefreshIxs.length !== expectedPreRefreshCount) {
+      console.error(`[Test] ERROR: Expected ${expectedPreRefreshCount} pre-refresh instructions, got ${result.preRefreshIxs.length}`);
       process.exit(1);
     }
-    console.log(`[Test]   ✓ Instruction count matches expected: ${expectedRefreshCount}`);
-    console.log(`[Test]     - ATA instructions: ${ataCount}`);
-    console.log(`[Test]     - PRE-refresh: 2 (repay + collateral)`);
+    if (result.refreshIxs.length !== expectedCoreRefreshCount) {
+      console.error(`[Test] ERROR: Expected ${expectedCoreRefreshCount} core refresh instructions, got ${result.refreshIxs.length}`);
+      process.exit(1);
+    }
+    if (result.postRefreshIxs.length !== expectedPostRefreshCount) {
+      console.error(`[Test] ERROR: Expected ${expectedPostRefreshCount} post-refresh instructions, got ${result.postRefreshIxs.length}`);
+      process.exit(1);
+    }
+    
+    console.log(`[Test]   ✓ Instruction count matches expected: ${expectedTotalRefreshCount}`);
+    console.log(`[Test]     - Setup ATA instructions: ${ataCount}`);
+    console.log(`[Test]     - PRE-refresh: ${expectedPreRefreshCount} (repay + collateral)`);
     console.log(`[Test]     - Farms refresh: ${hasFarmsRefresh ? 1 : 0}`);
     console.log(`[Test]     - Obligation refresh: 1`);
-    console.log(`[Test]     - POST-refresh: 2 (repay + collateral)`);
+    console.log(`[Test]     - POST-refresh: ${expectedPostRefreshCount} (repay + collateral)`);
     
     // Validate instruction order
-    console.log(`[Test] Verifying instruction order (fixes Custom(6051)):`);
+    console.log(`[Test] Verifying instruction order (fixes Custom(6009) and Custom(6051)):`);
     let idx = 0;
     
-    // Skip ATAs
-    idx += ataCount;
-    
-    // Next should be PRE-refresh instructions
+    // PRE-refresh instructions (for RefreshObligation slot freshness)
     console.log(`[Test]   [${idx}] PRE-refresh: RefreshReserve(repay)`);
     console.log(`[Test]   [${idx + 1}] PRE-refresh: RefreshReserve(collateral)`);
     idx += 2;
@@ -140,18 +152,40 @@ async function main() {
     console.log(`[Test]   [${idx}] RefreshObligation`);
     idx += 1;
     
-    // POST-refresh instructions (these fix Custom(6051))
+    // POST-refresh instructions (for check_refresh validation)
     console.log(`[Test]   [${idx}] POST-refresh: RefreshReserve(repay)`);
     console.log(`[Test]   [${idx + 1}] POST-refresh: RefreshReserve(collateral)`);
     idx += 2;
     
     console.log(`[Test]   ✓ Instruction sequence matches Kamino requirements`);
-    console.log(`[Test]   ✓ POST-refresh phase added to fix Custom(6051)`);
+    console.log(`[Test]   ✓ PRE-refresh phase added to fix Custom(6009)`);
+    console.log(`[Test]   ✓ POST-refresh phase preserves fix for Custom(6051)`);
     
-    // Validate refresh instructions
+    // Validate pre-refresh instructions
+    console.log(`[Test] Pre-refresh instructions:`);
+    for (let i = 0; i < result.preRefreshIxs.length; i++) {
+      const ix = result.preRefreshIxs[i];
+      console.log(`[Test]   Pre-refresh Instruction ${i + 1}:`);
+      console.log(`    Program: ${ix.programId.toBase58()}`);
+      console.log(`    Keys: ${ix.keys.length}`);
+      console.log(`    Data: ${ix.data.length} bytes`);
+    }
+    
+    // Validate core refresh instructions
+    console.log(`[Test] Core refresh instructions:`);
     for (let i = 0; i < result.refreshIxs.length; i++) {
       const ix = result.refreshIxs[i];
-      console.log(`[Test]   Refresh Instruction ${i + 1}:`);
+      console.log(`[Test]   Core Refresh Instruction ${i + 1}:`);
+      console.log(`    Program: ${ix.programId.toBase58()}`);
+      console.log(`    Keys: ${ix.keys.length}`);
+      console.log(`    Data: ${ix.data.length} bytes`);
+    }
+    
+    // Validate post-refresh instructions
+    console.log(`[Test] Post-refresh instructions:`);
+    for (let i = 0; i < result.postRefreshIxs.length; i++) {
+      const ix = result.postRefreshIxs[i];
+      console.log(`[Test]   Post-refresh Instruction ${i + 1}:`);
       console.log(`    Program: ${ix.programId.toBase58()}`);
       console.log(`    Keys: ${ix.keys.length}`);
       console.log(`    Data: ${ix.data.length} bytes`);
