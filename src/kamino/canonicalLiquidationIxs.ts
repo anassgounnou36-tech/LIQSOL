@@ -14,7 +14,6 @@ import {
   KNOWN_PROGRAM_IDS,
   decodeInstructionKind,
   extractDiscriminator,
-  type InstructionKind as KaminoInstructionKind,
 } from "../execute/decodeKaminoKindFromCompiled.js";
 
 /**

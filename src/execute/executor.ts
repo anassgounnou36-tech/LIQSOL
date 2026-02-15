@@ -280,10 +280,11 @@ async function buildFullTransaction(
         const errMsg = err instanceof Error ? err.message : String(err);
         
         // Check if it's a 6016 ObligationHealthy soft failure
+        // Re-throw this special error so it can be caught by the parent function
         if (errMsg === 'OBLIGATION_HEALTHY') {
           console.error('[Executor] ℹ️  6016 ObligationHealthy detected during seized-delta estimation');
           console.error('[Executor] Skipping this plan and continuing with next cycle.\n');
-          return { status: 'obligation-healthy' };
+          throw new Error('OBLIGATION_HEALTHY');
         }
         
         console.error('[Executor] Failed to estimate seized collateral or build swap:', errMsg);
@@ -543,7 +544,15 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     labels = result.labels;
     metadata = result.metadata;
   } catch (err) {
-    console.error('[Executor] ❌ Failed to build transaction:', err instanceof Error ? err.message : String(err));
+    const errMsg = err instanceof Error ? err.message : String(err);
+    
+    // Check if it's OBLIGATION_HEALTHY error from buildFullTransaction
+    if (errMsg === 'OBLIGATION_HEALTHY') {
+      console.error('[Executor] ℹ️  6016 ObligationHealthy - plan skipped');
+      return { status: 'obligation-healthy' };
+    }
+    
+    console.error('[Executor] ❌ Failed to build transaction:', errMsg);
     console.error('[Executor] This plan will be skipped. Bot will continue with next cycle.');
     return { status: 'build-failed' };
   }
