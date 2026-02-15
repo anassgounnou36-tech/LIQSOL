@@ -18,18 +18,20 @@ export interface EstimateSeizedCollateralDeltaParams {
  * IMPORTANT: The simulateTx should contain ONLY the liquidation instruction sequence
  * WITHOUT flashBorrow/flashRepay to avoid error 6032 (NoFlashRepayFound):
  * 
- * Expected instruction order (NO flash loan):
+ * Expected instruction order (NO flash loan, NO PRE-refresh):
  * 1. ComputeBudget instructions (limit, optional price)
- * 2. PRE-REFRESH: RefreshReserve (repay reserve)
- * 3. PRE-REFRESH: RefreshReserve (collateral reserve)
- * 4. RefreshFarmsForObligationForReserve (collateral, if farm exists)
- * 5. RefreshObligation (with ALL reserves as remaining accounts)
- * 6. POST-REFRESH: RefreshReserve (repay reserve)
- * 7. POST-REFRESH: RefreshReserve (collateral reserve)
- * 8. LiquidateObligationAndRedeemReserveCollateral
+ * 2. RefreshFarmsForObligationForReserve (collateral, if farm exists) [OPTIONAL]
+ * 3. RefreshObligation (with ALL reserves as remaining accounts)
+ * 4. RefreshReserve (repay reserve) - immediately before liquidation
+ * 5. RefreshReserve (collateral reserve) - immediately before liquidation
+ * 6. LiquidateObligationAndRedeemReserveCollateral
  * 
  * DO NOT include flashBorrow/flashRepay in the simulation - this isolates the
  * liquidation path for delta measurement and avoids flash loan pairing issues.
+ * 
+ * DO NOT include PRE-refresh reserve instructions - KLend's check_refresh validation
+ * expects the refresh sequence at exact positions immediately before liquidation.
+ * Duplicate refreshReserve instructions cause the validator to match the wrong occurrence.
  * 
  * Algorithm:
  * 1. Derive liquidator collateral ATA via getAssociatedTokenAddress(collateralMint, liquidator, true)
