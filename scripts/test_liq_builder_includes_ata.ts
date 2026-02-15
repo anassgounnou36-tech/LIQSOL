@@ -65,9 +65,13 @@ import path from "node:path";
       liquidatorPubkey: new PublicKey(liquidatorStr),
     });
 
+    const totalRefreshIxs = result.preRefreshIxs.length + result.refreshIxs.length + result.postRefreshIxs.length;
     console.log(`\n✓ Built instructions successfully`);
     console.log(`  Setup ixs: ${result.setupIxs.length}`);
-    console.log(`  Refresh ixs: ${result.refreshIxs.length}`);
+    console.log(`  Pre-refresh ixs: ${result.preRefreshIxs.length}`);
+    console.log(`  Core refresh ixs: ${result.refreshIxs.length}`);
+    console.log(`  Post-refresh ixs: ${result.postRefreshIxs.length}`);
+    console.log(`  Total refresh ixs: ${totalRefreshIxs}`);
     console.log(`  Liquidation ixs: ${result.liquidationIxs.length}`);
     console.log(`  Repay mint: ${result.repayMint.toBase58()}`);
     console.log(`  Collateral mint: ${result.collateralMint.toBase58()}`);
