@@ -1,5 +1,5 @@
 import { Connection, VersionedTransaction, TransactionMessage, Commitment, Keypair } from '@solana/web3.js';
-import { confirmSignatureByPolling } from '../solana/confirmPolling.js';
+import { confirmSignatureByPolling, DEFAULT_POLL_INTERVAL_MS, DEFAULT_POLL_TIMEOUT_MS } from '../solana/confirmPolling.js';
 
 /**
  * Classification of transaction send failures for retry logic
@@ -107,8 +107,8 @@ export async function sendWithBoundedRetry(
       // Wait for confirmation via HTTP polling (no websocket subscriptions)
       const confirmStart = Date.now();
       const confirmResult = await confirmSignatureByPolling(connection, signature, {
-        intervalMs: 500,
-        timeoutMs: 60_000,
+        intervalMs: DEFAULT_POLL_INTERVAL_MS,
+        timeoutMs: DEFAULT_POLL_TIMEOUT_MS,
         commitment: 'confirmed',
       });
       
@@ -121,7 +121,7 @@ export async function sendWithBoundedRetry(
         let logs: string[] | undefined;
         
         if (confirmResult.timedOut) {
-          error = `Confirmation timeout after ${confirmResult.durationMs ?? 60000}ms`;
+          error = `Confirmation timeout after ${confirmResult.durationMs ?? DEFAULT_POLL_TIMEOUT_MS}ms`;
         } else if (confirmResult.error) {
           error = JSON.stringify(confirmResult.error);
           logs = confirmResult.logs;

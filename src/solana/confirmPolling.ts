@@ -12,6 +12,12 @@ export interface ConfirmPollingConfig {
   commitment?: 'processed' | 'confirmed' | 'finalized';
 }
 
+/** Default polling interval in milliseconds */
+export const DEFAULT_POLL_INTERVAL_MS = 500;
+
+/** Default timeout in milliseconds (60 seconds) */
+export const DEFAULT_POLL_TIMEOUT_MS = 60_000;
+
 /**
  * Result of signature confirmation polling
  */
@@ -51,8 +57,8 @@ export async function confirmSignatureByPolling(
   signature: string,
   config: ConfirmPollingConfig = {}
 ): Promise<ConfirmPollingResult> {
-  const intervalMs = config.intervalMs ?? 500;
-  const timeoutMs = config.timeoutMs ?? 60_000;
+  const intervalMs = config.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const timeoutMs = config.timeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
   const commitment = config.commitment ?? 'confirmed';
   
   console.log(`[Confirm] Polling signature ${signature.slice(0, 12)}... (commitment=${commitment}, timeout=${timeoutMs}ms)`);
@@ -97,11 +103,12 @@ export async function confirmSignatureByPolling(
         console.error(`[Confirm] ❌ Transaction failed with error:`, status.err);
         
         // Try to fetch logs for additional context
-        // Note: Using 'confirmed' commitment for log retrieval as 'processed' may not have finalized logs yet
+        // Note: Always use 'confirmed' commitment for log retrieval to ensure logs are available
+        // Using lower commitment levels (like 'processed') may result in logs not being ready yet
         let logs: string[] | undefined;
         try {
           const txResponse = await connection.getTransaction(signature, {
-            commitment: commitment === 'processed' ? 'confirmed' : commitment,
+            commitment: 'confirmed',
             maxSupportedTransactionVersion: 0,
           });
           logs = txResponse?.meta?.logMessages ?? undefined;
