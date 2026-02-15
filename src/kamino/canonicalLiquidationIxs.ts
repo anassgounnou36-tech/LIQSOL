@@ -213,7 +213,7 @@ export function decodeCompiledInstructionKinds(tx: VersionedTransaction): Instru
   const instructions = message.compiledInstructions;
   const accountKeys = message.staticAccountKeys;
   
-  return instructions.map((ix, idx) => {
+  return instructions.map((ix: any) => {
     const programIdKey = accountKeys[ix.programIdIndex];
     const programId = programIdKey.toBase58();
     
@@ -294,7 +294,6 @@ export function decodeCompiledInstructionKinds(tx: VersionedTransaction): Instru
  */
 export function validateCompiledInstructionWindow(
   tx: VersionedTransaction,
-  expectedLabels: string[],
   hasFarmsRefresh: boolean
 ): { valid: boolean; diagnostics: string } {
   const kinds = decodeCompiledInstructionKinds(tx);
@@ -420,7 +419,6 @@ export async function buildAndValidateCanonicalLiquidationTx(
   // Validate compiled instruction window
   const validation = validateCompiledInstructionWindow(
     tx,
-    canonical.labels,
     canonical.hasFarmsRefresh
   );
   

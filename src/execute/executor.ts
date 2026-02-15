@@ -681,7 +681,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   // Validate the compiled transaction against expected canonical sequence
   // This catches any divergence between label-based validation and actual compiled message
   console.log('\n[Executor] Validating compiled instruction window...');
-  const validation = validateCompiledInstructionWindow(tx, labels, metadata.hasFarmsRefresh);
+  const validation = validateCompiledInstructionWindow(tx, metadata.hasFarmsRefresh);
   
   if (!validation.valid) {
     console.error('[Executor] ❌ COMPILED VALIDATION FAILED:');
