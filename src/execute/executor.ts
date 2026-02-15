@@ -187,11 +187,8 @@ async function buildFullTransaction(
   // Build initial canonical instructions (without swap)
   const initialCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(canonicalConfig);
   
-  // Extract setup instructions
+  // Extract setup instructions and metadata
   const setupIxs = initialCanonical.setupIxs;
-  const setupLabels = initialCanonical.setupLabels;
-  
-  // Extract metadata for swap sizing
   const { repayMint, collateralMint, withdrawCollateralMint, hasFarmsRefresh } = initialCanonical;
   
   // Step 2: Handle swap sizing if needed
