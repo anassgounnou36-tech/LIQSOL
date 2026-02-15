@@ -18,6 +18,12 @@ export const DEFAULT_POLL_INTERVAL_MS = 500;
 /** Default timeout in milliseconds (60 seconds) */
 export const DEFAULT_POLL_TIMEOUT_MS = 60_000;
 
+/** Number of characters to display from signature in logs */
+const SIGNATURE_DISPLAY_LENGTH = 12;
+
+/** Log polling status every N polls to reduce verbosity */
+const LOG_FREQUENCY = 10;
+
 /**
  * Result of signature confirmation polling
  */
@@ -61,7 +67,7 @@ export async function confirmSignatureByPolling(
   const timeoutMs = config.timeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
   const commitment = config.commitment ?? 'confirmed';
   
-  console.log(`[Confirm] Polling signature ${signature.slice(0, 12)}... (commitment=${commitment}, timeout=${timeoutMs}ms)`);
+  console.log(`[Confirm] Polling signature ${signature.slice(0, SIGNATURE_DISPLAY_LENGTH)}... (commitment=${commitment}, timeout=${timeoutMs}ms)`);
   
   const startTime = Date.now();
   let pollCount = 0;
@@ -88,7 +94,7 @@ export async function confirmSignatureByPolling(
       const status = response.value[0];
       
       // Log poll result for debugging
-      if (pollCount === 1 || pollCount % 10 === 0) {
+      if (pollCount === 1 || pollCount % LOG_FREQUENCY === 0) {
         console.log(`[Confirm] Poll #${pollCount}: ${status ? `status=${status.confirmationStatus}, err=${status.err ? 'present' : 'null'}` : 'not found yet'}`);
       }
       
