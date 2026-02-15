@@ -1,4 +1,5 @@
-import { Connection, VersionedTransaction, TransactionMessage, Commitment, Keypair } from '@solana/web3.js';
+import { Connection, VersionedTransaction, TransactionMessage, Keypair } from '@solana/web3.js';
+import { confirmSignatureByPolling, DEFAULT_POLL_INTERVAL_MS, DEFAULT_POLL_TIMEOUT_MS } from '../solana/confirmPolling.js';
 
 /**
  * Classification of transaction send failures for retry logic
@@ -103,21 +104,40 @@ export async function sendWithBoundedRetry(
       console.log(`[Broadcast] Transaction sent in ${sendMs}ms`);
       console.log(`[Broadcast] Signature: ${signature}`);
       
-      // Wait for confirmation
+      // Wait for confirmation via HTTP polling (no websocket subscriptions)
       const confirmStart = Date.now();
-      const confirmation = await connection.confirmTransaction({
-        signature,
-        blockhash: message.recentBlockhash,
-        lastValidBlockHeight: (await connection.getBlockHeight()) + 150, // ~60 seconds at 400ms/slot
-      }, 'confirmed' as Commitment);
+      const confirmResult = await confirmSignatureByPolling(connection, signature, {
+        intervalMs: DEFAULT_POLL_INTERVAL_MS,
+        timeoutMs: DEFAULT_POLL_TIMEOUT_MS,
+        commitment: 'confirmed',
+      });
       
       const confirmMs = Date.now() - confirmStart;
       const totalMs = Date.now() - attemptStart;
       
-      if (confirmation.value.err) {
-        // Confirmation failed
-        const error = JSON.stringify(confirmation.value.err);
+      if (!confirmResult.success) {
+        // Confirmation failed or timed out
+        let error: string;
+        let logs: string[] | undefined;
+        
+        if (confirmResult.timedOut) {
+          error = `Confirmation timeout after ${confirmResult.durationMs ?? DEFAULT_POLL_TIMEOUT_MS}ms`;
+        } else if (confirmResult.error) {
+          error = JSON.stringify(confirmResult.error);
+          logs = confirmResult.logs;
+        } else {
+          error = 'Unknown confirmation failure';
+        }
+        
         console.error(`[Broadcast] Confirmation failed: ${error}`);
+        
+        // Print logs if available
+        if (logs && logs.length > 0) {
+          console.error(`[Broadcast] Transaction logs:`);
+          logs.forEach((log, i) => {
+            console.error(`  [${i}] ${log}`);
+          });
+        }
         
         const failureType = classifyFailure(error);
         attempts.push({
@@ -175,14 +195,8 @@ export async function sendWithBoundedRetry(
         console.log('[Broadcast] Transaction confirmed successfully!');
         console.log(`[Broadcast] Timing: send=${sendMs}ms, confirm=${confirmMs}ms, total=${totalMs}ms`);
         
-        // Try to get slot
-        let slot: number | undefined;
-        try {
-          const status = await connection.getSignatureStatus(signature);
-          slot = status.value?.slot;
-        } catch {
-          // Ignore slot fetch errors
-        }
+        // Get slot from confirmation result
+        const slot = confirmResult.status?.slot;
         
         attempts.push({
           success: true,
