@@ -97,10 +97,11 @@ export async function confirmSignatureByPolling(
         console.error(`[Confirm] ❌ Transaction failed with error:`, status.err);
         
         // Try to fetch logs for additional context
+        // Note: Using 'confirmed' commitment for log retrieval as 'processed' may not have finalized logs yet
         let logs: string[] | undefined;
         try {
           const txResponse = await connection.getTransaction(signature, {
-            commitment: 'confirmed',
+            commitment: commitment === 'processed' ? 'confirmed' : commitment,
             maxSupportedTransactionVersion: 0,
           });
           logs = txResponse?.meta?.logMessages ?? undefined;

@@ -121,7 +121,7 @@ export async function sendWithBoundedRetry(
         let logs: string[] | undefined;
         
         if (confirmResult.timedOut) {
-          error = `Confirmation timeout after ${confirmResult.timeoutMs ?? 60000}ms`;
+          error = `Confirmation timeout after ${confirmResult.durationMs ?? 60000}ms`;
         } else if (confirmResult.error) {
           error = JSON.stringify(confirmResult.error);
           logs = confirmResult.logs;
