@@ -18,22 +18,27 @@ export interface EstimateSeizedCollateralDeltaParams {
  * IMPORTANT: The simulateTx should contain ONLY the liquidation instruction sequence
  * WITHOUT flashBorrow/flashRepay to avoid error 6032 (NoFlashRepayFound):
  * 
- * Expected instruction order (NO flash loan, WITH PRE-refresh):
+ * Expected instruction order (NO flash loan, canonical KLend adjacency):
  * 1. ComputeBudget instructions (limit, optional price)
- * 2. RefreshReserve (repay reserve) - PRE-refresh for RefreshObligation slot freshness
- * 3. RefreshReserve (collateral reserve) - PRE-refresh for RefreshObligation slot freshness
- * 4. RefreshFarmsForObligationForReserve (collateral, if farm exists) [OPTIONAL]
- * 5. RefreshObligation (with ALL reserves as remaining accounts)
- * 6. RefreshReserve (repay reserve) - POST-refresh immediately before liquidation
- * 7. RefreshReserve (collateral reserve) - POST-refresh immediately before liquidation
- * 8. LiquidateObligationAndRedeemReserveCollateral
+ * 
+ * PRE BLOCK (contiguous):
+ * 2. RefreshReserve (collateral reserve) - for RefreshObligation slot freshness
+ * 3. RefreshReserve (repay reserve) - for RefreshObligation slot freshness
+ * 4. RefreshObligation (with ALL reserves as remaining accounts)
+ * 5. RefreshFarmsForObligationForReserve (collateral and/or debt, 0-2 instructions, if farms exist)
+ * 
+ * LIQUIDATE:
+ * 6. LiquidateObligationAndRedeemReserveCollateral
+ * 
+ * POST BLOCK (immediately after liquidation):
+ * 7. RefreshFarmsForObligationForReserve (mirrors PRE farms, if exist)
  * 
  * DO NOT include flashBorrow/flashRepay in the simulation - this isolates the
  * liquidation path for delta measurement and avoids flash loan pairing issues.
  * 
- * PRE-refresh instructions (steps 2-3) are required to prevent ReserveStale (6009)
- * during RefreshObligation. POST-refresh instructions (steps 6-7) are required
- * to satisfy KLend's check_refresh validation. Both sequences are necessary.
+ * PRE reserve refresh instructions (steps 2-3) are required to prevent ReserveStale (6009)
+ * during RefreshObligation. POST farms instructions (step 7) are required to satisfy
+ * KLend's check_refresh adjacency validation immediately after liquidation.
  * 
  * Algorithm:
  * 1. Derive liquidator collateral ATA via getAssociatedTokenAddress(collateralMint, liquidator, true)

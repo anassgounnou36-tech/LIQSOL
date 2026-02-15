@@ -201,7 +201,7 @@ export class Presubmitter {
     });
     ixs.push(flashloan.flashBorrowIx);
     
-    // 3) Liquidation (refresh + repay/seize)
+    // 3) Liquidation (refresh + repay/seize) - Use canonical instruction arrays
     let repayMintPreference: PublicKey | undefined;
     if (plan.repayMint) {
       try {
@@ -225,10 +225,11 @@ export class Presubmitter {
       repayAmountUi: plan.amountUi,
     });
     
-    ixs.push(...liquidationResult.preRefreshIxs);
-    ixs.push(...liquidationResult.refreshIxs);
-    ixs.push(...liquidationResult.postRefreshIxs);
+    // Assemble canonical order: preReserveIxs → coreIxs → liquidationIxs → postFarmIxs
+    ixs.push(...liquidationResult.preReserveIxs);
+    ixs.push(...liquidationResult.coreIxs);
     ixs.push(...liquidationResult.liquidationIxs);
+    ixs.push(...liquidationResult.postFarmIxs);
     
     const { repayMint, collateralMint } = liquidationResult;
     

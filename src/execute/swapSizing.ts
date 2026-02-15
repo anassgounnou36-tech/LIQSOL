@@ -27,10 +27,12 @@ export interface SeizedCollateralEstimate {
  * Strategy A: Simulate liquidation and estimate seized collateral amount
  * 
  * This function:
- * 1. Builds a pre-simulation transaction (ComputeBudget + flashBorrow + refreshIxs + liquidationIxs)
+ * 1. Builds a pre-simulation transaction (ComputeBudget + flashBorrow + canonical liquidation ixs)
  * 2. Simulates it to estimate seized collateral
  * 3. Parses simulation logs or account state to extract collateral amount
  * 4. Applies safety haircut (SWAP_IN_HAIRCUT_BPS) to avoid oversizing
+ * 
+ * Canonical liquidation order: preReserveIxs → coreIxs → liquidationIxs → postFarmIxs
  * 
  * @param params - Simulation parameters
  * @returns Estimated seized collateral amount with safety haircut applied

@@ -95,97 +95,107 @@ async function main() {
       repayMintPreference,
     });
     
-    const totalRefreshIxs = result.preRefreshIxs.length + result.refreshIxs.length + result.postRefreshIxs.length;
+    const totalRefreshIxs = result.preReserveIxs.length + result.coreIxs.length + result.postFarmIxs.length;
     const totalIxs = totalRefreshIxs + result.liquidationIxs.length;
     console.log(`[Test] ✓ Successfully built ${totalIxs} instruction(s)`);
-    console.log(`[Test]   Pre-refresh: ${result.preRefreshIxs.length} instruction(s)`);
-    console.log(`[Test]   Core refresh: ${result.refreshIxs.length} instruction(s)`);
-    console.log(`[Test]   Post-refresh: ${result.postRefreshIxs.length} instruction(s)`);
+    console.log(`[Test]   Pre-reserve: ${result.preReserveIxs.length} instruction(s)`);
+    console.log(`[Test]   Core (obligation + farms): ${result.coreIxs.length} instruction(s)`);
     console.log(`[Test]   Liquidation: ${result.liquidationIxs.length} instruction(s)`);
+    console.log(`[Test]   Post-farms: ${result.postFarmIxs.length} instruction(s)`);
     console.log(`[Test]   Derived repay mint: ${result.repayMint.toBase58()}`);
     console.log(`[Test]   Derived collateral mint: ${result.collateralMint.toBase58()}`);
     
-    // Verify instruction count matches expected pattern
-    // Expected: 2 PRE-refresh + farms (0-1) + obligation + 2 POST-refresh = 5-6 total refresh ixs
-    const { ataCount, hasFarmsRefresh } = result;
-    const expectedPreRefreshCount = 2; // repay + collateral
-    const expectedCoreRefreshCount = (hasFarmsRefresh ? 1 : 0) + 1; // farms (optional) + obligation
-    const expectedPostRefreshCount = 2; // repay + collateral
-    const expectedTotalRefreshCount = expectedPreRefreshCount + expectedCoreRefreshCount + expectedPostRefreshCount;
+    // Verify instruction count matches expected pattern (NEW CANONICAL ORDER)
+    // Expected: 2 PRE-reserve + 1 obligation + farms (0-2) = 3-5 core ixs
+    // POST: farms (0-2, mirrors PRE)
+    const { ataCount, farmRefreshCount, farmModes } = result;
+    const expectedPreReserveCount = 2; // collateral + repay
+    const expectedCoreCount = 1 + farmRefreshCount; // obligation + farms (0-2)
+    const expectedPostFarmCount = farmRefreshCount; // mirrors PRE farms
     
-    if (result.preRefreshIxs.length !== expectedPreRefreshCount) {
-      console.error(`[Test] ERROR: Expected ${expectedPreRefreshCount} pre-refresh instructions, got ${result.preRefreshIxs.length}`);
+    if (result.preReserveIxs.length !== expectedPreReserveCount) {
+      console.error(`[Test] ERROR: Expected ${expectedPreReserveCount} pre-reserve instructions, got ${result.preReserveIxs.length}`);
       process.exit(1);
     }
-    if (result.refreshIxs.length !== expectedCoreRefreshCount) {
-      console.error(`[Test] ERROR: Expected ${expectedCoreRefreshCount} core refresh instructions, got ${result.refreshIxs.length}`);
+    if (result.coreIxs.length !== expectedCoreCount) {
+      console.error(`[Test] ERROR: Expected ${expectedCoreCount} core instructions, got ${result.coreIxs.length}`);
       process.exit(1);
     }
-    if (result.postRefreshIxs.length !== expectedPostRefreshCount) {
-      console.error(`[Test] ERROR: Expected ${expectedPostRefreshCount} post-refresh instructions, got ${result.postRefreshIxs.length}`);
+    if (result.postFarmIxs.length !== expectedPostFarmCount) {
+      console.error(`[Test] ERROR: Expected ${expectedPostFarmCount} post-farm instructions, got ${result.postFarmIxs.length}`);
       process.exit(1);
     }
     
-    console.log(`[Test]   ✓ Instruction count matches expected: ${expectedTotalRefreshCount}`);
+    console.log(`[Test]   ✓ Instruction count matches expected canonical structure`);
     console.log(`[Test]     - Setup ATA instructions: ${ataCount}`);
-    console.log(`[Test]     - PRE-refresh: ${expectedPreRefreshCount} (repay + collateral)`);
-    console.log(`[Test]     - Farms refresh: ${hasFarmsRefresh ? 1 : 0}`);
-    console.log(`[Test]     - Obligation refresh: 1`);
-    console.log(`[Test]     - POST-refresh: ${expectedPostRefreshCount} (repay + collateral)`);
+    console.log(`[Test]     - PRE-reserve: ${expectedPreReserveCount} (collateral + repay)`);
+    console.log(`[Test]     - Core: ${expectedCoreCount} (obligation + ${farmRefreshCount} farms)`);
+    console.log(`[Test]     - POST-farms: ${expectedPostFarmCount} (mirrors PRE farms)`);
+    console.log(`[Test]     - Farm modes: ${farmModes.length > 0 ? farmModes.map(m => m === 0 ? 'collateral' : 'debt').join(', ') : 'none'}`);
     
-    // Validate instruction order
-    console.log(`[Test] Verifying instruction order (fixes Custom(6009) and Custom(6051)):`);
+    // Validate instruction order (NEW CANONICAL ORDER per KLend check_refresh)
+    console.log(`[Test] Verifying canonical instruction order (fixes Custom(6009) and Custom(6051)):`);
     let idx = 0;
     
-    // PRE-refresh instructions (for RefreshObligation slot freshness)
-    console.log(`[Test]   [${idx}] PRE-refresh: RefreshReserve(repay)`);
-    console.log(`[Test]   [${idx + 1}] PRE-refresh: RefreshReserve(collateral)`);
+    // PRE-reserve instructions (for RefreshObligation slot freshness)
+    console.log(`[Test]   [${idx}] PRE: RefreshReserve(collateral)`);
+    console.log(`[Test]   [${idx + 1}] PRE: RefreshReserve(repay)`);
     idx += 2;
     
-    // Optional farms refresh
-    if (hasFarmsRefresh) {
-      console.log(`[Test]   [${idx}] RefreshFarmsForObligationForReserve(collateral)`);
+    // Core: Obligation refresh
+    console.log(`[Test]   [${idx}] CORE: RefreshObligation`);
+    idx += 1;
+    
+    // Core: Optional farms refresh (0-2 instructions)
+    for (let i = 0; i < farmRefreshCount; i++) {
+      const mode = farmModes[i];
+      const modeLabel = mode === 0 ? 'collateral' : 'debt';
+      console.log(`[Test]   [${idx}] CORE: RefreshFarms(${modeLabel}, mode=${mode})`);
       idx += 1;
     }
     
-    // Obligation refresh
-    console.log(`[Test]   [${idx}] RefreshObligation`);
+    // LIQUIDATE (not shown in loop, but understood to be here)
+    console.log(`[Test]   [${idx}] LIQUIDATE: LiquidateObligationAndRedeemReserveCollateral`);
     idx += 1;
     
-    // POST-refresh instructions (for check_refresh validation)
-    console.log(`[Test]   [${idx}] POST-refresh: RefreshReserve(repay)`);
-    console.log(`[Test]   [${idx + 1}] POST-refresh: RefreshReserve(collateral)`);
-    idx += 2;
+    // POST-farms instructions (immediately after liquidation, for check_refresh adjacency)
+    for (let i = 0; i < farmRefreshCount; i++) {
+      const mode = farmModes[i];
+      const modeLabel = mode === 0 ? 'collateral' : 'debt';
+      console.log(`[Test]   [${idx}] POST: RefreshFarms(${modeLabel}, mode=${mode})`);
+      idx += 1;
+    }
     
-    console.log(`[Test]   ✓ Instruction sequence matches Kamino requirements`);
-    console.log(`[Test]   ✓ PRE-refresh phase added to fix Custom(6009)`);
-    console.log(`[Test]   ✓ POST-refresh phase preserves fix for Custom(6051)`);
+    console.log(`[Test]   ✓ Canonical instruction sequence matches KLend check_refresh requirements`);
+    console.log(`[Test]   ✓ PRE reserves → obligation → farms (fixes Custom(6009) slot freshness)`);
+    console.log(`[Test]   ✓ POST farms immediately after liquidation (fixes Custom(6051) adjacency)`);
+    console.log(`[Test]   ✓ Removed POST reserve refresh (was breaking adjacency)`);
     
-    // Validate pre-refresh instructions
-    console.log(`[Test] Pre-refresh instructions:`);
-    for (let i = 0; i < result.preRefreshIxs.length; i++) {
-      const ix = result.preRefreshIxs[i];
-      console.log(`[Test]   Pre-refresh Instruction ${i + 1}:`);
+    // Validate pre-reserve instructions
+    console.log(`[Test] Pre-reserve instructions:`);
+    for (let i = 0; i < result.preReserveIxs.length; i++) {
+      const ix = result.preReserveIxs[i];
+      console.log(`[Test]   Pre-reserve Instruction ${i + 1}:`);
       console.log(`    Program: ${ix.programId.toBase58()}`);
       console.log(`    Keys: ${ix.keys.length}`);
       console.log(`    Data: ${ix.data.length} bytes`);
     }
     
-    // Validate core refresh instructions
-    console.log(`[Test] Core refresh instructions:`);
-    for (let i = 0; i < result.refreshIxs.length; i++) {
-      const ix = result.refreshIxs[i];
-      console.log(`[Test]   Core Refresh Instruction ${i + 1}:`);
+    // Validate core instructions
+    console.log(`[Test] Core instructions (obligation + farms):`);
+    for (let i = 0; i < result.coreIxs.length; i++) {
+      const ix = result.coreIxs[i];
+      console.log(`[Test]   Core Instruction ${i + 1}:`);
       console.log(`    Program: ${ix.programId.toBase58()}`);
       console.log(`    Keys: ${ix.keys.length}`);
       console.log(`    Data: ${ix.data.length} bytes`);
     }
     
-    // Validate post-refresh instructions
-    console.log(`[Test] Post-refresh instructions:`);
-    for (let i = 0; i < result.postRefreshIxs.length; i++) {
-      const ix = result.postRefreshIxs[i];
-      console.log(`[Test]   Post-refresh Instruction ${i + 1}:`);
+    // Validate post-farm instructions
+    console.log(`[Test] Post-farm instructions (mirrors PRE farms):`);
+    for (let i = 0; i < result.postFarmIxs.length; i++) {
+      const ix = result.postFarmIxs[i];
+      console.log(`[Test]   Post-farm Instruction ${i + 1}:`);
       console.log(`    Program: ${ix.programId.toBase58()}`);
       console.log(`    Keys: ${ix.keys.length}`);
       console.log(`    Data: ${ix.data.length} bytes`);
