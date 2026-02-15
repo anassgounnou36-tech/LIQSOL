@@ -2,16 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { getConnection } from '../solana/connection.js';
-import { buildKaminoFlashloanIxs } from '../flashloan/kaminoFlashloan.js';
-import { buildKaminoLiquidationIxs } from '../kamino/liquidationBuilder.js';
 import { buildJupiterSwapIxs } from './swapBuilder.js';
-import { buildComputeBudgetIxs } from '../execution/computeBudget.js';
 import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
 import { resolveMintFlexible } from '../solana/mint.js';
 import { sendWithBoundedRetry, formatAttemptResults } from './broadcastRetry.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { isPlanComplete, getMissingFields } from '../scheduler/planValidation.js';
+import { buildKaminoRefreshAndLiquidateIxsCanonical, validateCompiledInstructionWindow, decodeCompiledInstructionKinds } from '../kamino/canonicalLiquidationIxs.js';
 
 interface Plan {
   planVersion?: number;
@@ -74,20 +72,30 @@ function loadPlans(): Plan[] {
 }
 
 /**
- * PR62: Build full transaction with liquidation pipeline
- * Order: ComputeBudget → flashBorrow → refresh → liquidation → optional swap → flashRepay
+ * Build full transaction with liquidation pipeline using CANONICAL builder.
  * 
- * Changes in PR62:
- * - Liquidation builder now derives reserves from obligation (no collateralMint/repayMint required)
- * - Fail-fast on swap failure (no try-catch)
- * - Use actual amounts from liquidation result (no placeholders)
+ * This is the UNIFIED entry point for all transaction building paths.
+ * Uses buildKaminoRefreshAndLiquidateIxsCanonical for consistent instruction assembly.
  * 
- * Final PR: Real swap sizing via simulation
- * - If swap needed, run pre-simulation to estimate seized collateral
- * - Build real Jupiter swap with estimated amount (minus haircut)
- * - Fail-fast if swap required but sizing unavailable
+ * Canonical order (with flashloan):
+ * 1. computeBudget
+ * 2. flashBorrow (optional)
+ * 3. preRefreshReserve(repay)
+ * 4. preRefreshReserve(collateral)
+ * 5. refreshFarmsForObligationForReserve (optional)
+ * 6. refreshObligation
+ * 7. postRefreshReserve(repay)
+ * 8. postRefreshReserve(collateral)
+ * 9. liquidateObligationAndRedeemReserveCollateral
+ * 10. swap instructions (optional, after liquidate)
+ * 11. flashRepay (optional)
  * 
- * PART D: Now returns instruction labels alongside instructions for debugging
+ * @param plan - Flashloan plan with obligation and liquidation details
+ * @param signer - Keypair for signing transactions
+ * @param market - Kamino market pubkey
+ * @param programId - Kamino program ID
+ * @param opts - Options for swap inclusion and sizing
+ * @returns Setup and main instructions with labels
  */
 async function buildFullTransaction(
   plan: FlashloanPlan,
@@ -95,51 +103,25 @@ async function buildFullTransaction(
   market: PublicKey,
   programId: PublicKey,
   opts: { includeSwap?: boolean; useRealSwapSizing?: boolean } = {}
-): Promise<{ setupIxs: TransactionInstruction[]; setupLabels: string[]; ixs: TransactionInstruction[]; labels: string[] }> {
-  const ixs: TransactionInstruction[] = [];
-  const labels: string[] = [];
+): Promise<{ 
+  setupIxs: TransactionInstruction[]; 
+  setupLabels: string[]; 
+  ixs: TransactionInstruction[]; 
+  labels: string[];
+  metadata: {
+    repayMint: PublicKey;
+    collateralMint: PublicKey;
+    withdrawCollateralMint: PublicKey;
+    hasFarmsRefresh: boolean;
+  };
+}> {
   const connection = getConnection();
   
   // Get env for config
   const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
   const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
   
-  // 1) ComputeBudget instructions
-  const computeIxs = buildComputeBudgetIxs({
-    cuLimit,
-    cuPriceMicroLamports: cuPrice,
-  });
-  ixs.push(...computeIxs);
-  
-  // Push matching labels based on actual number of compute budget instructions
-  labels.push('computeBudget:limit');
-  if (computeIxs.length > 1) {
-    labels.push('computeBudget:price');
-  }
-  
-  // Current instruction index for flashloan
-  const borrowIxIndex = ixs.length;
-  
-  // 2) FlashBorrow
-  const mint = (plan.mint || 'USDC') as 'USDC' | 'SOL';
-  const amountUi = String(plan.amountUi ?? plan.amountUsd ?? '100');
-  
-  const flashloan = await buildKaminoFlashloanIxs({
-    connection,
-    marketPubkey: market,
-    programId,
-    signer,
-    mint,
-    amountUi,
-    borrowIxIndex,
-  });
-  
-  ixs.push(flashloan.flashBorrowIx);
-  labels.push('flashBorrow');
-  
-  // 3) Liquidation refresh + repay/seize (PR62: derives reserves from obligation)
-  // Build with obligation pubkey only - reserves are derived from on-chain data
-  // PR: Add strict preflight validation with expected reserve pubkeys from plan
+  // Parse expected reserve pubkeys from plan
   let repayMintPreference: PublicKey | undefined;
   let expectedRepayReservePubkey: PublicKey | undefined;
   let expectedCollateralReservePubkey: PublicKey | undefined;
@@ -149,14 +131,13 @@ async function buildFullTransaction(
       repayMintPreference = resolveMintFlexible(plan.repayMint);
     } catch (err) {
       console.error(
-        `[Executor] Failed to resolve repayMint for plan ${plan.key} (obligation: ${plan.obligationPubkey}):`,
+        `[Executor] Failed to resolve repayMint for plan ${plan.key}:`,
         err instanceof Error ? err.message : String(err)
       );
       throw err;
     }
   }
   
-  // PR: Parse expected reserve pubkeys from plan for validation
   if (plan.repayReservePubkey) {
     try {
       expectedRepayReservePubkey = new PublicKey(plan.repayReservePubkey);
@@ -181,236 +162,116 @@ async function buildFullTransaction(
     }
   }
   
-  const liquidationResult = await buildKaminoLiquidationIxs({
+  // Step 1: Build canonical liquidation sequence WITHOUT swap (to size seized collateral)
+  const mint = (plan.mint || 'USDC') as string;
+  const amountUi = String(plan.amountUi ?? plan.amountUsd ?? '100');
+  
+  const canonicalConfig = {
     connection,
+    signer,
     marketPubkey: market,
     programId,
     obligationPubkey: new PublicKey(plan.obligationPubkey),
-    liquidatorPubkey: signer.publicKey,
-    // Optional: prefer specific mint if provided
+    cuLimit,
+    cuPrice,
+    flashloan: {
+      mint,
+      amountUi,
+    },
     repayMintPreference,
     repayAmountUi: plan.amountUi,
-    // PR: Pass expected reserve pubkeys for strict preflight validation
     expectedRepayReservePubkey,
     expectedCollateralReservePubkey,
-  });
+  };
   
-  // TX Size Fix: Extract setupIxs and labels separately
-  const setupIxs = liquidationResult.setupIxs;
-  const setupLabels: string[] = [];
-  const { hasFarmsRefresh, setupAtaNames, preRefreshIxs, refreshIxs, postRefreshIxs } = liquidationResult;
+  // Build initial canonical instructions (without swap)
+  const initialCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(canonicalConfig);
   
-  // Build labels for setup instructions (ATA creates) using names from builder
-  for (const ataName of setupAtaNames) {
-    setupLabels.push(`setup:ata:${ataName}`);
-  }
+  // Extract setup instructions
+  const setupIxs = initialCanonical.setupIxs;
+  const setupLabels = initialCanonical.setupLabels;
   
-  // Add PRE-REFRESH instructions (for RefreshObligation slot freshness)
-  ixs.push(...preRefreshIxs);
-  labels.push('preRefreshReserve:repay');
-  labels.push('preRefreshReserve:collateral');
+  // Extract metadata for swap sizing
+  const { repayMint, collateralMint, withdrawCollateralMint, hasFarmsRefresh } = initialCanonical;
   
-  // Add CORE REFRESH instructions (RefreshFarms + RefreshObligation)
-  ixs.push(...refreshIxs);
+  // Step 2: Handle swap sizing if needed
+  let swapInstructions: TransactionInstruction[] = [];
   
-  // Label core refresh instructions:
-  // 1. RefreshFarmsForObligationForReserve (collateral, optional)
-  // 2. RefreshObligation
-  
-  // Farms refresh (optional, first instruction)
-  if (hasFarmsRefresh) {
-    labels.push('refreshFarms');
-  }
-  
-  // Obligation refresh
-  labels.push('refreshObligation');
-  
-  // Add POST-REFRESH instructions (for check_refresh validation, immediately before liquidation)
-  ixs.push(...postRefreshIxs);
-  labels.push('postRefreshReserve:repay');
-  labels.push('postRefreshReserve:collateral');
-  
-  ixs.push(...liquidationResult.liquidationIxs);
-  labels.push('liquidate');
-  
-  // DEFENSIVE ASSERTION: Validate the 4-instruction sequence before liquidation
-  // KLend's check_refresh expects exact positions immediately before liquidation:
-  // - Position -4: refreshFarmsForObligationForReserve (collateral) [OPTIONAL]
-  // - Position -3: refreshObligation (or -4 if no farms)
-  // - Position -2: postRefreshReserve(repay) (or -3 if no farms)
-  // - Position -1: postRefreshReserve(collateral) (or -2 if no farms)
-  // - Position 0: liquidateObligationAndRedeemReserveCollateral
-  const liquidateIdx = labels.lastIndexOf('liquidate');
-  if (liquidateIdx === -1) {
-    throw new Error('[Executor] ASSERTION FAILED: liquidate instruction not found in labels');
-  }
-  
-  // Expected sequence immediately before liquidation
-  const expectedSequence = hasFarmsRefresh 
-    ? ['refreshFarms', 'refreshObligation', 'postRefreshReserve:repay', 'postRefreshReserve:collateral']
-    : ['refreshObligation', 'postRefreshReserve:repay', 'postRefreshReserve:collateral'];
-  
-  const startIdx = liquidateIdx - expectedSequence.length;
-  if (startIdx < 0) {
-    console.error('[Executor] ASSERTION FAILED: Not enough instructions before liquidation');
-    console.error(`[Executor] Expected ${expectedSequence.length} instructions before liquidate, but only ${liquidateIdx} exist`);
-    console.error('[Executor] Instruction map:');
-    labels.forEach((label, idx) => {
-      console.error(`  [${idx}] ${label}`);
-    });
-    throw new Error('[Executor] Invalid instruction sequence: insufficient instructions before liquidation');
-  }
-  
-  // Validate the sequence
-  let isValid = true;
-  const actualSequence = labels.slice(startIdx, liquidateIdx);
-  
-  // Check length first
-  if (actualSequence.length !== expectedSequence.length) {
-    isValid = false;
-  } else {
-    // Check each label matches
-    for (let i = 0; i < expectedSequence.length; i++) {
-      if (actualSequence[i] !== expectedSequence[i]) {
-        isValid = false;
-        break;
-      }
-    }
-  }
-  
-  if (!isValid) {
-    console.error('[Executor] ASSERTION FAILED: Required refresh sequence does not immediately precede liquidation');
-    console.error('[Executor] Expected sequence before liquidate:');
-    expectedSequence.forEach((label, idx) => {
-      console.error(`  [${startIdx + idx}] ${label}`);
-    });
-    console.error('[Executor] Actual sequence before liquidate:');
-    actualSequence.forEach((label, idx) => {
-      console.error(`  [${startIdx + idx}] ${label}`);
-    });
-    console.error('\n[Executor] Full instruction map (5-instruction window around liquidate):');
-    const windowStart = Math.max(0, liquidateIdx - 5);
-    const windowEnd = Math.min(labels.length, liquidateIdx + 2);
-    for (let i = windowStart; i < windowEnd; i++) {
-      const marker = i === liquidateIdx ? ' ← liquidate' : '';
-      console.error(`  [${i}] ${labels[i]}${marker}`);
-    }
-    throw new Error('[Executor] Invalid instruction sequence: required refresh sequence not immediately before liquidation');
-  }
-  
-  console.log('[Executor] ✓ Refresh sequence validation passed: required instructions immediately precede liquidation');
-  
-  // Get derived mints for downstream validation
-  const { repayMint, collateralMint, withdrawCollateralMint } = liquidationResult;
-  
-  // 4) Optional Jupiter swap (if collateral mint != repay mint)
-  // Final PR: Real swap sizing via deterministic seized delta estimation (NO log parsing)
-  // NOTE: Use withdrawCollateralMint for seized-delta estimation (actual redemption mint)
-  // but collateralMint for swap (liquidity mint)
   if (opts.includeSwap && !collateralMint.equals(repayMint)) {
     console.log('[Executor] Swap required: collateral mint differs from repay mint');
     console.log(`[Executor]   Collateral (liquidity): ${collateralMint.toBase58()}`);
     console.log(`[Executor]   Collateral (redemption): ${withdrawCollateralMint.toBase58()}`);
     console.log(`[Executor]   Repay: ${repayMint.toBase58()}`);
     
-    // FIX: Gate seized-delta simulation behind ATA setup
-    // If setupIxs exist, ATAs are missing. Skip swap sizing and return setup instructions.
-    // Setup will be handled in runDryExecutor (lines 551-651).
-    // Next cycle (after ATAs are created), sizing will proceed normally.
+    // Gate swap sizing behind ATA setup
     if (setupIxs.length > 0) {
       console.log('[Executor] ⚠️  Swap sizing skipped: Setup required (ATAs missing)');
       console.log('[Executor] Setup transaction must be sent first. Swap sizing will run in next cycle.');
-      // Skip swap sizing entirely - return instructions without swap
-      // The setup handling logic in runDryExecutor will handle the setup transaction
     } else if (opts.useRealSwapSizing) {
-      // Real swap sizing: simulate liquidation to estimate seized collateral using account-delta
-      // Only proceed when all ATAs exist (setupIxs.length === 0)
       console.log('[Executor] Using REAL swap sizing via deterministic seized-delta estimation...');
       
-      // Import seized delta estimator
-      const { estimateSeizedCollateralDeltaBaseUnits } = await import('./seizedDeltaEstimator.js');
-      const { formatBaseUnitsToUiString } = await import('./swapBuilder.js');
-      
-      // Build seized-delta simulation transaction WITHOUT flashBorrow/flashRepay
-      // This avoids error 6032 (NoFlashRepayFound) during simulation
-      // Simulation contains: ComputeBudget + PRE-REFRESH + RefreshFarms (optional) + RefreshObligation + POST-REFRESH + Liquidate
-      // PRE-REFRESH is required to prevent 6009 (ReserveStale) at RefreshObligation
-      const simIxs = [
-        ...computeIxs, // ComputeBudget instructions
-        ...liquidationResult.preRefreshIxs, // Pre-refresh for slot freshness
-        ...liquidationResult.refreshIxs, // farms + obligation refreshes
-        ...liquidationResult.postRefreshIxs, // Post-refresh for check_refresh
-        ...liquidationResult.liquidationIxs, // Liquidate instruction
-      ];
-      
-      // Build corresponding labels for the simulation (for diagnostic output)
-      const simLabels = [
-        'computeBudget:limit',
-        ...(computeIxs.length > 1 ? ['computeBudget:price'] : []),
-        'preRefreshReserve:repay',
-        'preRefreshReserve:collateral',
-        ...(hasFarmsRefresh ? ['refreshFarms'] : []),
-        'refreshObligation',
-        'postRefreshReserve:repay',
-        'postRefreshReserve:collateral',
-        'liquidate',
-      ];
-      
       try {
-        // Build pre-sim tx for account-delta estimation
+        // Import seized delta estimator
+        const { estimateSeizedCollateralDeltaBaseUnits } = await import('./seizedDeltaEstimator.js');
+        const { formatBaseUnitsToUiString } = await import('./swapBuilder.js');
+        
+        // Build simulation transaction using canonical builder (WITHOUT flashloan, WITHOUT swap)
+        // This avoids error 6032 (NoFlashRepayFound) during simulation
+        const simConfig = {
+          ...canonicalConfig,
+          flashloan: undefined, // No flashloan in simulation
+        };
+        
+        const simCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(simConfig);
+        
+        // Build and sign simulation transaction
         const bh = await connection.getLatestBlockhash();
-        const msg = new TransactionMessage({
+        const simMsg = new TransactionMessage({
           payerKey: signer.publicKey,
           recentBlockhash: bh.blockhash,
-          instructions: simIxs,
+          instructions: simCanonical.instructions,
         });
-        const compiledMsg = msg.compileToLegacyMessage();
-        const preSimTx = new VersionedTransaction(compiledMsg);
-        preSimTx.sign([signer]);
+        const simCompiledMsg = simMsg.compileToLegacyMessage();
+        const simTx = new VersionedTransaction(simCompiledMsg);
+        simTx.sign([signer]);
         
-        // Estimate seized collateral via account-delta approach (NO log parsing)
-        // IMPORTANT: Use withdrawCollateralMint (actual redemption mint), not collateralMint (liquidity mint)
+        // Estimate seized collateral via account-delta approach
         const seizedCollateralBaseUnits = await estimateSeizedCollateralDeltaBaseUnits({
           connection,
           liquidator: signer.publicKey,
-          collateralMint: withdrawCollateralMint, // Use redemption mint for ATA monitoring
-          simulateTx: preSimTx,
-          instructionLabels: simLabels, // Pass simulation-specific labels for diagnostic output
+          collateralMint: withdrawCollateralMint,
+          simulateTx: simTx,
+          instructionLabels: simCanonical.labels,
         });
         
         console.log(`[Executor] Estimated seized: ${seizedCollateralBaseUnits} base units`);
         
-        // Apply safety haircut (SWAP_IN_HAIRCUT_BPS)
+        // Apply safety haircut
         const haircutBps = Number(process.env.SWAP_IN_HAIRCUT_BPS ?? 100);
         const haircutMultiplier = 10000n - BigInt(haircutBps);
         const inAmountBaseUnits = (seizedCollateralBaseUnits * haircutMultiplier) / 10000n;
         
         console.log(`[Executor] After ${haircutBps} bps haircut: ${inAmountBaseUnits} base units`);
         
-        // Format for logging only
-        const collateralDecimals = plan.collateralDecimals ?? 9;
-        const seizedUi = formatBaseUnitsToUiString(inAmountBaseUnits, collateralDecimals);
-        console.log(`[Executor] Building Jupiter swap for ${seizedUi} ${collateralMint.toBase58().slice(0, 8)}...`);
-        
-        // Build real Jupiter swap with base-units API (NO UI strings, NO Number conversions)
+        // Build Jupiter swap
         const slippageBps = Number(process.env.SWAP_SLIPPAGE_BPS ?? 100);
         const swapResult = await buildJupiterSwapIxs({
           inputMint: collateralMint,
           outputMint: repayMint,
-          inAmountBaseUnits, // bigint, NO conversion
+          inAmountBaseUnits,
           slippageBps,
           userPubkey: signer.publicKey,
           connection,
         });
         
         // Collect all swap instructions
-        const allSwapIxs = [
+        swapInstructions = [
           ...swapResult.setupIxs,
           ...swapResult.swapIxs,
           ...swapResult.cleanupIxs,
         ];
         
-        console.log(`[Executor] Built ${allSwapIxs.length} swap instruction(s) (${swapResult.setupIxs.length} setup, ${swapResult.swapIxs.length} swap, ${swapResult.cleanupIxs.length} cleanup)`);
+        console.log(`[Executor] Built ${swapInstructions.length} swap instruction(s)`);
         
         if (swapResult.estimatedOutAmountBaseUnits) {
           const repayDecimals = plan.repayDecimals ?? 6;
@@ -418,57 +279,45 @@ async function buildFullTransaction(
           console.log(`[Executor]   Estimated output: ${estimatedOutUi} ${repayMint.toBase58().slice(0, 8)}`);
         }
         
-        // Add labels for swap instructions
-        ixs.push(...allSwapIxs);
-        for (let i = 0; i < swapResult.setupIxs.length; i++) {
-          labels.push(`swap:setup:${i}`);
-        }
-        for (let i = 0; i < swapResult.swapIxs.length; i++) {
-          labels.push(`swap:${i}`);
-        }
-        for (let i = 0; i < swapResult.cleanupIxs.length; i++) {
-          labels.push(`swap:cleanup:${i}`);
-        }
-        
       } catch (err) {
         console.error('[Executor] Failed to estimate seized collateral or build swap:', err instanceof Error ? err.message : String(err));
         
-        // Fallback behavior: Proceed with liquidation-only (no swap)
-        // This allows the bot to continue running 24/7 even when swap sizing fails
         const enableFallback = (process.env.SWAP_SIZING_FALLBACK_ENABLED ?? 'true') === 'true';
         
         if (enableFallback) {
           console.warn('[Executor] ⚠️  FALLBACK: Seized-delta sizing failed, proceeding with liquidation-only');
-          console.warn('[Executor] Swap will be skipped. Seized collateral will remain in destination ATA.');
-          console.warn(`[Executor]   Collateral: ${collateralMint.toBase58()}`);
-          console.warn(`[Executor]   Repay: ${repayMint.toBase58()}`);
           console.warn(`[Executor]   Error: ${err instanceof Error ? err.message : String(err)}`);
-          console.warn('[Executor] Bot will continue with next cycle.');
-          // Skip swap - transaction will execute liquidation only
-          // The flashloan will still be repaid from the liquidator's repay token account
         } else {
-          // Fail-fast mode (original behavior)
           throw new Error(
-            'Swap required but sizing or building failed. ' +
-            'Cannot build transaction without knowing seized collateral amount. ' +
-            `Collateral: ${collateralMint.toBase58()}, Repay: ${repayMint.toBase58()}, ` +
-            `Error: ${err instanceof Error ? err.message : String(err)}`
+            `Swap required but sizing failed: ${err instanceof Error ? err.message : String(err)}`
           );
         }
       }
-      
     } else {
-      // Fallback: mock mode or skip swap (for backward compatibility)
       console.log('[Executor] useRealSwapSizing=false, skipping swap (dry-run/test mode)');
-      // Don't add swap instructions - transaction will fail if actually broadcast
     }
   }
   
-  // 5) FlashRepay
-  ixs.push(flashloan.flashRepayIx);
-  labels.push('flashRepay');
+  // Step 3: Build final canonical transaction with swap (if generated)
+  const finalConfig = {
+    ...canonicalConfig,
+    swap: swapInstructions.length > 0 ? { instructions: swapInstructions } : undefined,
+  };
   
-  return { setupIxs, setupLabels, ixs, labels };
+  const finalCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(finalConfig);
+  
+  return {
+    setupIxs: finalCanonical.setupIxs,
+    setupLabels: finalCanonical.setupLabels,
+    ixs: finalCanonical.instructions,
+    labels: finalCanonical.labels,
+    metadata: {
+      repayMint,
+      collateralMint,
+      withdrawCollateralMint,
+      hasFarmsRefresh,
+    },
+  };
 }
 
 interface ExecutorOpts {
@@ -669,12 +518,13 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   // Final PR: Use real swap sizing when not in mock/test mode
   const useRealSwapSizing = !dry; // Use real sizing for broadcast mode, skip for dry-run
   
-  // PR2: Build full transaction pipeline (now returns setupIxs + ixs + labels)
+  // PR2: Build full transaction pipeline (now returns setupIxs + ixs + labels + metadata)
   // Wrap in try/catch to handle swap sizing failures gracefully without crashing the bot
   let setupIxs: TransactionInstruction[];
   let setupLabels: string[];
   let ixs: TransactionInstruction[];
   let labels: string[];
+  let metadata: { hasFarmsRefresh: boolean };
   
   try {
     const result = await buildFullTransaction(target, signer, market, programId, {
@@ -685,6 +535,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     setupLabels = result.setupLabels;
     ixs = result.ixs;
     labels = result.labels;
+    metadata = result.metadata;
   } catch (err) {
     console.error('[Executor] ❌ Failed to build transaction:', err instanceof Error ? err.message : String(err));
     console.error('[Executor] This plan will be skipped. Bot will continue with next cycle.');
@@ -828,6 +679,31 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   const compiledMsg = msg.compileToLegacyMessage();
   const tx = new VersionedTransaction(compiledMsg);
   tx.sign([signer]);
+
+  // COMPILED INSTRUCTION WINDOW VALIDATION
+  // Validate the compiled transaction against expected canonical sequence
+  // This catches any divergence between label-based validation and actual compiled message
+  console.log('\n[Executor] Validating compiled instruction window...');
+  const validation = validateCompiledInstructionWindow(tx, labels, metadata.hasFarmsRefresh);
+  
+  if (!validation.valid) {
+    console.error('[Executor] ❌ COMPILED VALIDATION FAILED:');
+    console.error(validation.diagnostics);
+    console.error('\n[Executor] Transaction build-time validation error to prevent 6051/6009');
+    console.error('[Executor] This indicates instruction assembly divergence - refusing to broadcast invalid transaction.');
+    throw new Error('Compiled instruction window validation failed - see diagnostics above');
+  }
+  
+  console.log(validation.diagnostics);
+  
+  // Also decode and log the full compiled instruction kinds for diagnostics
+  const compiledKinds = decodeCompiledInstructionKinds(tx);
+  console.log('\n[Executor] ═══ COMPILED INSTRUCTION KINDS ═══');
+  compiledKinds.forEach((kind, idx) => {
+    const labelMatch = labels[idx] ? ` (label: ${labels[idx]})` : '';
+    console.log(`  [${idx}] ${kind.kind}${labelMatch}`);
+  });
+  console.log('═══════════════════════════════════════\n');
 
   if (dry || !broadcast) {
     // Simulate transaction
