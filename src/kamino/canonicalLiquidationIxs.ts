@@ -70,18 +70,24 @@ export interface CanonicalLiquidationResult {
  * 
  * This is the SINGLE SOURCE OF TRUTH for liquidation instruction assembly.
  * 
- * Canonical order (with flashloan):
+ * Canonical order (matching KLend's strict check_refresh adjacency rules):
  * 1. computeBudget (limit + optional price)
  * 2. flashBorrow (if using flashloan)
- * 3. preRefreshReserve(repay)
- * 4. preRefreshReserve(collateral)
- * 5. refreshFarmsForObligationForReserve (collateral, if farm exists)
- * 6. refreshObligation (with remaining accounts ordered deposits→borrows)
- * 7. postRefreshReserve(repay)
- * 8. postRefreshReserve(collateral)
- * 9. liquidateObligationAndRedeemReserveCollateral
- * 10. swap instructions (if provided and executed AFTER liquidate)
- * 11. flashRepay (if using flashloan)
+ * 
+ * PRE BLOCK (contiguous):
+ * 3. preRefreshReserve(collateral)
+ * 4. preRefreshReserve(repay)
+ * 5. refreshObligation (with remaining accounts ordered deposits→borrows)
+ * 6. refreshFarmsForObligationForReserve (0-2 instructions for collateral/debt farms, if exist)
+ * 
+ * LIQUIDATE:
+ * 7. liquidateObligationAndRedeemReserveCollateral
+ * 
+ * POST BLOCK (immediately after liquidation):
+ * 8. refreshFarmsForObligationForReserve (same farm set and order as PRE, if exist)
+ * 
+ * 9. swap instructions (if provided, after POST farms)
+ * 10. flashRepay (if using flashloan)
  * 
  * @param config - Canonical configuration with all parameters
  * @returns Canonical instruction sequence with labels
@@ -126,7 +132,7 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
     labels.push('flashBorrow');
   }
   
-  // 3-9. Build liquidation instructions (pre-refresh + refresh + post-refresh + liquidate)
+  // 3-8. Build liquidation instructions using new canonical arrays
   const liquidationResult = await buildKaminoLiquidationIxs({
     connection: config.connection,
     marketPubkey: config.marketPubkey,
@@ -143,28 +149,32 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
   const setupIxs = liquidationResult.setupIxs;
   const setupLabels = liquidationResult.setupAtaNames.map(name => `setup:ata:${name}`);
   
-  // 3-4. PRE-REFRESH instructions
-  instructions.push(...liquidationResult.preRefreshIxs);
-  labels.push('preRefreshReserve:repay');
+  // 3-4. PRE-RESERVE instructions (collateral first, then repay)
+  instructions.push(...liquidationResult.preReserveIxs);
   labels.push('preRefreshReserve:collateral');
+  labels.push('preRefreshReserve:repay');
   
-  // 5-6. CORE REFRESH instructions (farms + obligation)
-  instructions.push(...liquidationResult.refreshIxs);
-  if (liquidationResult.hasFarmsRefresh) {
-    labels.push('refreshFarms');
-  }
+  // 5-6. CORE instructions (obligation + farms)
+  instructions.push(...liquidationResult.coreIxs);
   labels.push('refreshObligation');
+  // Add farm labels based on actual farm modes
+  for (const mode of liquidationResult.farmModes) {
+    const modeLabel = mode === 0 ? 'collateral' : 'debt';
+    labels.push(`refreshFarms:${modeLabel}`);
+  }
   
-  // 7-8. POST-REFRESH instructions
-  instructions.push(...liquidationResult.postRefreshIxs);
-  labels.push('postRefreshReserve:repay');
-  labels.push('postRefreshReserve:collateral');
-  
-  // 9. LIQUIDATE instruction
+  // 7. LIQUIDATE instruction
   instructions.push(...liquidationResult.liquidationIxs);
   labels.push('liquidate');
   
-  // 10. Swap instructions (optional, after liquidate)
+  // 8. POST-FARM instructions (immediately after liquidation, mirrors PRE farms)
+  instructions.push(...liquidationResult.postFarmIxs);
+  for (const mode of liquidationResult.farmModes) {
+    const modeLabel = mode === 0 ? 'collateral' : 'debt';
+    labels.push(`postRefreshFarms:${modeLabel}`);
+  }
+  
+  // 9. Swap instructions (optional, after POST farms)
   if (config.swap && config.swap.instructions.length > 0) {
     instructions.push(...config.swap.instructions);
     for (let i = 0; i < config.swap.instructions.length; i++) {
@@ -172,7 +182,7 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
     }
   }
   
-  // 11. FlashRepay (optional)
+  // 10. FlashRepay (optional)
   if (flashRepayIx) {
     instructions.push(flashRepayIx);
     labels.push('flashRepay');
@@ -186,7 +196,7 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
     repayMint: liquidationResult.repayMint,
     collateralMint: liquidationResult.collateralMint,
     withdrawCollateralMint: liquidationResult.withdrawCollateralMint,
-    hasFarmsRefresh: liquidationResult.hasFarmsRefresh,
+    hasFarmsRefresh: liquidationResult.farmRefreshCount > 0,
   };
 }
 
@@ -278,17 +288,27 @@ export function decodeCompiledInstructionKinds(tx: VersionedTransaction): Instru
  * Validate compiled transaction instruction window.
  * 
  * After compiling to VersionedTransaction, verify that the instruction sequence
- * immediately before liquidation matches the expected canonical order.
+ * immediately before AND after liquidation matches KLend's strict check_refresh adjacency rules.
  * 
- * Expected window before liquidation (last 4-5 instructions):
- * - refreshFarmsForObligationForReserve (optional, if farm exists)
- * - refreshObligation
- * - refreshReserve (repay)
+ * Expected canonical sequence:
+ * PRE (contiguous, immediately before liquidation):
  * - refreshReserve (collateral)
+ * - refreshReserve (repay)
+ * - refreshObligation
+ * - refreshFarmsForObligationForReserve (0-2 instructions for collateral/debt, if exist)
+ * 
+ * LIQUIDATE:
  * - liquidateObligationAndRedeemReserveCollateral
  * 
+ * POST (immediately after liquidation):
+ * - refreshFarmsForObligationForReserve (same farm set and order as PRE, if exist)
+ * 
+ * Key validation points:
+ * 1. Last instruction before liquidation must be farms refresh (or obligation if no farms)
+ * 2. First instruction after liquidation must be farms refresh (or nothing/swap if no farms)
+ * 3. The 4 instructions before liquidation (or 2-3 if no farms) must match canonical PRE order
+ * 
  * @param tx - Compiled versioned transaction
- * @param expectedLabels - Expected label sequence (from canonical builder)
  * @param hasFarmsRefresh - Whether farms refresh instruction should be present
  * @returns Validation result with detailed diagnostics
  */
@@ -308,54 +328,88 @@ export function validateCompiledInstructionWindow(
     };
   }
   
-  // Build expected sequence before liquidation
-  const expectedSequence = hasFarmsRefresh
-    ? ['refreshObligationFarmsForReserve', 'refreshObligation', 'refreshReserve', 'refreshReserve']
-    : ['refreshObligation', 'refreshReserve', 'refreshReserve'];
+  // Build expected sequence BEFORE liquidation
+  // Order: reserves(collateral, repay) → obligation → farms (if exist)
+  // NOTE: We look backwards from liquidation, so we read right-to-left in the array
+  const expectedPreSequence = hasFarmsRefresh
+    ? ['refreshReserve', 'refreshReserve', 'refreshObligation', 'refreshObligationFarmsForReserve']
+    : ['refreshReserve', 'refreshReserve', 'refreshObligation'];
   
-  // Validate the sequence
-  const startIdx = liquidateIdx - expectedSequence.length;
-  if (startIdx < 0) {
+  // Validate PRE sequence
+  const preStartIdx = liquidateIdx - expectedPreSequence.length;
+  if (preStartIdx < 0) {
     return {
       valid: false,
-      diagnostics: `Not enough instructions before liquidation. Expected ${expectedSequence.length}, found ${liquidateIdx}`,
+      diagnostics: `Not enough instructions before liquidation. Expected ${expectedPreSequence.length}, found ${liquidateIdx}`,
     };
   }
   
-  // Extract actual sequence
-  const actualSequence = kinds.slice(startIdx, liquidateIdx).map(k => k.kind);
+  // Extract actual PRE sequence
+  const actualPreSequence = kinds.slice(preStartIdx, liquidateIdx).map(k => k.kind);
   
-  // Compare sequences
-  const matches = expectedSequence.every((expected, idx) => actualSequence[idx] === expected);
+  // Compare PRE sequences
+  const preMatches = expectedPreSequence.every((expected, idx) => actualPreSequence[idx] === expected);
   
-  if (!matches) {
-    let diagnostics = 'Compiled instruction window does not match expected sequence\n\n';
-    diagnostics += 'Expected sequence before liquidation:\n';
-    expectedSequence.forEach((kind, idx) => {
-      diagnostics += `  [${startIdx + idx}] ${kind}\n`;
+  if (!preMatches) {
+    let diagnostics = 'Compiled PRE instruction window does not match expected sequence\n\n';
+    diagnostics += 'Expected PRE sequence (immediately before liquidation):\n';
+    expectedPreSequence.forEach((kind, idx) => {
+      diagnostics += `  [${preStartIdx + idx}] ${kind}\n`;
     });
-    diagnostics += '\nActual sequence before liquidation:\n';
-    actualSequence.forEach((kind, idx) => {
-      diagnostics += `  [${startIdx + idx}] ${kind}\n`;
+    diagnostics += '\nActual PRE sequence:\n';
+    actualPreSequence.forEach((kind, idx) => {
+      diagnostics += `  [${preStartIdx + idx}] ${kind}\n`;
     });
-    diagnostics += '\nFull instruction window (6-instruction window around liquidation):\n';
-    const windowStart = Math.max(0, liquidateIdx - 5);
-    const windowEnd = Math.min(kinds.length, liquidateIdx + 2);
+    diagnostics += '\nFull instruction window (8-instruction window around liquidation):\n';
+    const windowStart = Math.max(0, liquidateIdx - 6);
+    const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
     for (let i = windowStart; i < windowEnd; i++) {
-      const marker = i === liquidateIdx ? ' ← liquidate' : '';
+      const marker = i === liquidateIdx ? ' ← LIQUIDATE' : '';
       diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
     }
     
     return { valid: false, diagnostics };
   }
   
+  // Validate POST sequence (farms refresh immediately after liquidation, if farms exist)
+  if (hasFarmsRefresh) {
+    const postIdx = liquidateIdx + 1;
+    if (postIdx >= kinds.length) {
+      return {
+        valid: false,
+        diagnostics: 'POST farms refresh expected but no instruction found after liquidation',
+      };
+    }
+    
+    const postKind = kinds[postIdx].kind;
+    if (postKind !== 'refreshObligationFarmsForReserve') {
+      let diagnostics = 'POST instruction after liquidation does not match expected farms refresh\n\n';
+      diagnostics += `Expected: refreshObligationFarmsForReserve\n`;
+      diagnostics += `Actual: ${postKind}\n`;
+      diagnostics += '\nFull instruction window (8-instruction window around liquidation):\n';
+      const windowStart = Math.max(0, liquidateIdx - 6);
+      const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
+      for (let i = windowStart; i < windowEnd; i++) {
+        const marker = i === liquidateIdx ? ' ← LIQUIDATE' : i === postIdx ? ' ← EXPECTED POST FARMS' : '';
+        diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
+      }
+      
+      return { valid: false, diagnostics };
+    }
+  }
+  
   // Validation passed
   let diagnostics = '✓ Compiled instruction window validation passed\n\n';
-  diagnostics += 'Validated 6-instruction window before liquidation:\n';
-  const windowStart = Math.max(0, liquidateIdx - 5);
-  for (let i = windowStart; i <= liquidateIdx; i++) {
-    const marker = i === liquidateIdx ? ' ← liquidate' : '';
-    diagnostics += `  [${i}] ${kinds[i].kind}${marker}\n`;
+  diagnostics += 'Validated canonical sequence around liquidation:\n\n';
+  diagnostics += 'PRE (immediately before liquidation):\n';
+  for (let i = preStartIdx; i < liquidateIdx; i++) {
+    diagnostics += `  [${i}] ${kinds[i].kind}\n`;
+  }
+  diagnostics += '\nLIQUIDATE:\n';
+  diagnostics += `  [${liquidateIdx}] ${kinds[liquidateIdx].kind}\n`;
+  if (hasFarmsRefresh && liquidateIdx + 1 < kinds.length) {
+    diagnostics += '\nPOST (immediately after liquidation):\n';
+    diagnostics += `  [${liquidateIdx + 1}] ${kinds[liquidateIdx + 1].kind}\n`;
   }
   
   return { valid: true, diagnostics };

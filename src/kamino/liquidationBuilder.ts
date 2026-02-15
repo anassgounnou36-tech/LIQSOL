@@ -55,22 +55,29 @@ export interface BuildKaminoLiquidationParams {
  * TX Size Fix: Added setupIxs for out-of-band ATA creation
  * 
  * ReserveStale Fix: Added preRefreshIxs for slot freshness before RefreshObligation
+ * 
+ * KLend Adjacency Fix: Restructured to match strict check_refresh validation:
+ * - preReserveIxs: RefreshReserve(collateral) + RefreshReserve(repay) only
+ * - coreIxs: RefreshObligation + RefreshFarms (collateral and/or debt, 0-2 instructions)
+ * - liquidationIxs: LiquidateObligationAndRedeemReserveCollateral
+ * - postFarmIxs: Same RefreshFarms as coreIxs (mirrors PRE farms for adjacency)
+ * - Removed postRefreshIxs (reserve refreshes) entirely - they break adjacency
  */
 export interface KaminoLiquidationResult {
   setupIxs: TransactionInstruction[]; // ATA create instructions (only for missing ATAs)
   setupAtaNames: string[]; // Names of ATAs in setupIxs for labeling (e.g., ['repay', 'collateral'])
-  preRefreshIxs: TransactionInstruction[]; // Pre-refresh reserves to satisfy RefreshObligation slot freshness
-  refreshIxs: TransactionInstruction[]; // RefreshFarms + RefreshObligation
-  postRefreshIxs: TransactionInstruction[]; // Reserve refreshes immediately before liquidation (for check_refresh)
-  liquidationIxs: TransactionInstruction[];
+  preReserveIxs: TransactionInstruction[]; // PRE: RefreshReserve(collateral), RefreshReserve(repay) for slot freshness
+  coreIxs: TransactionInstruction[]; // CORE: RefreshObligation + RefreshFarms (0-2 farm instructions)
+  liquidationIxs: TransactionInstruction[]; // LIQUIDATE: LiquidateObligationAndRedeemReserveCollateral
+  postFarmIxs: TransactionInstruction[]; // POST: RefreshFarms (mirrors coreIxs farms, immediately after liquidation)
   lookupTables?: AddressLookupTableAccount[];
   repayMint: PublicKey;
   collateralMint: PublicKey; // Liquidity mint of collateral reserve
   withdrawCollateralMint: PublicKey; // Actual collateral mint used for redemption (user_destination_collateral)
   // Metadata for instruction labeling
   ataCount: number; // Number of ATA create instructions in setupIxs
-  reserveRefreshCount: number; // Number of reserve refresh instructions
-  hasFarmsRefresh: boolean; // Whether RefreshFarmsForObligationForReserve was included
+  farmRefreshCount: number; // Number of farm refresh instructions in coreIxs (0-2)
+  farmModes: number[]; // Farm modes included: 0=collateral, 1=debt (for labeling)
 }
 
 /**
@@ -466,30 +473,32 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     console.log(`[LiqBuilder] All ATAs exist, no setup instructions needed`);
   }
   
-  const refreshIxs: TransactionInstruction[] = [];
   const liquidationIxs: TransactionInstruction[] = [];
   
-  // TX Size Fix: DO NOT add ATA creates to refreshIxs
+  // TX Size Fix: DO NOT add ATA creates to liquidationIxs
   // They will be sent in a separate setup transaction if needed
   
-  // PART B: Build refresh instructions in the order required to fix Custom(6051) and Custom(6009)
+  // PART B: Build refresh instructions in CANONICAL ORDER per KLend check_refresh validation
   // 
-  // ARCHITECTURE:
-  // 1. PRE-REFRESH: RefreshReserve(repay) + RefreshReserve(collateral) BEFORE RefreshObligation
-  //    - Ensures reserves are fresh in the same slot when RefreshObligation runs
-  //    - Fixes Custom(6009) ReserveStale at RefreshObligation
+  // ARCHITECTURE (per KLend's strict adjacency rules):
   // 
-  // 2. CORE REFRESH: RefreshFarms (optional) + RefreshObligation
-  //    - RefreshObligation now finds fresh reserves from pre-refresh
+  // PRE BLOCK (contiguous, immediately before liquidation):
+  //   1. RefreshReserve(collateral/withdraw reserve) - for RefreshObligation slot freshness (6009)
+  //   2. RefreshReserve(repay/debt reserve) - for RefreshObligation slot freshness (6009)
+  //   3. RefreshObligation - now finds fresh reserves from steps 1-2
+  //   4. RefreshFarms (0-2 instructions for collateral mode=0 and/or debt mode=1, if farms exist)
   // 
-  // 3. POST-REFRESH: RefreshReserve(repay) + RefreshReserve(collateral) IMMEDIATELY before liquidation
-  //    - Required sequence for KLend's check_refresh validation
-  //    - MUST be contiguous with liquidation (no instructions in between)
-  //    - Fixes Custom(6051) if this sequence is not present
-  //
-  // NOTE: We need BOTH pre-refresh and post-refresh to satisfy:
-  //   - RefreshObligation's slot freshness requirement (pre-refresh)
-  //   - check_refresh's positional validation (post-refresh)
+  // LIQUIDATE:
+  //   5. LiquidateObligationAndRedeemReserveCollateral
+  // 
+  // POST BLOCK (immediately after liquidation):
+  //   6. RefreshFarms (same farm set and order as PRE block step 4)
+  // 
+  // KEY CHANGES vs previous implementation:
+  // - Removed POST reserve refresh instructions entirely (they broke adjacency)
+  // - Added POST farms refresh (mirrors PRE farms) immediately after liquidation
+  // - check_refresh validates: last instruction before liquidation = farms refresh (or obligation if no farms)
+  // - check_refresh validates: first instruction after liquidation = farms refresh (or none if no farms)
   
   const DEFAULT_PUBKEY = "11111111111111111111111111111111";
   
@@ -528,48 +537,72 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const repayReservePubkey = repayReserve.address;
   const collateralReservePubkey = collateralReserve.address;
   
-  // STEP 1: Build PRE-REFRESH instructions (to satisfy RefreshObligation's slot freshness)
-  const preRefreshIxs: TransactionInstruction[] = [];
+  // ========================================================================
+  // STEP 1: Build PRE-RESERVE refresh instructions (for RefreshObligation slot freshness)
+  // Order: collateral FIRST, then repay (matches KLend's expected order)
+  // ========================================================================
+  const preReserveIxs: TransactionInstruction[] = [];
   
-  console.log(`[LiqBuilder] Adding PRE-REFRESH RefreshReserve for repay reserve (slot freshness)`);
-  const preRepayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'preRefreshReserve:repay');
-  preRefreshIxs.push(preRepayRefreshIx);
-  
-  console.log(`[LiqBuilder] Adding PRE-REFRESH RefreshReserve for collateral reserve (slot freshness)`);
+  console.log(`[LiqBuilder] Building PRE-RESERVE RefreshReserve for collateral reserve (slot freshness)`);
   const preCollateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'preRefreshReserve:collateral');
-  preRefreshIxs.push(preCollateralRefreshIx);
+  preReserveIxs.push(preCollateralRefreshIx);
   
-  // STEP 2: Build CORE REFRESH instructions (RefreshFarms + RefreshObligation)
-  // STEP 2: Build CORE REFRESH instructions (RefreshFarms + RefreshObligation)
-  // Check if collateral reserve has a farm configured
+  console.log(`[LiqBuilder] Building PRE-RESERVE RefreshReserve for repay reserve (slot freshness)`);
+  const preRepayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'preRefreshReserve:repay');
+  preReserveIxs.push(preRepayRefreshIx);
+  
+  // ========================================================================
+  // STEP 2: Build CORE instructions (RefreshObligation + RefreshFarms)
+  // ========================================================================
+  const coreIxs: TransactionInstruction[] = [];
+  
+  // STEP 2A: RefreshObligation with ALL reserves as remaining accounts
+  // Convert reserve pubkeys to AccountMeta format for SDK
+  // According to Kamino SDK, reserves passed as remaining accounts should be read-only (role 0)
+  const remainingAccounts = uniqueReserves.map(r => ({
+    address: address(r),
+    role: 0 as const, // READONLY
+  }));
+  
+  console.log(`[LiqBuilder] Building RefreshObligation with ${remainingAccounts.length} reserves as remaining accounts`);
+  
+  const obligationRefreshIx = refreshObligation({
+    lendingMarket: address(p.marketPubkey.toBase58()),
+    obligation: address(p.obligationPubkey.toBase58()),
+  }, remainingAccounts, address(p.programId.toBase58()));
+  
+  coreIxs.push(new TransactionInstruction({
+    keys: (obligationRefreshIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'obligationRefresh')),
+    programId: new PublicKey(addressSafe(obligationRefreshIx.programAddress, 'obligationRefresh.programAddress')),
+    data: Buffer.from(obligationRefreshIx.data || []),
+  }));
+  
+  // STEP 2B: Build RefreshFarms instructions (for both collateral and debt if farms exist)
+  // These will be mirrored in POST block immediately after liquidation
+  const preFarmIxs: TransactionInstruction[] = [];
+  const postFarmIxs: TransactionInstruction[] = [];
+  const farmModes: number[] = [];
+  
+  // Check collateral reserve farm (mode 0)
   const collateralFarmState = collateralReserve.state.farmCollateral;
-  console.log(`[LiqBuilder] Collateral reserve farm state: ${collateralFarmState}`);
-  
-  let hasFarmsRefresh = false;
   if (collateralFarmState !== DEFAULT_PUBKEY) {
-    console.log(`[LiqBuilder] Adding RefreshFarmsForObligationForReserve for collateral reserve`);
-    hasFarmsRefresh = true;
+    console.log(`[LiqBuilder] Building RefreshFarms for collateral reserve (mode=0)`);
     
-    // Derive the obligation farm state PDA
     const obligationFarmUserState = await obligationFarmStatePda(
       address(collateralFarmState),
       address(p.obligationPubkey.toBase58())
     );
     
-    // Get lending market authority
     const lendingMarketAuthority = await market.getLendingMarketAuthority();
     
-    // Build the refresh farms instruction (mode 0 = Collateral)
-    // The crank parameter expects a TransactionSigner, but we only need the address for instruction building
-    // The actual signing happens later when the transaction is submitted
     const crankSigner = {
       address: address(p.liquidatorPubkey.toBase58()),
     };
     
     const refreshFarmsIx = refreshObligationFarmsForReserve(
-      { mode: 0 }, // 0 = Collateral, 1 = Debt
+      { mode: 0 }, // 0 = Collateral
       {
-        crank: crankSigner as any, // TransactionSigner type - liquidator acts as crank
+        crank: crankSigner as any,
         baseAccounts: {
           obligation: address(p.obligationPubkey.toBase58()),
           lendingMarketAuthority,
@@ -586,49 +619,80 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       address(p.programId.toBase58())
     );
     
-    refreshIxs.push(new TransactionInstruction({
-      keys: (refreshFarmsIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'refreshFarms')),
+    const farmIx = new TransactionInstruction({
+      keys: (refreshFarmsIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'refreshFarms:collateral')),
       programId: new PublicKey(addressSafe(refreshFarmsIx.programAddress, 'refreshFarms.programAddress')),
       data: Buffer.from(refreshFarmsIx.data || []),
+    });
+    
+    preFarmIxs.push(farmIx);
+    // POST farms should be IDENTICAL to PRE farms (same instruction data and accounts)
+    postFarmIxs.push(new TransactionInstruction({
+      keys: farmIx.keys,
+      programId: farmIx.programId,
+      data: farmIx.data,
     }));
-  } else {
-    console.log(`[LiqBuilder] Collateral reserve has no farm, skipping RefreshFarmsForObligationForReserve`);
+    farmModes.push(0);
   }
   
-  // STEP 3: RefreshObligation with ALL reserves as remaining accounts
-  // STEP 3: RefreshObligation with ALL reserves as remaining accounts
-  // Convert reserve pubkeys to AccountMeta format for SDK
-  // According to Kamino SDK, reserves passed as remaining accounts should be read-only (role 0)
-  const remainingAccounts = uniqueReserves.map(r => ({
-    address: address(r),
-    role: 0 as const, // READONLY
-  }));
+  // Check debt/repay reserve farm (mode 1)
+  const debtFarmState = repayReserve.state.farmDebt;
+  if (debtFarmState !== DEFAULT_PUBKEY) {
+    console.log(`[LiqBuilder] Building RefreshFarms for debt reserve (mode=1)`);
+    
+    const obligationFarmUserState = await obligationFarmStatePda(
+      address(debtFarmState),
+      address(p.obligationPubkey.toBase58())
+    );
+    
+    const lendingMarketAuthority = await market.getLendingMarketAuthority();
+    
+    const crankSigner = {
+      address: address(p.liquidatorPubkey.toBase58()),
+    };
+    
+    const refreshFarmsIx = refreshObligationFarmsForReserve(
+      { mode: 1 }, // 1 = Debt
+      {
+        crank: crankSigner as any,
+        baseAccounts: {
+          obligation: address(p.obligationPubkey.toBase58()),
+          lendingMarketAuthority,
+          reserve: repayReserve.address,
+          reserveFarmState: address(debtFarmState),
+          obligationFarmUserState,
+          lendingMarket: address(p.marketPubkey.toBase58()),
+        },
+        farmsProgram: address(FARMS_PROGRAM_ID),
+        rent: SYSVAR_RENT_ADDRESS,
+        systemProgram: address(SYSTEM_PROGRAM_ID),
+      },
+      [],
+      address(p.programId.toBase58())
+    );
+    
+    const farmIx = new TransactionInstruction({
+      keys: (refreshFarmsIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'refreshFarms:debt')),
+      programId: new PublicKey(addressSafe(refreshFarmsIx.programAddress, 'refreshFarms.programAddress')),
+      data: Buffer.from(refreshFarmsIx.data || []),
+    });
+    
+    preFarmIxs.push(farmIx);
+    // POST farms should be IDENTICAL to PRE farms (same instruction data and accounts)
+    postFarmIxs.push(new TransactionInstruction({
+      keys: farmIx.keys,
+      programId: farmIx.programId,
+      data: farmIx.data,
+    }));
+    farmModes.push(1);
+  }
   
-  console.log(`[LiqBuilder] Passing ${remainingAccounts.length} reserves as remaining accounts to refreshObligation`);
+  // Add PRE farm instructions to core (immediately after RefreshObligation)
+  coreIxs.push(...preFarmIxs);
   
-  const obligationRefreshIx = refreshObligation({
-    lendingMarket: address(p.marketPubkey.toBase58()),
-    obligation: address(p.obligationPubkey.toBase58()),
-  }, remainingAccounts, address(p.programId.toBase58()));
-  
-  refreshIxs.push(new TransactionInstruction({
-    keys: (obligationRefreshIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'obligationRefresh')),
-    programId: new PublicKey(addressSafe(obligationRefreshIx.programAddress, 'obligationRefresh.programAddress')),
-    data: Buffer.from(obligationRefreshIx.data || []),
-  }));
-  
-  // STEP 4: Build POST-REFRESH instructions (for check_refresh validation)
-  // These MUST be placed immediately before liquidation with no instructions in between
-  const postRefreshIxs: TransactionInstruction[] = [];
-  
-  console.log(`[LiqBuilder] Adding POST-REFRESH RefreshReserve for repay reserve (check_refresh)`);
-  const postRepayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'postRefreshReserve:repay');
-  postRefreshIxs.push(postRepayRefreshIx);
-  
-  console.log(`[LiqBuilder] Adding POST-REFRESH RefreshReserve for collateral reserve (check_refresh)`);
-  const postCollateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'postRefreshReserve:collateral');
-  postRefreshIxs.push(postCollateralRefreshIx);
-  
+  console.log(`[LiqBuilder] Built ${preFarmIxs.length} RefreshFarms instructions (modes: ${farmModes.join(', ')})`);
+  console.log(`[LiqBuilder] POST farms will mirror PRE farms (${postFarmIxs.length} instructions)`);
+
   // 4) Derive repay amount
   // If repayAmountUi provided, convert to base units with exact string→integer conversion
   // Else, derive from borrow amount and clamp to protocol-safe maximum
@@ -764,20 +828,17 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   return {
     setupIxs,
     setupAtaNames,
-    preRefreshIxs, // Reserve refreshes BEFORE RefreshObligation (slot freshness)
-    refreshIxs, // RefreshFarms + RefreshObligation
-    postRefreshIxs, // Reserve refreshes IMMEDIATELY before liquidation (check_refresh)
-    liquidationIxs,
+    preReserveIxs, // Reserve refreshes for slot freshness (collateral, repay)
+    coreIxs, // RefreshObligation + RefreshFarms (0-2 farm instructions)
+    liquidationIxs, // LiquidateObligationAndRedeemReserveCollateral
+    postFarmIxs, // RefreshFarms (mirrors PRE farms, immediately after liquidation)
     repayMint,
     collateralMint,
     withdrawCollateralMint, // Actual collateral mint used for redemption
     // Metadata for instruction labeling
     ataCount: setupIxs.length,
-    // Reserve refresh count: 2 pre-refresh + 2 post-refresh = 4 total
-    // Note: This doesn't include RefreshFarmsForObligationForReserve or RefreshObligation
-    reserveRefreshCount: 4,
-    // Track whether farms refresh instruction was added
-    hasFarmsRefresh,
+    farmRefreshCount: preFarmIxs.length,
+    farmModes, // Farm modes included: 0=collateral, 1=debt
     // lookupTables: undefined, // Can be added later if needed
   };
 }
