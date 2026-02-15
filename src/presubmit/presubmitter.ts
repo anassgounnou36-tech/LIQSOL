@@ -225,7 +225,9 @@ export class Presubmitter {
       repayAmountUi: plan.amountUi,
     });
     
+    ixs.push(...liquidationResult.preRefreshIxs);
     ixs.push(...liquidationResult.refreshIxs);
+    ixs.push(...liquidationResult.postRefreshIxs);
     ixs.push(...liquidationResult.liquidationIxs);
     
     const { repayMint, collateralMint } = liquidationResult;
