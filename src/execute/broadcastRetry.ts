@@ -1,4 +1,4 @@
-import { Connection, VersionedTransaction, TransactionMessage, Commitment, Keypair } from '@solana/web3.js';
+import { Connection, VersionedTransaction, TransactionMessage, Keypair } from '@solana/web3.js';
 import { confirmSignatureByPolling, DEFAULT_POLL_INTERVAL_MS, DEFAULT_POLL_TIMEOUT_MS } from '../solana/confirmPolling.js';
 
 /**
