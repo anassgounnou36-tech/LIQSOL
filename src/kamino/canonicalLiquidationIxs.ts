@@ -301,7 +301,7 @@ export function validateCompiledInstructionWindow(
     diagnostics += 'Instructions in compiled message:\n';
     kinds.forEach((kind, idx) => {
       const discStr = kind.discriminator ?? 'none';
-      diagnostics += `  [${idx}] ${kind.kind} (program: ${kind.programId.slice(0, 12)}..., disc: ${discStr})\n`;
+      diagnostics += `  [${idx}] ${kind.kind} (program: ${kind.programId.substring(0, Math.min(12, kind.programId.length))}..., disc: ${discStr})\n`;
     });
     return {
       valid: false,

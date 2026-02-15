@@ -124,7 +124,7 @@ export function validateLiquidationWindow(
     
     kinds.forEach((kind, idx) => {
       const discStr = kind.discriminator ? kind.discriminator : 'none';
-      diagnostics += `  [${idx}] ${kind.kind} (program: ${kind.programId.slice(0, 12)}..., disc: ${discStr})\n`;
+      diagnostics += `  [${idx}] ${kind.kind} (program: ${kind.programId.substring(0, Math.min(12, kind.programId.length))}..., disc: ${discStr})\n`;
     });
     
     return {
@@ -171,7 +171,7 @@ export function validateLiquidationWindow(
     const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
     for (let i = windowStart; i < windowEnd; i++) {
       const marker = i === liquidateIdx ? ' ← LIQUIDATE' : '';
-      diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
+      diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.substring(0, Math.min(8, kinds[i].programId.length))}...)${marker}\n`;
     }
     
     return { valid: false, diagnostics, liquidationIndex: liquidateIdx };
@@ -198,7 +198,7 @@ export function validateLiquidationWindow(
       const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
       for (let i = windowStart; i < windowEnd; i++) {
         const marker = i === liquidateIdx ? ' ← LIQUIDATE' : i === postIdx ? ' ← EXPECTED POST FARMS' : '';
-        diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
+        diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.substring(0, Math.min(8, kinds[i].programId.length))}...)${marker}\n`;
       }
       
       return { valid: false, diagnostics, liquidationIndex: liquidateIdx };

@@ -101,15 +101,14 @@ describe('Compiled Instruction Validation', () => {
   });
   
   it('should verify validation returns proper result structure', async () => {
-    // Verify the ValidationResult type structure
-    const expectedStructure = {
-      valid: 'boolean',
-      diagnostics: 'string',
-      liquidationIndex: 'number or undefined',
-    };
+    // Import ValidationResult type is implicitly tested by function return
+    const { validateLiquidationWindow } = await import('../src/execute/validation.js');
     
-    expect(expectedStructure.valid).toBe('boolean');
-    expect(expectedStructure.diagnostics).toBe('string');
-    expect(expectedStructure.liquidationIndex).toBe('number or undefined');
+    // The function should be defined and return an object with the correct structure
+    expect(validateLiquidationWindow).toBeDefined();
+    expect(typeof validateLiquidationWindow).toBe('function');
+    
+    // Note: We can't easily test the actual structure without a real transaction,
+    // but the TypeScript compiler ensures the return type matches ValidationResult
   });
 });
