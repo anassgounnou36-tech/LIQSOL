@@ -12,11 +12,18 @@ import { buildCreateAtaIdempotentIx } from "../solana/ata.js";
 import { addressSafe } from "../solana/addressSafe.js";
 import { toBigInt } from "../utils/bn.js";
 import { SYSVAR_RENT_ADDRESS } from "@solana/sysvars";
+import { KLEND_PROGRAM_ID as KLEND_PROGRAM_ID_FROM_DECODER, KAMINO_DISCRIMINATORS } from "../execute/decodeKaminoKindFromCompiled.js";
 
 // Kamino Farms program ID (mainnet)
 const FARMS_PROGRAM_ID = "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr";
 // System program ID (well-known constant)
 const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
+
+// Re-export KLEND program ID for convenience
+export const KLEND_PROGRAM_ID = KLEND_PROGRAM_ID_FROM_DECODER;
+
+// Re-export liquidation v1 discriminator for executor validation
+export const LIQUIDATE_V1_DISCRIMINATOR = KAMINO_DISCRIMINATORS.liquidateObligationAndRedeemReserveCollateral;
 
 /**
  * PR62: Parameters for building Kamino liquidation instructions.

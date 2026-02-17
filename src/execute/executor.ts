@@ -277,7 +277,17 @@ async function buildFullTransaction(
         }
         
       } catch (err) {
-        console.error('[Executor] Failed to estimate seized collateral or build swap:', err instanceof Error ? err.message : String(err));
+        const errMsg = err instanceof Error ? err.message : String(err);
+        
+        // Check if it's a 6016 ObligationHealthy soft failure
+        // Re-throw this special error so it can be caught by the parent function
+        if (errMsg === 'OBLIGATION_HEALTHY') {
+          console.error('[Executor] ℹ️  6016 ObligationHealthy detected during seized-delta estimation');
+          console.error('[Executor] Skipping this plan and continuing with next cycle.\n');
+          throw new Error('OBLIGATION_HEALTHY');
+        }
+        
+        console.error('[Executor] Failed to estimate seized collateral or build swap:', errMsg);
         
         const enableFallback = (process.env.SWAP_SIZING_FALLBACK_ENABLED ?? 'true') === 'true';
         
@@ -534,7 +544,15 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     labels = result.labels;
     metadata = result.metadata;
   } catch (err) {
-    console.error('[Executor] ❌ Failed to build transaction:', err instanceof Error ? err.message : String(err));
+    const errMsg = err instanceof Error ? err.message : String(err);
+    
+    // Check if it's OBLIGATION_HEALTHY error from buildFullTransaction
+    if (errMsg === 'OBLIGATION_HEALTHY') {
+      console.error('[Executor] ℹ️  6016 ObligationHealthy - plan skipped');
+      return { status: 'obligation-healthy' };
+    }
+    
+    console.error('[Executor] ❌ Failed to build transaction:', errMsg);
     console.error('[Executor] This plan will be skipped. Bot will continue with next cycle.');
     return { status: 'build-failed' };
   }
@@ -684,11 +702,12 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
   const validation = validateCompiledInstructionWindow(tx, metadata.hasFarmsRefresh);
   
   if (!validation.valid) {
-    console.error('[Executor] ❌ COMPILED VALIDATION FAILED:');
+    console.error('[Executor] ⚠️  COMPILED VALIDATION MISMATCH:');
     console.error(validation.diagnostics);
-    console.error('\n[Executor] Transaction build-time validation error to prevent 6051/6009');
-    console.error('[Executor] This indicates instruction assembly divergence - refusing to broadcast invalid transaction.');
-    throw new Error('Compiled instruction window validation failed - see diagnostics above');
+    console.error('\n[Executor] Transaction build-time validation warning to prevent 6051/6009');
+    console.error('[Executor] This indicates instruction assembly divergence.');
+    console.error('[Executor] Skipping this plan and continuing with next cycle.\n');
+    return { status: 'compiled-validation-failed' };
   }
   
   console.log(validation.diagnostics);
@@ -768,6 +787,17 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
           
           if (knownErrors[customCode]) {
             console.error(`\n  Decoded: ${knownErrors[customCode]}`);
+          }
+          
+          // If it's 6016 ObligationHealthy, treat as soft failure (skip and continue)
+          if (customCode === 6016) {
+            console.error('\n  ℹ️  SOFT FAILURE (6016 ObligationHealthy):');
+            console.error('     The obligation is currently healthy and cannot be liquidated.');
+            console.error('     This is a legitimate runtime state - the obligation may have been');
+            console.error('     repaid, price moved favorably, or another bot liquidated it first.');
+            console.error('\n  ✅ ACTION: Skipping this plan and continuing with next cycle.\n');
+            console.error('═══════════════════════════════════════\n');
+            return { status: 'obligation-healthy' };
           }
           
           // If it's 6006, provide specific guidance

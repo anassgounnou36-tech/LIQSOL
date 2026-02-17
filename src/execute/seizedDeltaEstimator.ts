@@ -125,6 +125,23 @@ export async function estimateSeizedCollateralDeltaBaseUnits(
   if (sim.value.err) {
     console.error('[SeizedDelta] Simulation error:', JSON.stringify(sim.value.err, null, 2));
     
+    // Check for 6016 ObligationHealthy (soft failure)
+    const err = sim.value.err;
+    if (typeof err === 'object' && err !== null && 'InstructionError' in err) {
+      const instructionError = (err as any).InstructionError;
+      const innerError = instructionError[1];
+      
+      if (typeof innerError === 'object' && innerError !== null && 'Custom' in innerError) {
+        const customCode = innerError.Custom;
+        
+        if (customCode === 6016) {
+          console.error('[SeizedDelta] ℹ️  6016 ObligationHealthy detected in simulation');
+          console.error('[SeizedDelta] The obligation is healthy and cannot be liquidated.');
+          throw new Error('OBLIGATION_HEALTHY');
+        }
+      }
+    }
+    
     // Print instruction map for debugging
     if (instructionLabels && instructionLabels.length > 0) {
       console.error('\n[SeizedDelta] ═══ SIMULATION INSTRUCTION MAP ═══');
