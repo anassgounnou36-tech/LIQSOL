@@ -304,8 +304,3 @@ export async function startBotStartupScheduler(): Promise<void> {
     cycleOnce().catch(err => console.error('[Scheduler] Cycle error:', err));
   }, heartbeatMs);
 }
-
-// CLI entry
-(async () => {
-  await startBotStartupScheduler();
-})();

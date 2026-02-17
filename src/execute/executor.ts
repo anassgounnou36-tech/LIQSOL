@@ -332,11 +332,18 @@ interface ExecutorOpts {
   broadcast?: boolean;
 }
 
+// ExecutorResult interface for consistent return type
+export interface ExecutorResult {
+  status: string;
+  signature?: string;
+  [key: string]: unknown;
+}
+
 // Tick mutex to prevent overlapping executor runs
 let tickInProgress = false;
 
 // Exported API for scheduler
-export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: string; signature?: string } | void> {
+export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResult> {
   // Check if previous tick is still in progress
   if (tickInProgress) {
     console.warn('[Executor] Tick skipped: previous tick still in progress');
@@ -885,17 +892,17 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
         return { 
           status: 'confirmed', 
           signature: finalAttempt.signature
-        } as { status: string; signature?: string; [key: string]: unknown };
+        };
       } else {
         console.error('[Executor] All broadcast attempts failed');
         return { 
           status: 'broadcast-failed'
-        } as { status: string; signature?: string; [key: string]: unknown };
+        };
       }
       
     } catch (err) {
       console.error('[Executor] Broadcast error:', err instanceof Error ? err.message : String(err));
-      return { status: 'broadcast-error' } as { status: string; signature?: string; [key: string]: unknown };
+      return { status: 'broadcast-error' };
     }
   }
   } finally {
