@@ -105,7 +105,7 @@ async function main() {
   }
 
   // Parse refresh interval
-  const refreshIntervalMs = Number(env.LIVE_CANDIDATE_REFRESH_INTERVAL_MS ?? 120_000);
+  const refreshIntervalMs = Number(env.LIVE_CANDIDATE_REFRESH_INTERVAL_MS) || 120_000;
   console.log(`  Candidate Refresh: ${(refreshIntervalMs / 1000).toFixed(0)}s\n`);
 
   // Set executor mode via env for scheduler
