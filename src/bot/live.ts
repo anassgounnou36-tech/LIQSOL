@@ -6,7 +6,7 @@ import { loadEnv } from '../config/env.js';
 import { logger } from '../observability/logger.js';
 import { buildCandidates } from '../pipeline/buildCandidates.js';
 import { buildQueue } from '../pipeline/buildQueue.js';
-import { startBotStartupScheduler } from '../scheduler/botStartupScheduler.js';
+import { startBotStartupScheduler, reloadWatchlistFromQueue } from '../scheduler/botStartupScheduler.js';
 import { SOL_MINT, USDC_MINT } from '../constants/mints.js';
 
 /**
@@ -179,6 +179,9 @@ async function main() {
       await buildQueue({
         flashloanMint: 'USDC',
       });
+
+      // Reload watchlist to update subscriptions with new queue
+      await reloadWatchlistFromQueue();
 
       console.log('[Live] ✅ Periodic refresh complete');
     } catch (err) {
