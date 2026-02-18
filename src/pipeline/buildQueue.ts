@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { filterCandidatesWithStats, normalizeCandidates } from '../scheduler/txFilters.js';
-import { buildPlanFromCandidate } from '../scheduler/txBuilder.js';
+import { buildPlanFromCandidate, type FlashloanPlan } from '../scheduler/txBuilder.js';
 import { enqueuePlans, replaceQueue } from '../scheduler/txScheduler.js';
 import { type EvParams } from '../predict/evCalculator.js';
 import { logger } from '../observability/logger.js';
@@ -126,7 +126,7 @@ export async function buildQueue(options: BuildQueueOptions = {}): Promise<void>
   }
   
   // Enqueue or replace plans based on mode
-  let queued: any[];
+  let queued: FlashloanPlan[];
   if (mode === 'replace') {
     queued = await replaceQueue(validPlans);
     logger.info('Queue replaced (replace mode)');
