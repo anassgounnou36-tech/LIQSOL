@@ -20,6 +20,11 @@ let initPromise: Promise<EventRefreshOrchestrator> | null = null;
 let accountListenerInstance: YellowstoneAccountListener | null = null;
 let priceListenerInstance: YellowstonePriceListener | null = null;
 
+// Cycle mutex to prevent overlapping executions
+let cycleInProgress = false;
+let tickDebounceTimer: NodeJS.Timeout | null = null;
+let eventListenersWired = false; // Guard to prevent duplicate listener registration
+
 function getEnvNum(key: string, def: number): number {
   const v = process.env[key];
   const n = v ? Number(v) : NaN;
@@ -191,17 +196,13 @@ export async function startBotStartupScheduler(): Promise<void> {
   // Initialize event-driven refresh (listeners + orchestrator)
   const orchestrator = await initRealtime();
   
-  // Cycle mutex to prevent overlapping executions
-  let cycleInProgress = false;
-  let tickDebounceTimer: NodeJS.Timeout | null = null;
-  
   // Debounced tick scheduler - ensures only one cycle runs at a time
   function scheduleTick(debounceMs = 200) {
     if (tickDebounceTimer) return; // Already scheduled
     tickDebounceTimer = setTimeout(async () => {
       tickDebounceTimer = null;
       if (cycleInProgress) {
-        console.log('[Scheduler] Tick skipped: previous cycle still in progress');
+        logger.warn('Tick skipped: previous cycle still in progress');
         return;
       }
       cycleInProgress = true;
@@ -213,17 +214,21 @@ export async function startBotStartupScheduler(): Promise<void> {
     }, debounceMs);
   }
   
-  // Wire event-driven ticks on account and price updates
-  if (accountListenerInstance) {
-    accountListenerInstance.on('account-update', () => {
-      scheduleTick();
-    });
-  }
-  
-  if (priceListenerInstance) {
-    priceListenerInstance.on('price-update', () => {
-      scheduleTick();
-    });
+  // Wire event-driven ticks on account and price updates (only once)
+  if (!eventListenersWired) {
+    if (accountListenerInstance) {
+      accountListenerInstance.on('account-update', () => {
+        scheduleTick();
+      });
+    }
+    
+    if (priceListenerInstance) {
+      priceListenerInstance.on('price-update', () => {
+        scheduleTick();
+      });
+    }
+    
+    eventListenersWired = true;
   }
 
   async function cycleOnce(): Promise<void> {
