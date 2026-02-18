@@ -194,7 +194,7 @@ export async function startBotStartupScheduler(): Promise<void> {
   };
 
   // Initialize event-driven refresh (listeners + orchestrator)
-  const orchestrator = await initRealtime();
+  await initRealtime();
   
   // Debounced tick scheduler - ensures only one cycle runs at a time
   function scheduleTick(debounceMs = 200) {
