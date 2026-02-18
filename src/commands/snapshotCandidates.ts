@@ -127,7 +127,6 @@ async function main() {
       rpcUrl: env.RPC_PRIMARY,
       reserveCache,
       oracleCache,
-      // allowedLiquidityMints: undefined,
       bootstrapBatchSize: 100,
       bootstrapConcurrency: 5, // Higher concurrency for batch scoring
     });

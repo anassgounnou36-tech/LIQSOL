@@ -67,7 +67,6 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
     rpcUrl,
     reserveCache,
     oracleCache,
-    // allowedLiquidityMints: undefined,
     bootstrapBatchSize: 100,
     bootstrapConcurrency: 5,
   });
