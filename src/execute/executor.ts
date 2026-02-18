@@ -902,17 +902,46 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           signature: finalAttempt.signature
         };
       } else {
-        console.error('[Executor] All broadcast attempts failed');
-        return { 
-          status: 'broadcast-failed'
-        };
+        console.error('[Executor] All broadcast attempts failed for this plan');
+        // Continue to next candidate instead of returning
+        continue;
       }
       
     } catch (err) {
-      console.error('[Executor] Broadcast error:', err instanceof Error ? err.message : String(err));
-      return { status: 'broadcast-error' };
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error('[Executor] Broadcast error:', errMsg);
+      
+      // Check for stale plan indicators
+      if (/missing obligation|invalid account|decode failed|account not found/i.test(errMsg)) {
+        console.warn(`[Executor] Stale plan detected in broadcast: ${errMsg}`);
+        console.warn(`[Executor] Dropping plan ${String(target.key).slice(0, 8)} from queue`);
+        await dropPlanFromQueue(String(target.key));
+      }
+      
+      // Continue to next candidate
+      continue;
     }
+  } // end else (broadcast mode)
+  } catch (outerErr) {
+    // Catch any unexpected errors in the attempt loop
+    const errMsg = outerErr instanceof Error ? outerErr.message : String(outerErr);
+    console.error('[Executor] Unexpected error during attempt:', errMsg);
+    
+    // Check for stale plan indicators
+    if (/missing obligation|invalid account|decode failed|account not found/i.test(errMsg)) {
+      console.warn(`[Executor] Stale plan detected: ${errMsg}`);
+      console.warn(`[Executor] Dropping plan ${String(target.key).slice(0, 8)} from queue`);
+      await dropPlanFromQueue(String(target.key));
+    }
+    
+    // Continue to next candidate
+    continue;
   }
+  } // end for loop (multi-attempt)
+  
+  // All attempts completed without success
+  console.log('[Executor] All attempts completed');
+  return { status: 'all-attempts-completed' };
   } finally {
     // Always release the tick mutex
     tickInProgress = false;

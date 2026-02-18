@@ -57,6 +57,12 @@ export const EnvSchema = z.object({
 
   // Live runner refresh interval
   LIVE_CANDIDATE_REFRESH_INTERVAL_MS: z.string().optional().default('120000'),
+  
+  // Queue build mode (replace or merge)
+  QUEUE_BUILD_MODE: z.enum(['replace', 'merge']).optional().default('replace'),
+  
+  // Executor multi-attempt per cycle
+  BOT_MAX_ATTEMPTS_PER_CYCLE: z.string().optional().default('10'),
 
   // PR11: Forecast TTL management and EV-based refresh thresholds
   FORECAST_MAX_AGE_MS: z.string().optional().default('300000'),
