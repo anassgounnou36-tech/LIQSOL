@@ -199,9 +199,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
     'Candidates selected'
   );
 
-  // Check reserve pubkey coverage
-  const withRepayReserve = topCandidates.filter(c => c.repayReservePubkey).length;
-  const withCollateralReserve = topCandidates.filter(c => c.collateralReservePubkey).length;
+  // Check reserve pubkey coverage (should always be 100% after filtering)
   const withBothReserves = topCandidates.filter(c => c.repayReservePubkey && c.collateralReservePubkey).length;
   
   if (topCandidates.length > 0 && withBothReserves < topCandidates.length) {
@@ -213,7 +211,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
       },
       'Some candidates missing reserve pubkeys - may cause execution failures'
     );
-  } else {
+  } else if (topCandidates.length > 0) {
     logger.info('All candidates have complete reserve pubkey information');
   }
 
