@@ -100,25 +100,25 @@ async function main() {
     if (allowlistMints.length > 0) {
       logger.info(
         { allowlistMints },
-        "Allowlist mode enabled - filtering by liquidity mints"
+        "Execution allowlist enabled (repay/collateral leg selection only)"
       );
     } else {
-      logger.info("Allowlist mode disabled - scoring all obligations");
+      logger.info("Execution allowlist disabled - any mint allowed for leg selection");
     }
 
     const allowedLiquidityMints = allowlistMints.length > 0 ? new Set(allowlistMints) : undefined;
 
-    // Load reserves with allowlist filtering
+    // Load reserves/oracles over FULL market (no allowlist for scoring)
     logger.info("Loading reserves for market...");
-    const reserveCache = await loadReserves(connection, marketPubkey, allowedLiquidityMints);
+    const reserveCache = await loadReserves(connection, marketPubkey /* no allowlist */);
     logger.info({ reserveCount: reserveCache.byReserve.size }, "Reserves loaded");
 
     // Load oracles
     logger.info("Loading oracles...");
-    const oracleCache = await loadOracles(connection, reserveCache, allowedLiquidityMints);
+    const oracleCache = await loadOracles(connection, reserveCache /* no allowlist */);
     logger.info({ oracleCount: oracleCache.size }, "Oracles loaded");
 
-    // Create indexer with caches but without Yellowstone (bootstrap only)
+    // Create indexer WITHOUT allowlist (scoring must see full portfolio)
     const indexer = new LiveObligationIndexer({
       yellowstoneUrl: env.YELLOWSTONE_GRPC_URL || "",
       yellowstoneToken: env.YELLOWSTONE_X_TOKEN || "",
@@ -127,7 +127,7 @@ async function main() {
       rpcUrl: env.RPC_PRIMARY,
       reserveCache,
       oracleCache,
-      allowedLiquidityMints, // Pass allowlist set for reserve-based filtering
+      // allowedLiquidityMints: undefined,
       bootstrapBatchSize: 100,
       bootstrapConcurrency: 5, // Higher concurrency for batch scoring
     });
@@ -172,7 +172,7 @@ async function main() {
       let primaryCollateralMint: string | undefined;
       
       if (entry && entry.decoded) {
-        // Select repay reserve: prefer USDC, otherwise take first borrow
+        // Select repay reserve: prefer USDC; if allowlist set, restrict to allowed mints
         const borrows = entry.decoded.borrows.filter((b) => b.reserve !== PublicKey.default.toString());
         if (borrows.length > 0) {
           // Extract reserve pubkeys from obligation borrows
@@ -184,25 +184,21 @@ async function main() {
             entry: reserveCache.byReserve.get(rpk)
           }));
           
+          const filteredBorrowEntries = allowedLiquidityMints
+            ? borrowEntries.filter(be => be.entry && allowedLiquidityMints.has(be.entry.liquidityMint))
+            : borrowEntries;
+          
           // Prefer USDC borrow if available
-          const usdcBorrow = borrowEntries.find((be) => be.entry && be.entry.liquidityMint === USDC_MINT);
-          const selectedBorrow = usdcBorrow ?? borrowEntries.find((be) => be.entry) ?? null;
+          const usdcBorrow = filteredBorrowEntries.find((be) => be.entry && be.entry.liquidityMint === USDC_MINT);
+          const selectedBorrow = usdcBorrow ?? filteredBorrowEntries.find((be) => be.entry) ?? null;
           
           if (selectedBorrow && selectedBorrow.entry) {
             repayReservePubkey = selectedBorrow.reservePubkey;
             primaryBorrowMint = selectedBorrow.entry.liquidityMint;
-          } else {
-            // No cache entry found - still record reserve pubkey, log warning
-            repayReservePubkey = borrowReserves[0];
-            primaryBorrowMint = borrows[0].mint; // Use mint from obligation (may be placeholder)
-            logger.warn(
-              { obligationPubkey: o.obligationPubkey, repayReservePubkey },
-              "Repay reserve not found in cache - using reserve pubkey with placeholder mint"
-            );
           }
         }
         
-        // Select collateral reserve: prefer SOL, otherwise take first deposit
+        // Select collateral reserve: prefer SOL; if allowlist set, restrict to allowed mints
         const deposits = entry.decoded.deposits.filter((d) => d.reserve !== PublicKey.default.toString());
         if (deposits.length > 0) {
           // Extract reserve pubkeys from obligation deposits
@@ -214,21 +210,17 @@ async function main() {
             entry: reserveCache.byReserve.get(rpk)
           }));
           
+          const filteredDepositEntries = allowedLiquidityMints
+            ? depositEntries.filter(de => de.entry && allowedLiquidityMints.has(de.entry.liquidityMint))
+            : depositEntries;
+          
           // Prefer SOL deposit if available
-          const solDeposit = depositEntries.find((de) => de.entry && de.entry.liquidityMint === SOL_MINT);
-          const selectedDeposit = solDeposit ?? depositEntries.find((de) => de.entry) ?? null;
+          const solDeposit = filteredDepositEntries.find((de) => de.entry && de.entry.liquidityMint === SOL_MINT);
+          const selectedDeposit = solDeposit ?? filteredDepositEntries.find((de) => de.entry) ?? null;
           
           if (selectedDeposit && selectedDeposit.entry) {
             collateralReservePubkey = selectedDeposit.reservePubkey;
             primaryCollateralMint = selectedDeposit.entry.liquidityMint;
-          } else {
-            // No cache entry found - still record reserve pubkey, log warning
-            collateralReservePubkey = depositReserves[0];
-            primaryCollateralMint = deposits[0].mint; // Use mint from obligation (may be placeholder)
-            logger.warn(
-              { obligationPubkey: o.obligationPubkey, collateralReservePubkey },
-              "Collateral reserve not found in cache - using reserve pubkey with placeholder mint"
-            );
           }
         }
       }
@@ -247,9 +239,23 @@ async function main() {
       };
     });
 
+    // Only emit candidates with BOTH repay/collateral legs present
+    const scoredExecutable = scoredForSelection.filter(c => c.repayReservePubkey && c.collateralReservePubkey);
+
+    if (scoredForSelection.length !== scoredExecutable.length) {
+      logger.info(
+        {
+          totalScored: scoredForSelection.length,
+          executable: scoredExecutable.length,
+          filtered: scoredForSelection.length - scoredExecutable.length,
+        },
+        'Filtered candidates without executable legs'
+      );
+    }
+
     // Select and rank candidates
     logger.info("Selecting and ranking candidates...");
-    const candidates = selectCandidates(scoredForSelection, { nearThreshold: nearArg });
+    const candidates = selectCandidates(scoredExecutable, { nearThreshold: nearArg });
     const topN = candidates.slice(0, topArg);
 
     // Report candidate counts after selection
