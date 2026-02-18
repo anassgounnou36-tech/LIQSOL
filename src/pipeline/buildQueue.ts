@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { filterCandidatesWithStats, normalizeCandidates } from '../scheduler/txFilters.js';
 import { buildPlanFromCandidate } from '../scheduler/txBuilder.js';
-import { enqueuePlans } from '../scheduler/txScheduler.js';
+import { enqueuePlans, replaceQueue } from '../scheduler/txScheduler.js';
 import { type EvParams } from '../predict/evCalculator.js';
 import { logger } from '../observability/logger.js';
 
@@ -17,6 +17,7 @@ export interface BuildQueueOptions {
   ttlMaxDropPct?: number;
   evParams?: EvParams;
   flashloanMint?: string;
+  mode?: 'replace' | 'merge'; // New: support replace mode for production
 }
 
 function getEnvNum(key: string, def: number): number {
@@ -54,6 +55,7 @@ export async function buildQueue(options: BuildQueueOptions = {}): Promise<void>
       slippageBufferPct: getOptionalEnvNum('EV_SLIPPAGE_BUFFER_PCT'),
     },
     flashloanMint = 'USDC',
+    mode = (process.env.QUEUE_BUILD_MODE as 'replace' | 'merge') || 'replace', // Default to replace for production
   } = options;
 
   // Load candidates
@@ -123,14 +125,22 @@ export async function buildQueue(options: BuildQueueOptions = {}): Promise<void>
     logger.info('All plans have complete reserve pubkey information');
   }
   
-  // Enqueue plans (writes to tx_queue.json)
-  const queued = enqueuePlans(validPlans);
+  // Enqueue or replace plans based on mode
+  let queued: any[];
+  if (mode === 'replace') {
+    queued = await replaceQueue(validPlans);
+    logger.info('Queue replaced (replace mode)');
+  } else {
+    queued = enqueuePlans(validPlans);
+    logger.info('Plans merged into queue (merge mode)');
+  }
   
   logger.info(
     { 
       path: outputPath, 
       validPlans: validPlans.length, 
-      queueSize: queued.length 
+      queueSize: queued.length,
+      mode,
     },
     'Queue built successfully'
   );

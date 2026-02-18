@@ -130,7 +130,7 @@ async function main() {
       nearThreshold: Number(env.CAND_NEAR ?? 1.02),
     });
 
-    // Build queue from candidates.json
+    // Build queue from candidates.json (uses replace mode by default)
     await buildQueue({
       flashloanMint: 'USDC',
     });
@@ -159,10 +159,18 @@ async function main() {
     process.exit(1);
   }
 
-  // Set up periodic candidate/queue refresh
+  // Set up periodic candidate/queue refresh with mutex
   console.log(`[Live] Setting up periodic refresh (${(refreshIntervalMs / 1000).toFixed(0)}s)...\n`);
 
+  let refreshInProgress = false; // Mutex to prevent overlapping refreshes
+
   setInterval(async () => {
+    if (refreshInProgress) {
+      console.info('[Live] Refresh skipped: previous refresh still in progress');
+      return;
+    }
+    
+    refreshInProgress = true;
     console.log('[Live] ═══ PERIODIC REFRESH START ═══');
 
     try {
@@ -175,7 +183,7 @@ async function main() {
         nearThreshold: Number(env.CAND_NEAR ?? 1.02),
       });
 
-      // Rebuild queue from candidates.json
+      // Rebuild queue from candidates.json (uses replace mode by default)
       await buildQueue({
         flashloanMint: 'USDC',
       });
@@ -186,6 +194,8 @@ async function main() {
       console.log('[Live] ✅ Periodic refresh complete');
     } catch (err) {
       console.error('[Live] ⚠️  Periodic refresh failed (will retry next cycle):', err);
+    } finally {
+      refreshInProgress = false;
     }
 
     console.log('[Live] ═══ PERIODIC REFRESH END ═══\n');

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { FlashloanPlan, recomputePlanFields } from './txBuilder.js';
 import { evaluateForecasts, type ForecastEntry, parseTtlMinutes, type TtlManagerParams } from '../predict/forecastTTLManager.js';
 import { isPlanComplete, getMissingFields } from './planValidation.js';
+import { writeJsonAtomic } from '../shared/fs.js';
 
 const QUEUE_PATH = path.join(process.cwd(), 'data', 'tx_queue.json');
 
@@ -18,6 +19,35 @@ export function loadQueue(): FlashloanPlan[] {
 
 export function saveQueue(items: FlashloanPlan[]): void {
   fs.writeFileSync(QUEUE_PATH, JSON.stringify(items, null, 2));
+}
+
+/**
+ * Replace entire queue with new plans (atomic write)
+ * Use this for production to avoid stale plans lingering
+ */
+export async function replaceQueue(plans: FlashloanPlan[]): Promise<FlashloanPlan[]> {
+  // Sort deterministically: EV desc, TTL asc, hazard desc
+  const sorted = [...plans].sort((a, b) => {
+    const evDiff = Number(b.ev ?? 0) - Number(a.ev ?? 0);
+    if (evDiff !== 0) return evDiff;
+    
+    const ttlDiff = Number(a.ttlMin ?? Infinity) - Number(b.ttlMin ?? Infinity);
+    if (ttlDiff !== 0) return ttlDiff;
+    
+    return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
+  });
+  
+  await writeJsonAtomic(QUEUE_PATH, sorted);
+  return sorted;
+}
+
+/**
+ * Drop a specific plan from the queue (for stale plan pruning)
+ */
+export async function dropPlanFromQueue(planKey: string): Promise<void> {
+  const q = loadQueue();
+  const filtered = q.filter(p => String(p.key) !== String(planKey));
+  await writeJsonAtomic(QUEUE_PATH, filtered);
 }
 
 export function enqueuePlans(plans: FlashloanPlan[]): FlashloanPlan[] {
