@@ -166,14 +166,14 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
   });
 
   // Only emit candidates with BOTH repay/collateral legs present
-  const scoredExecutable = scoredForSelection.filter(c => c.repayReservePubkey && c.collateralReservePubkey);
+  const candidatesWithBothLegs = scoredForSelection.filter(c => c.repayReservePubkey && c.collateralReservePubkey);
 
-  if (scoredForSelection.length !== scoredExecutable.length) {
+  if (scoredForSelection.length !== candidatesWithBothLegs.length) {
     logger.info(
       {
         totalScored: scoredForSelection.length,
-        executable: scoredExecutable.length,
-        filtered: scoredForSelection.length - scoredExecutable.length,
+        executable: candidatesWithBothLegs.length,
+        filtered: scoredForSelection.length - candidatesWithBothLegs.length,
       },
       'Filtered candidates without executable legs'
     );
@@ -181,7 +181,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
 
   // Select and rank candidates
   logger.info('Selecting and ranking candidates...');
-  const candidates = selectCandidates(scoredExecutable, { nearThreshold });
+  const candidates = selectCandidates(candidatesWithBothLegs, { nearThreshold });
   const topCandidates = candidates.slice(0, topN);
 
   // Report statistics

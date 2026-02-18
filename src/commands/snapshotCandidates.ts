@@ -239,14 +239,14 @@ async function main() {
     });
 
     // Only emit candidates with BOTH repay/collateral legs present
-    const scoredExecutable = scoredForSelection.filter(c => c.repayReservePubkey && c.collateralReservePubkey);
+    const candidatesWithBothLegs = scoredForSelection.filter(c => c.repayReservePubkey && c.collateralReservePubkey);
 
-    if (scoredForSelection.length !== scoredExecutable.length) {
+    if (scoredForSelection.length !== candidatesWithBothLegs.length) {
       logger.info(
         {
           totalScored: scoredForSelection.length,
-          executable: scoredExecutable.length,
-          filtered: scoredForSelection.length - scoredExecutable.length,
+          executable: candidatesWithBothLegs.length,
+          filtered: scoredForSelection.length - candidatesWithBothLegs.length,
         },
         'Filtered candidates without executable legs'
       );
@@ -254,7 +254,7 @@ async function main() {
 
     // Select and rank candidates
     logger.info("Selecting and ranking candidates...");
-    const candidates = selectCandidates(scoredExecutable, { nearThreshold: nearArg });
+    const candidates = selectCandidates(candidatesWithBothLegs, { nearThreshold: nearArg });
     const topN = candidates.slice(0, topArg);
 
     // Report candidate counts after selection
