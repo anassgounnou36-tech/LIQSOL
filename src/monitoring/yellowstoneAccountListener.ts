@@ -202,6 +202,14 @@ export class YellowstoneAccountListener extends EventEmitter {
     setTimeout(() => this.subscribe(), delay);
   }
 
+  // Public API to update account targets and resubscribe
+  updateTargets(accountPubkeys: string[]): void {
+    this.opts.accountPubkeys = accountPubkeys;
+    logger.info({ count: accountPubkeys.length }, 'Updating account targets and resubscribing');
+    // Resubscribe using the updated targets (cleanup is handled in subscribe)
+    void this.subscribe();
+  }
+
   async stop(): Promise<void> {
     this.running = false;
     this.emit('stopped');

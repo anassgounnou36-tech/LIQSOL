@@ -10,6 +10,7 @@ import { sendWithBoundedRetry, formatAttemptResults } from './broadcastRetry.js'
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { isPlanComplete, getMissingFields } from '../scheduler/planValidation.js';
 import { buildKaminoRefreshAndLiquidateIxsCanonical, validateCompiledInstructionWindow, decodeCompiledInstructionKinds } from '../kamino/canonicalLiquidationIxs.js';
+import { dropPlanFromQueue } from '../scheduler/txScheduler.js';
 
 interface Plan {
   planVersion?: number;
@@ -332,11 +333,18 @@ interface ExecutorOpts {
   broadcast?: boolean;
 }
 
+// ExecutorResult interface for consistent return type
+export interface ExecutorResult {
+  status: string;
+  signature?: string;
+  [key: string]: unknown;
+}
+
 // Tick mutex to prevent overlapping executor runs
 let tickInProgress = false;
 
 // Exported API for scheduler
-export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: string; signature?: string } | void> {
+export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResult> {
   // Check if previous tick is still in progress
   if (tickInProgress) {
     console.warn('[Executor] Tick skipped: previous tick still in progress');
@@ -467,59 +475,66 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
     return { status: 'no-eligible' };
   }
 
-  console.log(`[Executor] Selected ${candidates.length} eligible plans, executing up to maxInflight=1`);
+  // Multi-attempt executor: try multiple candidates per tick
+  const maxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_CYCLE ?? 10);
+  console.log(`[Executor] Selected ${candidates.length} eligible plans, attempting up to ${maxAttempts}`);
 
-  const target = candidates[0];
-  
-  // PR2: Validate plan version and required fields
-  try {
-    validatePlanVersion(target);
-  } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
-    return { status: 'invalid-plan' };
-  }
-  
-  // Guard: Skip incomplete/legacy plans (missing reserve pubkeys or empty collateralMint)
-  if (!isPlanComplete(target)) {
-    console.error('[Executor] ❌ legacy_or_incomplete_plan: Cannot execute liquidation with incomplete plan');
-    console.error('[Executor]    This plan is missing critical fields needed for liquidation:');
+  for (let attemptIdx = 0; attemptIdx < Math.min(maxAttempts, candidates.length); attemptIdx++) {
+    const target = candidates[attemptIdx];
+    console.log(`\n[Executor] ═══ Attempt ${attemptIdx + 1}/${Math.min(maxAttempts, candidates.length)}: ${String(target.key).slice(0, 8)}... ═══`);
     
-    const missing = getMissingFields(target);
-    if (missing.repayReservePubkey === 'missing') {
-      console.error('[Executor]      - repayReservePubkey: missing');
-    }
-    if (missing.collateralReservePubkey === 'missing') {
-      console.error('[Executor]      - collateralReservePubkey: missing');
-    }
-    if (missing.collateralMint === 'missing') {
-      console.error('[Executor]      - collateralMint: missing or empty');
+    // PR2: Validate plan version and required fields
+    try {
+      validatePlanVersion(target);
+    } catch (err) {
+      console.error('[Executor] Invalid plan version:', err instanceof Error ? err.message : String(err));
+      continue; // Skip to next candidate
     }
     
-    console.error('[Executor]    Skipping this plan to prevent Custom(6006) InvalidAccountInput errors.');
-    console.error('[Executor]    Action: Regenerate tx_queue.json with: npm run test:scheduler:forecast');
-    return { status: 'incomplete-plan' };
-  }
-  
-  const now = Date.now();
-  const createdAtMs = Number(target.createdAtMs ?? 0);
-  const ageMs = createdAtMs ? (now - createdAtMs) : Infinity;
-  if (minDelayMs > 0 && ageMs < minDelayMs) {
-    console.log(`Skipping due to SCHEDULED_MIN_LIQUIDATION_DELAY_MS (${minDelayMs}ms). Age: ${ageMs}ms`);
-    return { status: 'min-delay' };
-  }
+    // Guard: Skip incomplete/legacy plans (missing reserve pubkeys or empty collateralMint)
+    if (!isPlanComplete(target)) {
+      console.error('[Executor] ❌ legacy_or_incomplete_plan: Cannot execute liquidation with incomplete plan');
+      console.error('[Executor]    This plan is missing critical fields needed for liquidation:');
+      
+      const missing = getMissingFields(target);
+      if (missing.repayReservePubkey === 'missing') {
+        console.error('[Executor]      - repayReservePubkey: missing');
+      }
+      if (missing.collateralReservePubkey === 'missing') {
+        console.error('[Executor]      - collateralReservePubkey: missing');
+      }
+      if (missing.collateralMint === 'missing') {
+        console.error('[Executor]      - collateralMint: missing or empty');
+      }
+      
+      console.error('[Executor]    Skipping this plan to prevent Custom(6006) InvalidAccountInput errors.');
+      console.error('[Executor]    Dropping stale plan from queue.');
+      await dropPlanFromQueue(String(target.key));
+      continue; // Skip to next candidate
+    }
+    
+    const now = Date.now();
+    const createdAtMs = Number(target.createdAtMs ?? 0);
+    const ageMs = createdAtMs ? (now - createdAtMs) : Infinity;
+    if (minDelayMs > 0 && ageMs < minDelayMs) {
+      console.log(`[Executor] Skipping due to SCHEDULED_MIN_LIQUIDATION_DELAY_MS (${minDelayMs}ms). Age: ${ageMs}ms`);
+      continue; // Skip to next candidate
+    }
 
-  const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
-  if (!kpPath || !fs.existsSync(kpPath)) {
-    console.error(`Keypair not found at ${kpPath}.`);
-    return { status: 'no-keypair' };
-  }
-  const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
-  const signer = Keypair.fromSecretKey(Uint8Array.from(secret));
+    // Execute this candidate (wrapped in try-catch for error handling)
+    try {
+      const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
+      if (!kpPath || !fs.existsSync(kpPath)) {
+        console.error(`[Executor] Keypair not found at ${kpPath}.`);
+        continue; // Skip to next candidate
+      }
+      const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
+      const signer = Keypair.fromSecretKey(Uint8Array.from(secret));
 
-  const market = new PublicKey(env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
-  const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
+      const market = new PublicKey(env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
+      const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
 
-  console.log('[Executor] Building full transaction...');
+      console.log('[Executor] Building full transaction...');
   const buildStart = Date.now();
   
   // Final PR: Use real swap sizing when not in mock/test mode
@@ -885,19 +900,48 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<{ status: str
         return { 
           status: 'confirmed', 
           signature: finalAttempt.signature
-        } as { status: string; signature?: string; [key: string]: unknown };
+        };
       } else {
-        console.error('[Executor] All broadcast attempts failed');
-        return { 
-          status: 'broadcast-failed'
-        } as { status: string; signature?: string; [key: string]: unknown };
+        console.error('[Executor] All broadcast attempts failed for this plan');
+        // Continue to next candidate instead of returning
+        continue;
       }
       
     } catch (err) {
-      console.error('[Executor] Broadcast error:', err instanceof Error ? err.message : String(err));
-      return { status: 'broadcast-error' } as { status: string; signature?: string; [key: string]: unknown };
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error('[Executor] Broadcast error:', errMsg);
+      
+      // Check for stale plan indicators
+      if (/missing obligation|invalid account|decode failed|account not found/i.test(errMsg)) {
+        console.warn(`[Executor] Stale plan detected in broadcast: ${errMsg}`);
+        console.warn(`[Executor] Dropping plan ${String(target.key).slice(0, 8)} from queue`);
+        await dropPlanFromQueue(String(target.key));
+      }
+      
+      // Continue to next candidate
+      continue;
     }
+  } // end else (broadcast mode)
+  } catch (outerErr) {
+    // Catch any unexpected errors in the attempt loop
+    const errMsg = outerErr instanceof Error ? outerErr.message : String(outerErr);
+    console.error('[Executor] Unexpected error during attempt:', errMsg);
+    
+    // Check for stale plan indicators
+    if (/missing obligation|invalid account|decode failed|account not found/i.test(errMsg)) {
+      console.warn(`[Executor] Stale plan detected: ${errMsg}`);
+      console.warn(`[Executor] Dropping plan ${String(target.key).slice(0, 8)} from queue`);
+      await dropPlanFromQueue(String(target.key));
+    }
+    
+    // Continue to next candidate
+    continue;
   }
+  } // end for loop (multi-attempt)
+  
+  // All attempts completed without success
+  console.log('[Executor] All attempts completed');
+  return { status: 'all-attempts-completed' };
   } finally {
     // Always release the tick mutex
     tickInProgress = false;

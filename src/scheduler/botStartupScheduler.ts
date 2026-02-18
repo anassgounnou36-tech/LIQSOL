@@ -16,6 +16,15 @@ let isInitialized = false;
 let orchestratorInstance: EventRefreshOrchestrator | null = null;
 let initPromise: Promise<EventRefreshOrchestrator> | null = null;
 
+// Store listener instances for dynamic watchlist reload
+let accountListenerInstance: YellowstoneAccountListener | null = null;
+let priceListenerInstance: YellowstonePriceListener | null = null;
+
+// Cycle mutex to prevent overlapping executions
+let cycleInProgress = false;
+let tickDebounceTimer: NodeJS.Timeout | null = null;
+let eventListenersWired = false; // Guard to prevent duplicate listener registration
+
 function getEnvNum(key: string, def: number): number {
   const v = process.env[key];
   const n = v ? Number(v) : NaN;
@@ -120,6 +129,10 @@ async function initRealtime(): Promise<EventRefreshOrchestrator> {
     // Set singleton guards
     isInitialized = true;
     orchestratorInstance = orchestrator;
+    
+    // Store listener instances for dynamic reload
+    accountListenerInstance = accountListener;
+    priceListenerInstance = priceListener;
 
     return orchestrator;
   })();
@@ -129,6 +142,24 @@ async function initRealtime(): Promise<EventRefreshOrchestrator> {
   } finally {
     // Clear the promise so future calls after completion use the cached instance
     initPromise = null;
+  }
+}
+
+/**
+ * Public API to reload watchlist from queue
+ * Called after candidates/queue are rebuilt to update subscriptions
+ */
+export async function reloadWatchlistFromQueue(): Promise<void> {
+  const obligationPubkeys = deriveObligationPubkeysFromQueue();
+  logger.info({ count: obligationPubkeys.length }, 'Reloading obligation watchlist from queue');
+
+  if (accountListenerInstance) {
+    accountListenerInstance.updateTargets(obligationPubkeys);
+    logger.info({ count: obligationPubkeys.length }, 'Account subscriptions reloaded');
+  }
+  
+  if (orchestratorInstance) {
+    orchestratorInstance.refreshMapping();
   }
 }
 
@@ -162,8 +193,43 @@ export async function startBotStartupScheduler(): Promise<void> {
     minEv: schedMinEv,
   };
 
-  // Initialize event-driven refresh (listeners + orchestrator). No local variable needed.
-  await initRealtime();
+  // Initialize event-driven refresh (listeners + orchestrator)
+  const orchestrator = await initRealtime();
+  
+  // Debounced tick scheduler - ensures only one cycle runs at a time
+  function scheduleTick(debounceMs = 200) {
+    if (tickDebounceTimer) return; // Already scheduled
+    tickDebounceTimer = setTimeout(async () => {
+      tickDebounceTimer = null;
+      if (cycleInProgress) {
+        logger.warn('Tick skipped: previous cycle still in progress');
+        return;
+      }
+      cycleInProgress = true;
+      try {
+        await cycleOnce();
+      } finally {
+        cycleInProgress = false;
+      }
+    }, debounceMs);
+  }
+  
+  // Wire event-driven ticks on account and price updates (only once)
+  if (!eventListenersWired) {
+    if (accountListenerInstance) {
+      accountListenerInstance.on('account-update', () => {
+        scheduleTick();
+      });
+    }
+    
+    if (priceListenerInstance) {
+      priceListenerInstance.on('price-update', () => {
+        scheduleTick();
+      });
+    }
+    
+    eventListenersWired = true;
+  }
 
   async function cycleOnce(): Promise<void> {
     console.log('\n[Scheduler] Cycle start');
@@ -301,11 +367,7 @@ export async function startBotStartupScheduler(): Promise<void> {
   // Keep a very slow heartbeat cycle for audit/logging (optional)
   const heartbeatMs = Number(process.env.SCHED_HEARTBEAT_INTERVAL_MS ?? 60000);
   setInterval(() => {
-    cycleOnce().catch(err => console.error('[Scheduler] Cycle error:', err));
+    // Use scheduleTick to avoid overlapping cycles
+    scheduleTick();
   }, heartbeatMs);
 }
-
-// CLI entry
-(async () => {
-  await startBotStartupScheduler();
-})();
