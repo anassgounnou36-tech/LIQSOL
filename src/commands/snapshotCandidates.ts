@@ -110,12 +110,12 @@ async function main() {
 
     // Load reserves/oracles over FULL market (no allowlist for scoring)
     logger.info("Loading reserves for market...");
-    const reserveCache = await loadReserves(connection, marketPubkey /* no allowlist */);
+    const reserveCache = await loadReserves(connection, marketPubkey, undefined);
     logger.info({ reserveCount: reserveCache.byReserve.size }, "Reserves loaded");
 
     // Load oracles
     logger.info("Loading oracles...");
-    const oracleCache = await loadOracles(connection, reserveCache /* no allowlist */);
+    const oracleCache = await loadOracles(connection, reserveCache, undefined);
     logger.info({ oracleCount: oracleCache.size }, "Oracles loaded");
 
     // Create indexer WITHOUT allowlist (scoring must see full portfolio)
