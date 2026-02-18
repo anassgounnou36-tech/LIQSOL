@@ -106,7 +106,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
     let primaryCollateralMint: string | undefined;
     
     if (entry && entry.decoded) {
-      // Select repay reserve: prefer USDC; if allowlist set, restrict to allowed mints
+      // Select repay reserve: filter by allowlist (if set), then prefer USDC, otherwise take first available borrow
       const borrows = entry.decoded.borrows.filter((b) => b.reserve !== PublicKey.default.toString());
       if (borrows.length > 0) {
         const borrowReserves = borrows.map((b) => b.reserve);
@@ -128,7 +128,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
         }
       }
       
-      // Select collateral reserve: prefer SOL; if allowlist set, restrict to allowed mints
+      // Select collateral reserve: filter by allowlist (if set), then prefer SOL, otherwise take first available deposit
       const deposits = entry.decoded.deposits.filter((d) => d.reserve !== PublicKey.default.toString());
       if (deposits.length > 0) {
         const depositReserves = deposits.map((d) => d.reserve);
