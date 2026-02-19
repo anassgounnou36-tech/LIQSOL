@@ -94,7 +94,7 @@ export async function buildQueue(options: BuildQueueOptions = {}): Promise<void>
   );
 
   // Build plans from candidates
-  const plans = filtered.map((c) => buildPlanFromCandidate(c, flashloanMint));
+  const plans = filtered.map((c) => buildPlanFromCandidate(c, flashloanMint as "USDC" | "SOL" | undefined));
   
   // Validate plans - drop those missing reserve pubkeys with reason
   const validPlans = [];
