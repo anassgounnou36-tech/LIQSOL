@@ -22,6 +22,17 @@ export interface ScoredObligation {
   collateralReservePubkey?: string;
   primaryBorrowMint?: string;
   primaryCollateralMint?: string;
+  // Dual health ratio sources
+  healthRatioRecomputed?: number;
+  healthRatioRecomputedRaw?: number;
+  healthRatioProtocol?: number;
+  healthRatioProtocolRaw?: number;
+  healthRatioDiff?: number;
+  healthSource?: string;
+  borrowValueRecomputed?: number;
+  collateralValueRecomputed?: number;
+  borrowValueProtocol?: number;
+  collateralValueProtocol?: number;
   // optionally: underlying detail for validation
 }
 

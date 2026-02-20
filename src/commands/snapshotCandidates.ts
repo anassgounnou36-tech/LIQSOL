@@ -11,6 +11,7 @@ import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
 import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
 import { selectCandidates, type ScoredObligation } from "../strategy/candidateSelector.js";
 import { explainHealth } from "../math/healthBreakdown.js";
+import { divBigintToNumber } from "../utils/bn.js";
 
 /**
  * CLI tool for selecting and ranking liquidation candidates from scored obligations
@@ -235,6 +236,16 @@ async function main() {
         collateralReservePubkey,
         primaryBorrowMint,
         primaryCollateralMint,
+        healthRatioRecomputed: o.healthRatioRecomputed,
+        healthRatioRecomputedRaw: o.healthRatioRecomputedRaw,
+        healthRatioProtocol: o.healthRatioProtocol,
+        healthRatioProtocolRaw: o.healthRatioProtocolRaw,
+        healthRatioDiff: o.healthRatioDiff,
+        healthSource: o.healthSource,
+        borrowValueRecomputed: o.borrowValueRecomputed,
+        collateralValueRecomputed: o.collateralValueRecomputed,
+        borrowValueProtocol: o.borrowValueProtocol,
+        collateralValueProtocol: o.collateralValueProtocol,
       };
     });
 
@@ -271,10 +282,10 @@ async function main() {
     console.log(`\nCandidates liquidatable: ${candLiquidatable}`);
     console.log(`Candidates near-threshold (<= ${nearArg}): ${candNear}\n`);
     console.log(
-      "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | Health Ratio | Obligation"
+      "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(proto) | HR(recomp) | ΔHR    | Obligation"
     );
     console.log("Note: Borrow/Collateral values are risk-adjusted (borrowFactor × USD, liquidationThreshold × USD)");
-    console.log("-".repeat(170));
+    console.log("-".repeat(190));
 
     topN.forEach((c, index) => {
       const rank = (index + 1).toString().padStart(4);
@@ -284,11 +295,14 @@ async function main() {
       const nearThresholdStr = (c.predictedLiquidatableSoon ? "YES" : "NO").padEnd(14);
       const borrowValueStr = `$${c.borrowValueUsd.toFixed(2)}`.padStart(12);
       const collateralValueStr = `$${c.collateralValueUsd.toFixed(2)}`.padStart(16);
-      const healthRatioStr = c.healthRatio.toFixed(4).padStart(12);
+      const hrChosen = c.healthRatio.toFixed(4).padStart(10);
+      const hrProto = ((c as any).healthRatioProtocol ?? 0).toFixed(4).padStart(9);
+      const hrRecomp = ((c as any).healthRatioRecomputed ?? 0).toFixed(4).padStart(10);
+      const hrDiff = ((c as any).healthRatioDiff ?? 0).toFixed(4).padStart(6);
       const obligationStr = c.obligationPubkey;
 
       console.log(
-        `${rank} | ${priorityStr} | ${distanceStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${healthRatioStr} | ${obligationStr}`
+        `${rank} | ${priorityStr} | ${distanceStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrDiff} | ${obligationStr}`
       );
     });
 
@@ -385,6 +399,28 @@ async function main() {
           console.log(`    Borrow Value: $${c.borrowValueUsd.toFixed(2)}`);
           console.log(`    Collateral Value: $${c.collateralValueUsd.toFixed(2)}`);
           console.log(`    Health Ratio: ${c.healthRatio.toFixed(4)}`);
+
+          // Protocol SF cross-check
+          const decoded = entry.decoded;
+          const cAny = c as any;
+          const SF_SCALE = 10n ** 18n;
+          const sfToUsd = (raw: string | undefined): string => {
+            try {
+              return divBigintToNumber(BigInt(raw ?? '0'), SF_SCALE, 2).toFixed(2);
+            } catch { return '0.00'; }
+          };
+          console.log('\n  Protocol SF Values:');
+          console.log(`    Deposited Value (raw):          $${sfToUsd(decoded.depositedValueSfRaw)}`);
+          console.log(`    Borrowed Assets Market (raw):   $${sfToUsd(decoded.borrowedAssetsMarketValueSfRaw)}`);
+          console.log(`    Unhealthy Borrow Value (adj):   $${sfToUsd(decoded.unhealthyBorrowValueSfRaw)}`);
+          console.log(`    Borrow Factor Adjusted (adj):   $${sfToUsd(decoded.borrowFactorAdjustedDebtValueSfRaw)}`);
+          console.log(`    HR(protocol):                   ${(cAny.healthRatioProtocol ?? 0).toFixed(6)}`);
+          console.log(`    HR(recomputed):                 ${(cAny.healthRatioRecomputed ?? 0).toFixed(6)}`);
+          console.log(`    ΔHR (abs diff):                 ${(cAny.healthRatioDiff ?? 0).toFixed(6)}`);
+
+          if ((cAny.healthRatioDiff ?? 0) > 0.05) {
+            console.log(`    ⚠️  Large ΔHR detected - possible edge case (elevation group, farms, etc.)`);
+          }
           
           if (breakdown.flags.missingLegs > 0 || breakdown.flags.approximations.length > 0) {
             console.log("\nFlags:");

@@ -141,6 +141,21 @@ export function decodeObligation(
     lastUpdateSlot: decoded.lastUpdate.slot.toString(),
     deposits,
     borrows,
+
+    // Protocol SF risk values (convert to string to avoid Number() overflow on large bigints)
+    depositedValueSfRaw: toBigInt(decoded.depositedValueSf).toString(),
+    borrowedAssetsMarketValueSfRaw: toBigInt(decoded.borrowedAssetsMarketValueSf).toString(),
+    borrowFactorAdjustedDebtValueSfRaw: toBigInt(decoded.borrowFactorAdjustedDebtValueSf).toString(),
+    allowedBorrowValueSfRaw: toBigInt(decoded.allowedBorrowValueSf).toString(),
+    unhealthyBorrowValueSfRaw: toBigInt(decoded.unhealthyBorrowValueSf).toString(),
+
+    // Protocol metadata
+    lowestReserveDepositLiquidationLtv: Number(decoded.lowestReserveDepositLiquidationLtv ?? 0),
+    lowestReserveDepositMaxLtvPct: Number(decoded.lowestReserveDepositMaxLtvPct ?? 0),
+    elevationGroup: Number(decoded.elevationGroup ?? 0),
+    highestBorrowFactorPct: Number(decoded.highestBorrowFactorPct ?? 0),
+    hasDebt: Boolean(decoded.hasDebt),
+    borrowingDisabled: Boolean(decoded.borrowingDisabled),
   };
 }
 

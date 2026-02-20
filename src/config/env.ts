@@ -29,6 +29,12 @@ export const EnvSchema = z.object({
   // Default: SOL+USDC for PR7 gate behavior. Set to empty string to disable allowlist.
   LIQSOL_LIQ_MINT_ALLOWLIST: z.string().optional(),
 
+  // Health ratio source selection
+  // - recomputed: use fresh oracle+reserve recompute (forward-looking, catches early liquidations)
+  // - protocol: use program's SF values (ground truth, handles elevation groups/farms)
+  // Default: recomputed
+  LIQSOL_HEALTH_SOURCE: z.enum(['recomputed', 'protocol']).optional().default('recomputed'),
+
   // PR 8.5: EV-based ranking configuration (opt-in)
   USE_EV_RANKING: z.string().optional().default('false'),
   MIN_BORROW_USD: z.string().optional().default('10'),
