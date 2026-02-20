@@ -73,10 +73,10 @@ export interface ReserveCache {
 }
 
 /**
- * Scope mint chain map - maps liquidity mint to priceChain indices array
- * This is populated during reserve loading and used during oracle decoding
- * to select the correct price from multi-chain Scope oracles by trying fallback chains.
- * Different reserves (mints) can share the same Scope oracle but use different chain indices.
+ * Scope mint chain map - maps liquidity mint to Scope price chain (array of indices used to
+ * compute the final USD price via Scope.getPriceFromScopeChain, as a product of prices at each hop).
+ * This is populated during reserve loading and used during oracle decoding.
+ * Different reserves (mints) can share the same Scope oracle but use different chain arrays.
  */
 export const scopeMintChainMap = new Map<string, number[]>();
 

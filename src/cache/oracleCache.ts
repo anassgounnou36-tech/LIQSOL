@@ -5,6 +5,7 @@ import type { ReserveCache } from "./reserveCache.js";
 import { scopeMintChainMap, getMintsByOracle } from "./reserveCache.js";
 import { parsePriceData } from "@pythnetwork/client";
 import { OraclePrices } from "@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js";
+import { Scope } from "@kamino-finance/scope-sdk";
 import { SOL_MINT, USDC_MINT, USDT_MINT } from "../constants/mints.js";
 import { uiPriceFromMantissa } from "../utils/priceConversion.js";
 
@@ -31,20 +32,6 @@ const STABLECOIN_MINTS = new Set([
   "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
   "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", // PYUSD
 ]);
-
-/**
- * Scope chain overrides for known problematic feeds
- * Maps oracle pubkey to priority-ordered chain indices to try
- */
-const scopeChainOverrides: Record<string, number[]> = {
-  "3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH": [0, 2, 4, 6],
-};
-
-/**
- * Sentinel value used in Scope priceChain arrays to indicate "not set"
- * This is 0xFFFF (max u16 value)
- */
-const SCOPE_CHAIN_SENTINEL_VALUE = 65535;
 
 /**
  * Staleness threshold in seconds (30 seconds)
@@ -77,25 +64,6 @@ export interface OraclePriceData {
  * Oracle cache mapping mint to price data
  */
 export type OracleCache = Map<string, OraclePriceData>;
-
-/**
- * Result from decoding a Scope price with fallback metadata
- */
-interface ScopePriceResult {
-  /** Decoded price data, or null if no valid price found */
-  priceData: OraclePriceData | null;
-  /** The chain index that yielded a usable price, if any */
-  winningChain?: number;
-  /** Whether fallback chain scanning was attempted */
-  triedFallbackScan: boolean;
-}
-
-/**
- * Cache of resolved chain indices per mint for Scope oracles
- * Maps mint address → successfully resolved chain index
- * Used to avoid repeated fallback scanning for the same mint
- */
-const resolvedScopeChainByMint = new Map<string, number>();
 
 /**
  * Decodes a Pyth price account using the official Pyth SDK
@@ -209,253 +177,98 @@ function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
 }
 
 /**
- * Curated list of common Scope price chain candidates for fallback scanning
- * These are the most reliable chain indices observed across Kamino markets
- * Ordered by reliability: 0, 3, 13, 2, 4, 6
- * This shorter list ensures deterministic behavior and faster fallback for small allowlists
- */
-const FALLBACK_CHAIN_CANDIDATES = [0, 3, 13, 2, 4, 6];
-
-/**
- * Threshold for small allowlist auto-scan mode
- * When allowlist size <= this threshold, bounded curated scan is automatically enabled
- */
-const SMALL_ALLOWLIST_THRESHOLD = 5;
-
-/**
- * Helper function to check if a price entry is usable (non-zero, finite exponent, magnitude sanity checks)
- * Note: Does not check for freshness - that is validated separately in tryChain
- * @param priceData - Price data to validate
- * @returns true if the price is usable, false otherwise
- */
-function isPriceUsable(priceData: OraclePriceData | null): boolean {
-  if (!priceData) return false;
-  if (priceData.price === 0n) return false;
-  if (!Number.isFinite(priceData.exponent)) return false;
-
-  // Reject absurd exponent ranges
-  if (priceData.exponent < -30 || priceData.exponent > 10) return false;
-
-  // Magnitude check without floats: log10(uiPrice) ≈ (digits - 1) + exponent
-  const digits = priceData.price.toString().length;
-  const approxLog10 = (digits - 1) + priceData.exponent;
-
-  // Reject extremely tiny prices (e.g., ~1e-6 USD)
-  if (approxLog10 < -4) return false; // uiPrice < 1e-4
-
-  // Reject extremely huge prices (protect against overflow nonsense)
-  if (approxLog10 > 7) return false; // uiPrice > 1e7
-
-  return true;
-}
-
-/**
- * Decodes a Scope price feed account using the Kamino Scope SDK with resilient fallback support
+ * Decodes a Scope price feed using the Scope SDK chain pricing function.
+ * Computes the final USD price from the full price chain (a product of prices at each hop).
  *
- * Behavior:
- * 1. Try configured chains in order
- * 2. If none found and fallback enabled, try curated FALLBACK_CHAIN_CANDIDATES
- * 3. Return null if no valid price found
+ * The chain is the array of Scope price indices that form a multi-hop price path
+ * (e.g., [lstIndex, solIndex] → LST/SOL * SOL/USD = LST/USD).
  *
  * @param data - Raw account data
- * @param chains - Array of price chain indices (0-511) to try in order until a valid price is found
- * @param options - Optional configuration
- * @param options.enableFallback - Enable automatic fallback chain search (default: true)
- * @param options.allowlistBoundedScan - Enable bounded curated scan for small allowlists (bypasses LIQSOL_ENABLE_SCOPE_SCAN check)
- * @returns Result object with price data, winning chain, and fallback metadata
+ * @param chains - Scope price chain (full array of indices to compute the final USD price)
+ * @returns OraclePriceData with the computed USD price, or null if invalid/stale
  */
 function decodeScopePrice(
-  data: Buffer, 
-  chains: number[] = [0],
-  options?: { enableFallback?: boolean; allowlistBoundedScan?: boolean }
-): ScopePriceResult {
+  data: Buffer,
+  chains: number[]
+): OraclePriceData | null {
+  // Validate chain
+  if (!chains || chains.length === 0) {
+    logger.warn({ chain: chains }, "[OracleCache] Empty Scope chain");
+    return null;
+  }
+
+  if (!Scope.isScopeChainValid(chains)) {
+    logger.warn({ chain: chains }, "[OracleCache] Invalid Scope chain");
+    return null;
+  }
+
+  // Decode the OraclePrices account
+  const oraclePrices = OraclePrices.decode(data);
+
+  if (!oraclePrices || !oraclePrices.prices || oraclePrices.prices.length === 0) {
+    logger.warn("[OracleCache] Scope decode failed: prices array missing");
+    return null;
+  }
+
   try {
-    // Use Scope SDK to decode the OraclePrices account
-    const oraclePrices = OraclePrices.decode(data);
-    
-    if (!oraclePrices || !oraclePrices.prices || oraclePrices.prices.length === 0) {
-      logger.warn("Scope decode failed: prices array missing");
-      return { priceData: null, triedFallbackScan: false };
-    }
-    
-    // Helper function to try decoding a specific chain
-    const tryChain = (chain: number): OraclePriceData | null => {
-      // Skip sentinel value
-      if (chain === SCOPE_CHAIN_SENTINEL_VALUE) {
-        logger.debug({ chain }, "Skipping Scope chain index (sentinel value)");
-        return null;
-      }
-      
-      // Validate chain index
-      if (chain < 0 || chain >= 512) {
-        logger.debug({ chain }, "Invalid Scope price chain index (must be 0-511), skipping");
-        return null;
-      }
-      
-      // Check if chain index is out of bounds for this oracle
-      if (chain >= oraclePrices.prices.length) {
-        logger.debug(
-          { chain, total: oraclePrices.prices.length },
-          "Scope chain index out of bounds"
-        );
-        return null;
-      }
-      
-      const datedPrice = oraclePrices.prices[chain];
-      if (!datedPrice || !datedPrice.price) {
-        logger.debug({ chain }, "Scope DatedPrice or Price is null at chain index, trying next chain");
-        return null;
-      }
-      
-      // Extract price components from the Price struct
-      const value = datedPrice.price.value; // BN (mantissa)
-      const exp = datedPrice.price.exp; // BN (exponent)
-      const unixTimestamp = datedPrice.unixTimestamp; // BN (unix timestamp in seconds)
-      
-      // Guard against zero/invalid price
-      const priceBigInt = BigInt(value.toString());
-      if (priceBigInt <= 0n) {
-        logger.debug({ chain, value: priceBigInt.toString() }, "Scope price value invalid (<=0) at chain index");
-        return null;
-      }
-      
-      // Guard against invalid exponent (but 0 is valid)
-      // Scope's exp is a scale (decimal places), so we need negative exponent for UI price conversion
-      // UI price = mantissa × 10^(-exp)
-      const exponent = -Number(exp.toString());
-      if (!isFinite(exponent)) {
-        logger.debug({ chain, exponent }, "Scope price exponent is invalid at chain index");
-        return null;
-      }
-      
-      // Guard against zero/invalid timestamp
-      const timestamp = BigInt(unixTimestamp?.toString() || "0");
-      if (timestamp === 0n) {
-        logger.debug({ chain, timestamp: timestamp.toString() }, "Scope price entry invalid/stale (no timestamp)");
-        return null;
-      }
-      
-      // Staleness check - use unix timestamp
-      const currentTime = BigInt(Math.floor(Date.now() / 1000));
-      const ageSeconds = Number(currentTime - timestamp);
-      
-      if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
-        logger.debug(
-          { chain, ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
-          "Scope price entry invalid/stale"
-        );
-        return null;
-      }
-      
-      // Extract confidence if available from the feed
-      const confidence = BigInt((datedPrice as any).confidence?.toString() || "0");
-      
-      return {
-        price: priceBigInt,
-        confidence: confidence,
-        exponent: exponent,
-        slot: timestamp,
-        oracleType: "scope",
-      };
-    };
-    
-    // Step 1: Try configured chains in order
-    for (const chain of chains) {
-      const priceData = tryChain(chain);
-      if (isPriceUsable(priceData)) {
-        logger.info({ chain, value: priceData!.price.toString(), exponent: priceData!.exponent }, "Scope price selected from configured chains");
-        return { priceData, winningChain: chain, triedFallbackScan: false };
-      }
-    }
-    
-    // Step 2: Check if fallback is enabled
-    const enableFallback = options?.enableFallback ?? true;
-    if (!enableFallback) {
+    // Compute USD price from the full chain
+    const result = Scope.getPriceFromScopeChain(chains, oraclePrices);
+
+    // Staleness check using the oldest timestamp in the chain
+    const timestampSec = result.timestamp.toNumber();
+    const ageSec = Date.now() / 1000 - timestampSec;
+    if (ageSec > STALENESS_THRESHOLD_SECONDS) {
       logger.warn(
-        { 
-          chains, 
-          availablePrices: oraclePrices.prices.length 
-        },
-        "No usable Scope price found in configured chains and fallback disabled"
+        { chain: chains, ageSec, threshold: STALENESS_THRESHOLD_SECONDS },
+        "[OracleCache] Scope chain price is stale"
       );
-      return { priceData: null, triedFallbackScan: false };
+      return null;
     }
-    
-    // Step 3: Determine if curated chain scanning should be enabled
-    // Enable if:
-    // - LIQSOL_ENABLE_SCOPE_SCAN=1 (global enable), OR
-    // - allowlistBoundedScan is true (small allowlist auto-enable)
-    const enableScopeScan = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN === "1";
-    const allowlistBoundedScan = options?.allowlistBoundedScan ?? false;
-    const shouldScan = enableScopeScan || allowlistBoundedScan;
-    
-    if (!shouldScan) {
-      logger.warn(
-        { 
-          chains, 
-          availablePrices: oraclePrices.prices.length,
-          hint: "Set LIQSOL_ENABLE_SCOPE_SCAN=1 to enable curated chain scanning, or use small allowlist (<=5 mints) for bounded auto-scan"
-        },
-        "No usable Scope price found in configured chains; curated scan disabled"
-      );
-      return { priceData: null, triedFallbackScan: false };
+
+    const uiPrice = result.price.toNumber();
+
+    // Validate result
+    if (!isFinite(uiPrice) || isNaN(uiPrice) || uiPrice <= 0) {
+      logger.warn({ chain: chains, uiPrice }, "[OracleCache] Scope chain returned invalid price");
+      return null;
     }
-    
-    // Step 4: Scan curated list of fallback chain candidates
-    // This scans the bounded set [0, 3, 13, 2, 4, 6] which is safe for small allowlists
+
+    // Magnitude check (USD prices should be in reasonable range)
+    if (uiPrice < 0.0001 || uiPrice > 1_000_000) {
+      logger.warn({ chain: chains, uiPrice }, "[OracleCache] Scope chain price magnitude out of range");
+      return null;
+    }
+
+    // Convert Decimal USD price to internal format with fixed exponent -8
+    const exponent = -8;
+    const price = BigInt(Math.floor(uiPrice * 1e8));
+
+    if (price <= 0n) {
+      logger.warn({ chain: chains, price }, "[OracleCache] Non-positive Scope chain price after conversion");
+      return null;
+    }
+
     logger.debug(
-      { 
-        configuredChains: chains, 
-        candidateCount: FALLBACK_CHAIN_CANDIDATES.length,
-        enableScopeScan,
-        allowlistBoundedScan
-      },
-      "Scanning curated fallback chain candidates for Scope price"
+      { chain: chains, uiPrice, exponent, timestampSec, ageSec },
+      "[OracleCache] Scope chain priced"
     );
-    
-    const triedChains = new Set(chains); // Track what we've already tried
-    let triedFallbackScan = false;
-    
-    for (const chain of FALLBACK_CHAIN_CANDIDATES) {
-      // Skip if already tried in configured chains
-      if (triedChains.has(chain)) continue;
-      
-      triedChains.add(chain);
-      triedFallbackScan = true;
-      
-      const priceData = tryChain(chain);
-      if (isPriceUsable(priceData)) {
-        logger.info(
-          { 
-            chain, 
-            value: priceData!.price.toString(), 
-            exponent: priceData!.exponent, 
-            configuredChains: chains,
-            scannedCandidates: FALLBACK_CHAIN_CANDIDATES.length,
-            enabledBy: allowlistBoundedScan ? "allowlist-bounded-scan" : "LIQSOL_ENABLE_SCOPE_SCAN"
-          },
-          "Scope price selected from curated fallback candidate scan"
-        );
-        return { priceData, winningChain: chain, triedFallbackScan: true };
-      }
-    }
-    
-    // No valid price found after exhaustive search
-    logger.warn(
-      { 
-        configuredChains: chains,
-        availablePrices: oraclePrices.prices.length,
-        scannedCandidates: FALLBACK_CHAIN_CANDIDATES.length,
-        triedFallbackScan
-      },
-      "No usable Scope price found after trying configured chains and fallback scanning"
-    );
-    return { priceData: null, triedFallbackScan };
+
+    return {
+      price,
+      confidence: 0n,
+      exponent,
+      slot: BigInt(Math.floor(timestampSec)),
+      oracleType: "scope",
+    };
   } catch (err) {
-    logger.error({ err, chains }, "Failed to decode Scope price with SDK");
-    return { priceData: null, triedFallbackScan: false };
+    logger.warn(
+      { chain: chains, err: err instanceof Error ? err.message : String(err) },
+      "[OracleCache] Scope chain pricing failed"
+    );
+    return null;
   }
 }
+
 
 /**
  * Applies stablecoin price clamping to keep prices within expected range
@@ -608,27 +421,16 @@ export async function loadOracles(
   // Detect allowlist mode (any non-empty allowlist)
   const allowlistMode = !!(allowedLiquidityMints && allowedLiquidityMints.size > 0);
 
-  // Detect small allowlist mode for bounded curated scan (allowlist mode only)
-  const allowlistBoundedScan = allowlistMode && allowedLiquidityMints!.size <= SMALL_ALLOWLIST_THRESHOLD;
-
-  // Cache LIQSOL_ENABLE_SCOPE_SCAN flag (only honoured in allowlist mode)
+  // Cache LIQSOL_ENABLE_SCOPE_SCAN flag
   const scopeScanEnvEnabled = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN === '1';
 
   logger.info({
     mode: allowlistMode ? 'allowlist' : 'full-market',
-    scopeFallbackEnabled: allowlistMode && scopeScanEnvEnabled,
     allowlistSize: allowedLiquidityMints?.size ?? 0
   }, 'Oracle loading mode');
 
-  if (allowlistBoundedScan) {
-    logger.info(
-      { allowlistSize: allowedLiquidityMints!.size, threshold: SMALL_ALLOWLIST_THRESHOLD },
-      "Small allowlist detected - enabling bounded curated chain scan for Scope oracles"
-    );
-  }
-
   if (scopeScanEnvEnabled && !allowlistMode) {
-    logger.warn('LIQSOL_ENABLE_SCOPE_SCAN is set but ignored in full-market mode (empty allowlist)');
+    logger.warn('[OracleCache] LIQSOL_ENABLE_SCOPE_SCAN is set but ignored in full-market mode (empty allowlist)');
   }
 
   // Collect all unique oracle pubkeys from reserves
@@ -700,19 +502,15 @@ export async function loadOracles(
   );
 
   // Diagnostic: Check oracle coverage
-  const reserveCount = reserveCache.byMint.size;
-  if (oraclePubkeys.length < 10 && reserveCount > 50) {
+  // Note: Scope oracles use shared feed accounts, so few unique oracles is expected
+  if (oraclePubkeys.length < 10 && reserveCache.byReserve.size > 50) {
     logger.warn(
       {
-        uniqueOracles: oraclePubkeys.length,
-        reserveCount,
-        sampleReserves: Array.from(reserveCache.byMint.entries()).slice(0, 3).map(([mint, reserve]) => ({
-          mint,
-          oracleCount: reserve.oraclePubkeys.length,
-          oracles: reserve.oraclePubkeys.map(pk => pk.toString()),
-        })),
+        cached: oraclePubkeys.length,
+        reserveCount: reserveCache.byReserve.size,
+        note: 'Scope oracles use shared feed accounts',
       },
-      "WARNING: Very few unique oracles for many reserves - possible configuration issue"
+      "Oracle coverage check"
     );
   }
 
@@ -775,63 +573,29 @@ export async function loadOracles(
         continue;
       }
       
-      // Store diagnostic entry under oracle pubkey (will be overwritten by first mint's price)
+      // Store diagnostic entry under oracle pubkey (first mint's price)
       let diagnosticPriceData: OraclePriceData | null = null;
       
-      // Decode price for each mint using its specific chain configuration
+      // Decode price for each mint using its reserve-configured Scope price chain
       for (const mint of assignedMints) {
-        // Build chain precedence: resolved → configured → overrides
-        // In full-market mode, skip cached resolved chains and per-oracle overrides
-        const resolvedChain = allowlistMode ? resolvedScopeChainByMint.get(mint) : undefined;
+        // Use only the reserve-configured Scope price chain (array of indices for chain product)
         const configChains = scopeMintChainMap.get(mint) || [];
-        const overrideChains = allowlistMode ? (scopeChainOverrides[pubkeyStr] || []) : [];
+        // Default to [0] if no chain configured (single-element chain)
+        const finalChains = configChains.length > 0 ? configChains : [0];
         
-        // Merge chains with correct precedence
-        const chainsToTry: number[] = [];
-        if (resolvedChain !== undefined) {
-          chainsToTry.push(resolvedChain);
-        }
-        for (const c of configChains) {
-          if (!chainsToTry.includes(c)) chainsToTry.push(c);
-        }
-        for (const c of overrideChains) {
-          if (!chainsToTry.includes(c)) chainsToTry.push(c);
-        }
+        const priceData = decodeScopePrice(data, finalChains);
         
-        // If empty after merge, use default [0]
-        const finalChains = chainsToTry.length > 0 ? chainsToTry : [0];
-        
-        const result = decodeScopePrice(data, finalChains, { allowlistBoundedScan, enableFallback: allowlistMode });
-        
-        if (!result.priceData) {
+        if (!priceData) {
           logger.warn(
-            { 
-              oracle: pubkeyStr, 
-              mint, 
-              chains: finalChains,
-              triedFallbackScan: result.triedFallbackScan
-            },
-            "Failed to decode Scope price for mint after fallback search"
+            { oracle: pubkeyStr, mint, chains: finalChains },
+            "Failed to decode Scope price for mint"
           );
           continue;
         }
         
-        // Cache the winning chain for this mint to avoid future fallback scans
-        if (result.winningChain !== undefined && result.triedFallbackScan) {
-          resolvedScopeChainByMint.set(mint, result.winningChain);
-          logger.info(
-            { 
-              mint, 
-              resolvedChain: result.winningChain,
-              originalChains: finalChains
-            },
-            "Cached resolved Scope chain for mint (found via fallback)"
-          );
-        }
-        
         // Apply stablecoin price clamping per mint
-        const clampedPrice = applyStablecoinClamp(result.priceData.price, result.priceData.exponent, mint);
-        const adjustedPriceData = { ...result.priceData, price: clampedPrice };
+        const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
+        const adjustedPriceData = { ...priceData, price: clampedPrice };
         
         // Store price under mint
         cache.set(mint, adjustedPriceData);
@@ -847,11 +611,9 @@ export async function loadOracles(
             oracle: pubkeyStr,
             mint,
             chains: finalChains,
-            winningChain: result.winningChain,
-            usedFallback: result.triedFallbackScan,
             price: adjustedPriceData.price.toString(),
           },
-          "Mapped Scope oracle price to mint with chain-aware decoding"
+          "Mapped Scope oracle price to mint via chain pricing"
         );
       }
       
@@ -942,6 +704,27 @@ export async function loadOracles(
       cached: cache.size,
     },
     "Oracle cache loaded successfully"
+  );
+
+  // Coverage summary: report how many mints have prices vs. missing
+  const pricedMints = new Set<string>();
+  const unpricedMints = new Set<string>();
+  for (const [mint] of cache.entries()) {
+    pricedMints.add(mint);
+  }
+  for (const [mint] of reserveCache.byMint.entries()) {
+    if (!pricedMints.has(mint)) {
+      unpricedMints.add(mint);
+    }
+  }
+  logger.info(
+    {
+      reserveCount: reserveCache.byReserve.size,
+      pricedMints: pricedMints.size,
+      unpricedMints: unpricedMints.size,
+      unpricedSample: Array.from(unpricedMints).slice(0, 5),
+    },
+    "[OracleCache] Oracle coverage summary"
   );
 
   // Part B: Oracle sanity checks (prevent false positives)
