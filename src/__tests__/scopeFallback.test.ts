@@ -168,12 +168,6 @@ describe("Scope Fallback Chain Search Tests", () => {
     });
 
     it("should scan curated fallback candidates when primary fallbacks fail", async () => {
-      // Enable curated chain scanning for this test
-      const originalEnv = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN;
-      if ((globalThis as any).process?.env) {
-        (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN = "1";
-      }
-      
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
       const reservePubkey = PublicKey.unique();
@@ -201,11 +195,12 @@ describe("Scope Fallback Chain Search Tests", () => {
         byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
       };
 
-      // Mock Scope data with price only at chain 118 (in curated candidates list)
+      // Mock Scope data with price only at chain 3 (in curated FALLBACK_CHAIN_CANDIDATES, not in override chains)
+      // Use a realistic SOL price (~100 USD) to pass the SOL sanity check
       const currentTimestamp = Math.floor(Date.now() / 1000);
       const mockPrices = createMockScopePriceArray(
         new Map([
-          [118, { price: "300000000", exp: 8, timestamp: currentTimestamp }],
+          [3, { price: "10000000000", exp: 8, timestamp: currentTimestamp }],
         ])
       );
 
@@ -218,22 +213,14 @@ describe("Scope Fallback Chain Search Tests", () => {
         { data: scopeData, owner: SCOPE_PROGRAM_ID },
       ]);
 
-      const cache = await loadOracles(mockConnection, reserveCache);
+      // Pass allowedLiquidityMints to enable allowlist mode (which enables bounded curated scan)
+      const cache = await loadOracles(mockConnection, reserveCache, new Set([mint1]));
 
-      // Should have found price via curated fallback candidate 118
+      // Should have found price via curated fallback candidate 3
       expect(cache.has(mint1)).toBe(true);
       const price = cache.get(mint1);
       expect(price).toBeDefined();
-      expect(price!.price).toBe(300000000n);
-      
-      // Restore original environment
-      if ((globalThis as any).process?.env) {
-        if (originalEnv !== undefined) {
-          (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN = originalEnv;
-        } else {
-          delete (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN;
-        }
-      }
+      expect(price!.price).toBe(10000000000n);
     });
 
     it("should return null when no valid price found after exhaustive search", async () => {
@@ -343,12 +330,6 @@ describe("Scope Fallback Chain Search Tests", () => {
 
   describe("Filter out stale prices", () => {
     it("should skip stale prices in fallback scan", async () => {
-      // Enable curated chain scanning for this test
-      const originalEnv = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN;
-      if ((globalThis as any).process?.env) {
-        (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN = "1";
-      }
-      
       const mint1 = "So11111111111111111111111111111111111111112"; // SOL, not a stablecoin
       const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
       const reservePubkey = PublicKey.unique();
@@ -376,13 +357,14 @@ describe("Scope Fallback Chain Search Tests", () => {
         byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
       };
 
-      // Mock Scope data with stale price at chain 0 and fresh price at chain 1 (curated fallback)
+      // Mock Scope data with stale price at chain 0 and fresh price at chain 3 (curated fallback)
+      // Use realistic SOL price (~200 USD) to pass the SOL sanity check
       const currentTimestamp = Math.floor(Date.now() / 1000);
       const staleTimestamp = currentTimestamp - 60; // 60 seconds old (stale)
       const mockPrices = createMockScopePriceArray(
         new Map([
-          [0, { price: "100000000", exp: 8, timestamp: staleTimestamp }],
-          [1, { price: "200000000", exp: 8, timestamp: currentTimestamp }],
+          [0, { price: "10000000000", exp: 8, timestamp: staleTimestamp }],
+          [3, { price: "20000000000", exp: 8, timestamp: currentTimestamp }],
         ])
       );
 
@@ -395,22 +377,14 @@ describe("Scope Fallback Chain Search Tests", () => {
         { data: scopeData, owner: SCOPE_PROGRAM_ID },
       ]);
 
-      const cache = await loadOracles(mockConnection, reserveCache);
+      // Pass allowedLiquidityMints to enable allowlist mode (which enables bounded curated scan)
+      const cache = await loadOracles(mockConnection, reserveCache, new Set([mint1]));
 
-      // Should skip stale chain 0 and use fresh chain 1 (curated fallback)
+      // Should skip stale chain 0 and use fresh chain 3 (curated fallback)
       expect(cache.has(mint1)).toBe(true);
       const price = cache.get(mint1);
       expect(price).toBeDefined();
-      expect(price!.price).toBe(200000000n);
-      
-      // Restore original environment
-      if ((globalThis as any).process?.env) {
-        if (originalEnv !== undefined) {
-          (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN = originalEnv;
-        } else {
-          delete (globalThis as any).process.env.LIQSOL_ENABLE_SCOPE_SCAN;
-        }
-      }
+      expect(price!.price).toBe(20000000000n);
     });
   });
 
