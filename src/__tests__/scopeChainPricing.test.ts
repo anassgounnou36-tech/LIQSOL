@@ -221,14 +221,14 @@ describe("Scope Chain Pricing Tests", () => {
   });
 
   describe("Stale price rejection", () => {
-    it("rejects a stale chain price (age > 30s)", async () => {
+    it("rejects a stale chain price (age > 120s)", async () => {
       const mint = "So11111111111111111111111111111111111111112";
       const reservePubkey = PublicKey.unique();
 
       // Use chain [1] (non-zero, valid according to isScopeChainValid)
       scopeMintChainMap.set(mint, [1]);
 
-      const staleTimestamp = Math.floor(Date.now() / 1000) - 60; // 60 seconds old
+      const staleTimestamp = Math.floor(Date.now() / 1000) - 130; // 130 seconds old (> 120s threshold)
       const mockPrices = createMockScopePriceArray(
         new Map([
           [1, { price: "10000000000", exp: 8, timestamp: staleTimestamp }],
@@ -261,7 +261,7 @@ describe("Scope Chain Pricing Tests", () => {
       scopeMintChainMap.set(mint, [0, 1]);
 
       const currentTimestamp = Math.floor(Date.now() / 1000);
-      const staleTimestamp = currentTimestamp - 60; // 60 seconds old
+      const staleTimestamp = currentTimestamp - 130; // 130 seconds old (> 120s threshold)
 
       const mockPrices = createMockScopePriceArray(
         new Map([

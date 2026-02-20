@@ -13,10 +13,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /**
- * Sentinel value used in Scope priceChain arrays to indicate "not set"
- * This is 0xFFFF (max u16 value)
+ * Sentinel values used in Scope priceChain arrays to indicate "not set".
+ * Scope uses both 0 and 0xFFFF (65535) as padding/sentinel indicators.
  */
-const SCOPE_CHAIN_SENTINEL_VALUE = 65535;
+const SCOPE_CHAIN_SENTINEL_VALUES = new Set([0, 65535]);
 
 /**
  * Kamino Lending Program ID (mainnet)
@@ -136,7 +136,7 @@ function parseU8Like(v: unknown, fieldName: string): number {
  * Extracts scope price chain array from Reserve's TokenInfo configuration.
  * The priceChain is an array of Scope oracle indices that form a chain to compute
  * the final USD price via Scope.getPriceFromScopeChain (product of prices at each hop).
- * @returns Array of all price chain indices (0-511), excluding 65535 sentinel, or null if not configured
+ * @returns Array of all price chain indices (1-511), excluding 0 and 65535 sentinels, or null if not configured
  */
 function extractScopePriceChain(tokenInfo: {
   scopeConfiguration?: { 
@@ -165,13 +165,13 @@ function extractScopePriceChain(tokenInfo: {
   for (const chainValue of priceChain) {
     const chain = Number(chainValue);
     
-    // Skip sentinel value which means "not set"
-    if (chain === SCOPE_CHAIN_SENTINEL_VALUE) {
+    // Skip sentinel values (0 and 65535) which mean "not set"
+    if (SCOPE_CHAIN_SENTINEL_VALUES.has(chain)) {
       continue;
     }
     
-    // Validate: chain should be < 512 (max Scope chains)
-    if (chain >= 0 && chain < 512) {
+    // Validate: chain should be in 1..511 (0 is sentinel, 512+ is out of range)
+    if (chain > 0 && chain < 512) {
       validChains.push(chain);
     }
   }
