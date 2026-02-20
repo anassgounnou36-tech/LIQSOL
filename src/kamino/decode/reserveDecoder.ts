@@ -133,7 +133,9 @@ function parseU8Like(v: unknown, fieldName: string): number {
 }
 
 /**
- * Extracts scope price chain array from Reserve's TokenInfo configuration
+ * Extracts scope price chain array from Reserve's TokenInfo configuration.
+ * The priceChain is an array of Scope oracle indices that form a chain to compute
+ * the final USD price via Scope.getPriceFromScopeChain (product of prices at each hop).
  * @returns Array of all price chain indices (0-511), excluding 65535 sentinel, or null if not configured
  */
 function extractScopePriceChain(tokenInfo: {
@@ -152,7 +154,7 @@ function extractScopePriceChain(tokenInfo: {
     return null;
   }
   
-  // priceChain is an array of u16 [4], extract all valid indices
+  // priceChain is an array of u16 [4] forming a chain to compute the final USD price
   const priceChain = tokenInfo.scopeConfiguration.priceChain;
   if (!priceChain || !Array.isArray(priceChain) || priceChain.length === 0) {
     return null;
