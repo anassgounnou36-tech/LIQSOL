@@ -188,7 +188,7 @@ describe("Scope Chain Pricing (replaces fallback chain tests)", () => {
 
       scopeMintChainMap.set(mint1, [3]);
 
-      const staleTimestamp = Math.floor(Date.now() / 1000) - 60; // 60s stale
+      const staleTimestamp = Math.floor(Date.now() / 1000) - 130; // 130s stale (> 120s threshold)
       const mockPrices = createMockScopePriceArray(
         new Map([
           [3, { price: "8600000000", exp: 8, timestamp: staleTimestamp }],

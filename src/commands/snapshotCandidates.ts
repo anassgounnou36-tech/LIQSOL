@@ -271,8 +271,9 @@ async function main() {
     console.log(`\nCandidates liquidatable: ${candLiquidatable}`);
     console.log(`Candidates near-threshold (<= ${nearArg}): ${candNear}\n`);
     console.log(
-      "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow Value | Collateral Value | Health Ratio | Obligation"
+      "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | Health Ratio | Obligation"
     );
+    console.log("Note: Borrow/Collateral values are risk-adjusted (borrowFactor × USD, liquidationThreshold × USD)");
     console.log("-".repeat(170));
 
     topN.forEach((c, index) => {

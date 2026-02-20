@@ -34,9 +34,19 @@ const STABLECOIN_MINTS = new Set([
 ]);
 
 /**
- * Staleness threshold in seconds (30 seconds)
+ * Per-oracle staleness thresholds in seconds (configurable via env vars).
+ * Pyth updates frequently (~every slot), so it can use a strict threshold.
+ * Switchboard and Scope multi-hop chains age faster (oldest-hop timestamp),
+ * so they use a looser threshold.
  */
-const STALENESS_THRESHOLD_SECONDS = 30;
+const PYTH_MAX_AGE_SEC = Number(process.env.LIQSOL_PYTH_MAX_AGE_SECONDS ?? 30);
+const SWITCHBOARD_MAX_AGE_SEC = Number(process.env.LIQSOL_SWITCHBOARD_MAX_AGE_SECONDS ?? 120);
+const SCOPE_MAX_AGE_SEC = Number(process.env.LIQSOL_SCOPE_MAX_AGE_SECONDS ?? 120);
+
+logger.info(
+  { pythMaxAgeSec: PYTH_MAX_AGE_SEC, switchboardMaxAgeSec: SWITCHBOARD_MAX_AGE_SEC, scopeMaxAgeSec: SCOPE_MAX_AGE_SEC },
+  '[OracleCache] Oracle staleness thresholds'
+);
 
 /**
  * Stablecoin price clamp range
@@ -93,9 +103,9 @@ function decodePythPriceWithSdk(data: Buffer): OraclePriceData | null {
     const currentTime = BigInt(Math.floor(Date.now() / 1000));
     const ageSeconds = Number(currentTime - publishTime);
     
-    if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
+    if (ageSeconds > PYTH_MAX_AGE_SEC) {
       logger.debug(
-        { ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+        { ageSeconds, threshold: PYTH_MAX_AGE_SEC },
         "Pyth price is stale, skipping"
       );
       return null;
@@ -151,9 +161,9 @@ function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
       const currentTime = BigInt(Math.floor(Date.now() / 1000));
       const ageSeconds = Number(currentTime - updateTime);
       
-      if (ageSeconds > STALENESS_THRESHOLD_SECONDS) {
+      if (ageSeconds > SWITCHBOARD_MAX_AGE_SEC) {
         logger.debug(
-          { ageSeconds, threshold: STALENESS_THRESHOLD_SECONDS },
+          { ageSeconds, threshold: SWITCHBOARD_MAX_AGE_SEC },
           "Switchboard price is stale, skipping"
         );
         return null;
@@ -217,9 +227,9 @@ function decodeScopePrice(
     // Staleness check using the oldest timestamp in the chain
     const timestampSec = result.timestamp.toNumber();
     const ageSec = Date.now() / 1000 - timestampSec;
-    if (ageSec > STALENESS_THRESHOLD_SECONDS) {
+    if (ageSec > SCOPE_MAX_AGE_SEC) {
       logger.warn(
-        { chain: chains, ageSec, threshold: STALENESS_THRESHOLD_SECONDS },
+        { chain: chains, ageSec, threshold: SCOPE_MAX_AGE_SEC },
         "[OracleCache] Scope chain price is stale"
       );
       return null;
