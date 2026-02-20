@@ -509,32 +509,53 @@ function performOracleSanityChecks(
   }
   
   // Check 2: SOL price sanity check (critical for preventing false positives)
-  if (allowedLiquidityMints?.has(SOL_MINT)) {
-    const solPrice = cache.get(SOL_MINT);
-    const solUiPrice = solPrice ? uiPriceFromMantissa(solPrice.price, solPrice.exponent) : null;
-    
-    if (!solUiPrice || solUiPrice < 5 || solUiPrice > 2000) {
-      const errorMsg = solUiPrice 
-        ? `Invalid SOL price from Scope (${solUiPrice.toFixed(2)} USD); aborting scoring to prevent false positives`
-        : "Invalid SOL price from Scope (could not compute UI price); aborting scoring";
-      
-      logger.error(
-        { 
-          solMint: SOL_MINT,
-          solPrice: solPrice ? { price: solPrice.price.toString(), exponent: solPrice.exponent } : null,
-          solUiPrice,
-          allowedRange: { min: 5, max: 2000 }
-        },
-        errorMsg
+  const allowlistMode = !!(allowedLiquidityMints && allowedLiquidityMints.size > 0);
+  const solPrice = cache.get(SOL_MINT);
+  const solUiPrice = solPrice ? uiPriceFromMantissa(solPrice.price, solPrice.exponent) : null;
+
+  if (allowlistMode) {
+    // Allowlist mode: if SOL is allowlisted, require it
+    if (allowedLiquidityMints!.has(SOL_MINT)) {
+      if (!solPrice) {
+        const errorMsg = 'SOL is allowlisted but missing from oracle cache - check reserve/oracle configuration';
+        logger.error({ solMint: SOL_MINT }, errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      if (!solUiPrice || solUiPrice < 5 || solUiPrice > 2000) {
+        const errorMsg = solUiPrice
+          ? `Invalid SOL price from Scope (${solUiPrice.toFixed(2)} USD); aborting scoring to prevent false positives`
+          : "Invalid SOL price from Scope (could not compute UI price); aborting scoring";
+
+        logger.error(
+          {
+            solMint: SOL_MINT,
+            solPrice: solPrice ? { price: solPrice.price.toString(), exponent: solPrice.exponent } : null,
+            solUiPrice,
+            allowedRange: { min: 5, max: 2000 }
+          },
+          errorMsg
+        );
+
+        throw new Error(errorMsg);
+      }
+
+      logger.info(
+        { solMint: SOL_MINT, solUiPrice: solUiPrice.toFixed(2) },
+        "SOL price sanity check passed"
       );
-      
-      throw new Error(errorMsg);
     }
-    
-    logger.info(
-      { solMint: SOL_MINT, solUiPrice: solUiPrice.toFixed(2) },
-      "SOL price sanity check passed"
-    );
+  } else {
+    // Full-market mode: validate SOL only if present in cache (non-fatal).
+    // Range [10, 1000] is tighter than allowlist mode [5, 2000] because in full-market
+    // we only warn (never throw), so the range targets obviously-corrupt prices.
+    if (solPrice && solUiPrice !== null) {
+      if (solUiPrice < 10 || solUiPrice > 1000) {
+        logger.warn({ solMint: SOL_MINT, solUiPrice }, 'SOL price outside expected range (10-1000 USD)');
+      } else {
+        logger.info({ solMint: SOL_MINT, solUiPrice }, 'SOL price sanity check passed');
+      }
+    }
   }
   
   // Check 3: Stablecoin price sanity checks (warn only, don't fail)
@@ -584,15 +605,30 @@ export async function loadOracles(
 ): Promise<OracleCache> {
   logger.info("Loading oracle data for all reserves...");
 
-  // Detect small allowlist mode for bounded curated scan
-  // Enable bounded scan when allowlist is present AND has <= SMALL_ALLOWLIST_THRESHOLD mints
-  const allowlistBoundedScan = !!(allowedLiquidityMints && allowedLiquidityMints.size > 0 && allowedLiquidityMints.size <= SMALL_ALLOWLIST_THRESHOLD);
-  
+  // Detect allowlist mode (any non-empty allowlist)
+  const allowlistMode = !!(allowedLiquidityMints && allowedLiquidityMints.size > 0);
+
+  // Detect small allowlist mode for bounded curated scan (allowlist mode only)
+  const allowlistBoundedScan = allowlistMode && allowedLiquidityMints!.size <= SMALL_ALLOWLIST_THRESHOLD;
+
+  // Cache LIQSOL_ENABLE_SCOPE_SCAN flag (only honoured in allowlist mode)
+  const scopeScanEnvEnabled = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN === '1';
+
+  logger.info({
+    mode: allowlistMode ? 'allowlist' : 'full-market',
+    scopeFallbackEnabled: allowlistMode && scopeScanEnvEnabled,
+    allowlistSize: allowedLiquidityMints?.size ?? 0
+  }, 'Oracle loading mode');
+
   if (allowlistBoundedScan) {
     logger.info(
       { allowlistSize: allowedLiquidityMints!.size, threshold: SMALL_ALLOWLIST_THRESHOLD },
       "Small allowlist detected - enabling bounded curated chain scan for Scope oracles"
     );
+  }
+
+  if (scopeScanEnvEnabled && !allowlistMode) {
+    logger.warn('LIQSOL_ENABLE_SCOPE_SCAN is set but ignored in full-market mode (empty allowlist)');
   }
 
   // Collect all unique oracle pubkeys from reserves
@@ -745,9 +781,10 @@ export async function loadOracles(
       // Decode price for each mint using its specific chain configuration
       for (const mint of assignedMints) {
         // Build chain precedence: resolved → configured → overrides
-        const resolvedChain = resolvedScopeChainByMint.get(mint);
+        // In full-market mode, skip cached resolved chains and per-oracle overrides
+        const resolvedChain = allowlistMode ? resolvedScopeChainByMint.get(mint) : undefined;
         const configChains = scopeMintChainMap.get(mint) || [];
-        const overrideChains = scopeChainOverrides[pubkeyStr] || [];
+        const overrideChains = allowlistMode ? (scopeChainOverrides[pubkeyStr] || []) : [];
         
         // Merge chains with correct precedence
         const chainsToTry: number[] = [];
@@ -764,7 +801,7 @@ export async function loadOracles(
         // If empty after merge, use default [0]
         const finalChains = chainsToTry.length > 0 ? chainsToTry : [0];
         
-        const result = decodeScopePrice(data, finalChains, { allowlistBoundedScan });
+        const result = decodeScopePrice(data, finalChains, { allowlistBoundedScan, enableFallback: allowlistMode });
         
         if (!result.priceData) {
           logger.warn(
