@@ -390,7 +390,7 @@ function performOracleSanityChecks(
         // Optional: Apply clamping if CLAMP_STABLECOINS env is set
         // Note: Clamping is also done in applyStablecoinClamp(), so this is redundant
         // but we log it here for visibility
-        if ((globalThis as any).process?.env?.CLAMP_STABLECOINS === "1") {
+        if (process.env.CLAMP_STABLECOINS === "1") {
           logger.info(
             { mint: stableMint },
             "CLAMP_STABLECOINS=1 - stablecoin clamping already applied during cache load"
@@ -422,7 +422,7 @@ export async function loadOracles(
   const allowlistMode = !!(allowedLiquidityMints && allowedLiquidityMints.size > 0);
 
   // Cache LIQSOL_ENABLE_SCOPE_SCAN flag
-  const scopeScanEnvEnabled = (globalThis as any).process?.env?.LIQSOL_ENABLE_SCOPE_SCAN === '1';
+  const scopeScanEnvEnabled = process.env.LIQSOL_ENABLE_SCOPE_SCAN === '1';
 
   logger.info({
     mode: allowlistMode ? 'allowlist' : 'full-market',
