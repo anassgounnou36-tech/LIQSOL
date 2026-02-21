@@ -239,8 +239,8 @@ async function main() {
           o.healthRatioRecomputedRaw ??
           o.healthRatioProtocolRaw ??
           o.healthRatio,
-        liquidationEligibleProtocol: (o as any).liquidationEligibleProtocol,
-        liquidationEligible: (o as any).liquidationEligibleProtocol ?? o.liquidationEligible,
+        liquidationEligibleProtocol: o.liquidationEligibleProtocol,
+        liquidationEligible: o.liquidationEligibleProtocol ?? o.liquidationEligible,
         borrowValueUsd: o.borrowValue,
         collateralValueUsd: o.collateralValue,
         repayReservePubkey,
