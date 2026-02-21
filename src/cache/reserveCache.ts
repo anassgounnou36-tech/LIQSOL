@@ -114,15 +114,19 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
     const availRaw = BigInt(decoded.availableAmountRaw);
     const borrowSfRaw = BigInt(decoded.borrowedAmountSfRaw);
     const supply = BigInt(decoded.collateralMintTotalSupplyRaw);
-    
+    const cumulativeRate = BigInt(decoded.cumulativeBorrowRateBsfRaw);
+
     // Guard: if supply is zero or negative, exchange rate is undefined
     if (supply <= 0n) {
       return 0;
     }
-    
-    // Convert borrowedAmountSf to raw tokens
-    // borrowedAmountSf is already scaled by 1e18, so divide by 1e18
-    const borrowRaw = borrowSfRaw / (10n ** 18n);
+
+    const WAD = 10n ** 18n;
+
+    // Convert borrowedAmountSf to raw tokens, applying cumulative borrow rate for interest accrual:
+    //   borrowRaw = borrowSfRaw * cumulativeBorrowRateBsfRaw / WAD / WAD
+    // When cumulativeRate = WAD this is equivalent to borrowSfRaw / WAD (no accrual).
+    const borrowRaw = (borrowSfRaw * cumulativeRate) / WAD / WAD;
     
     // Calculate total liquidity in raw units
     const totalLiquidityRaw = availRaw + borrowRaw;
