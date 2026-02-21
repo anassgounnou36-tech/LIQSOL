@@ -488,6 +488,8 @@ describe("LiveObligationIndexer", () => {
       }
 
       expect(scoring.healthSourceUsed).toBe("hybrid");
+      expect(scoring.totalCollateralUsdRecomputed).toBeCloseTo(2, 6);
+      expect(scoring.totalCollateralUsdAdjRecomputed).toBeCloseTo(1, 6);
       expect(scoring.healthRatio).toBeCloseTo(1 / 3, 6);
       expect(scoring.collateralValueHybrid).toBeCloseTo(1, 6);
       expect(scoring.borrowValueHybrid).toBeCloseTo(3, 6);

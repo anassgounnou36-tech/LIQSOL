@@ -107,9 +107,9 @@ export type HealthRatioResult =
       borrowValue: number;
       /** Total collateral value in USD (weighted by liquidationThreshold) */
       collateralValue: number;
-      /** Total borrow value in USD (unweighted) */
+      /** Total borrow value in USD (unweighted, legacy alias of totalBorrowUsdRaw) */
       totalBorrowUsd: number;
-      /** Total collateral value in USD (unweighted) */
+      /** Total collateral value in USD (unweighted, legacy alias of totalCollateralUsdRaw) */
       totalCollateralUsd: number;
       /** Total borrow value in USD (raw / unweighted) */
       totalBorrowUsdRaw: number;

@@ -534,18 +534,18 @@ export class LiveObligationIndexer {
         dualFields.healthRatioDiff = Math.abs(rawProto - rawRecomp);
 
         // Compute hybrid health ratio using protocol-derived effective weights applied to
-        // recomputed RAW USD totals (no parity-ratio mixing).
+        // recomputed RAW USD totals (no parity-ratio mixing), preserving unit consistency.
         if (protocolResult.totalCollateralUsd > 0 && protocolResult.totalBorrowUsd > 0) {
-          const liqWeight = protocolResult.collateralValueUsd / protocolResult.totalCollateralUsd;
-          const bfWeight = protocolResult.borrowValueUsd / protocolResult.totalBorrowUsd;
+          const liquidationWeight = protocolResult.collateralValueUsd / protocolResult.totalCollateralUsd;
+          const borrowFactorWeight = protocolResult.borrowValueUsd / protocolResult.totalBorrowUsd;
           const rawRecompCollateral = recomputedResult.totalCollateralUsdRaw;
           const rawRecompBorrow = recomputedResult.totalBorrowUsdRaw;
-          const hybridCollateralAdj = rawRecompCollateral * liqWeight;
-          const hybridBorrowAdj = rawRecompBorrow * bfWeight;
+          const hybridCollateralAdj = rawRecompCollateral * liquidationWeight;
+          const hybridBorrowAdj = rawRecompBorrow * borrowFactorWeight;
 
           if (
-            Number.isFinite(liqWeight) &&
-            Number.isFinite(bfWeight) &&
+            Number.isFinite(liquidationWeight) &&
+            Number.isFinite(borrowFactorWeight) &&
             Number.isFinite(hybridCollateralAdj) &&
             Number.isFinite(hybridBorrowAdj) &&
             hybridBorrowAdj > 0
