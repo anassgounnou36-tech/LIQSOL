@@ -563,6 +563,10 @@ export class LiveObligationIndexer {
         dualFields.healthRatioDiff = Math.abs(rawProto - rawRecomp);
 
         if (!sfFreshEnough) {
+          dualFields.healthRatioHybrid = undefined;
+          dualFields.healthRatioHybridRaw = undefined;
+          dualFields.borrowValueHybrid = undefined;
+          dualFields.collateralValueHybrid = undefined;
           dualFields.hybridDisabledReason = 'sf-stale';
         } else if (protocolResult.totalCollateralUsd > 0 && protocolResult.totalBorrowUsd > 0) {
           const liquidationWeight = protocolResult.collateralValueUsd / protocolResult.totalCollateralUsd;
@@ -589,11 +593,12 @@ export class LiveObligationIndexer {
               Number.isFinite(hybridBorrowAdj) &&
               hybridBorrowAdj > 0
             ) {
-              const hybridRatioRaw = hybridCollateralAdj / hybridBorrowAdj;
-              dualFields.healthRatioHybridRaw = hybridRatioRaw;
-              dualFields.healthRatioHybrid = Math.max(0, Math.min(2, hybridRatioRaw));
-              dualFields.borrowValueHybrid = hybridBorrowAdj;
               dualFields.collateralValueHybrid = hybridCollateralAdj;
+              dualFields.borrowValueHybrid = hybridBorrowAdj;
+              const hybridHrRaw = hybridCollateralAdj / hybridBorrowAdj;
+              const hybridHr = Math.max(0, Math.min(2, hybridHrRaw));
+              dualFields.healthRatioHybridRaw = hybridHrRaw;
+              dualFields.healthRatioHybrid = hybridHr;
             } else {
               dualFields.hybridDisabledReason = 'missing-inputs';
             }
