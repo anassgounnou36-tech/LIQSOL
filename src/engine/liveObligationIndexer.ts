@@ -60,6 +60,7 @@ export interface ObligationEntry {
   borrowValue?: number;
   collateralValue?: number;
   liquidationEligible?: boolean;
+  liquidationEligibleProtocol?: boolean;
   unscoredReason?: string; // Track why obligation wasn't scored
 
   // Dual health ratio sources
@@ -342,6 +343,7 @@ export class LiveObligationIndexer {
     borrowValue?: number;
     collateralValue?: number;
     liquidationEligible?: boolean;
+    liquidationEligibleProtocol?: boolean;
     unscoredReason?: string;
     healthRatioRecomputed?: number;
     healthRatioRecomputedRaw?: number;
@@ -473,6 +475,8 @@ export class LiveObligationIndexer {
 
       // 2. Compute protocol health (from Obligation SF fields)
       const protocolResult = computeProtocolHealth(decoded);
+      const liquidationEligibleProtocol =
+        protocolResult.scored ? isLiquidatable(protocolResult.healthRatio) : undefined;
 
       // 3. Build dual health fields
       const dualFields: {
@@ -644,13 +648,15 @@ export class LiveObligationIndexer {
         this.stats.unscoredReasons[recomputedResult.reason] = (this.stats.unscoredReasons[recomputedResult.reason] || 0) + 1;
       }
 
-      const liquidationEligible = isLiquidatable(activeResult.healthRatio);
+      const liquidationEligible =
+        liquidationEligibleProtocol ?? isLiquidatable(activeResult.healthRatio);
 
       return {
         healthRatio: activeResult.healthRatio,
         borrowValue: activeResult.borrowValue ?? 0,
         collateralValue: activeResult.collateralValue ?? 0,
         liquidationEligible,
+        liquidationEligibleProtocol: liquidationEligibleProtocol,
         ...dualFields,
       };
     } catch (err) {
@@ -704,6 +710,7 @@ export class LiveObligationIndexer {
         lastUpdated: Date.now(),
         slot,
         ...scoring,
+        liquidationEligibleProtocol: scoring.liquidationEligibleProtocol,
       });
 
       // Add to known pubkeys set
@@ -1101,6 +1108,7 @@ export class LiveObligationIndexer {
     borrowValue: number;
     collateralValue: number;
     liquidationEligible: boolean;
+    liquidationEligibleProtocol?: boolean;
     depositsCount: number;
     borrowsCount: number;
     healthRatioRecomputed?: number;
@@ -1137,6 +1145,7 @@ export class LiveObligationIndexer {
         borrowValue: entry.borrowValue!,
         collateralValue: entry.collateralValue!,
         liquidationEligible: entry.liquidationEligible!,
+        liquidationEligibleProtocol: entry.liquidationEligibleProtocol,
         depositsCount: entry.decoded.deposits.length,
         borrowsCount: entry.decoded.borrows.length,
         healthRatioRecomputed: entry.healthRatioRecomputed,
