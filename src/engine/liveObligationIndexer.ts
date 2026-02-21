@@ -74,9 +74,9 @@ export interface ObligationEntry {
   collateralValueProtocol?: number;
 
   healthRatioDiff?: number;   // abs(protocol - recomputed), computed from raw ratios
-  healthSource?: 'recomputed' | 'protocol'; // which source drove healthRatio
+  healthSource?: 'recomputed' | 'protocol' | 'hybrid'; // which source drove healthRatio
   healthSourceConfigured?: 'recomputed' | 'protocol'; // env-configured source
-  healthSourceUsed?: 'recomputed' | 'protocol'; // actual source used after protocol-first logic
+  healthSourceUsed?: 'recomputed' | 'protocol' | 'hybrid'; // actual source used after protocol-first logic
 
   // Hybrid health ratio (recomputed raw USD totals × protocol-derived effective weights)
   healthRatioHybrid?: number;
@@ -352,9 +352,9 @@ export class LiveObligationIndexer {
     borrowValueProtocol?: number;
     collateralValueProtocol?: number;
     healthRatioDiff?: number;
-    healthSource?: 'recomputed' | 'protocol';
+    healthSource?: 'recomputed' | 'protocol' | 'hybrid';
     healthSourceConfigured?: 'recomputed' | 'protocol';
-    healthSourceUsed?: 'recomputed' | 'protocol';
+    healthSourceUsed?: 'recomputed' | 'protocol' | 'hybrid';
     healthRatioHybrid?: number;
     healthRatioHybridRaw?: number;
     borrowValueHybrid?: number;
@@ -485,9 +485,9 @@ export class LiveObligationIndexer {
         borrowValueProtocol?: number;
         collateralValueProtocol?: number;
         healthRatioDiff?: number;
-        healthSource?: 'recomputed' | 'protocol';
+        healthSource?: 'recomputed' | 'protocol' | 'hybrid';
         healthSourceConfigured?: 'recomputed' | 'protocol';
-        healthSourceUsed?: 'recomputed' | 'protocol';
+        healthSourceUsed?: 'recomputed' | 'protocol' | 'hybrid';
         healthRatioHybrid?: number;
         healthRatioHybridRaw?: number;
         borrowValueHybrid?: number;
@@ -583,9 +583,18 @@ export class LiveObligationIndexer {
       const healthSourceConfigured = process.env.LIQSOL_HEALTH_SOURCE as ('recomputed' | 'protocol' | undefined);
       dualFields.healthSourceConfigured = healthSourceConfigured;
 
-      let healthSourceUsed: 'recomputed' | 'protocol';
+      const hasHybrid =
+        dualFields.healthRatioHybrid !== undefined &&
+        dualFields.borrowValueHybrid !== undefined &&
+        dualFields.collateralValueHybrid !== undefined;
+
+      let healthSourceUsed: 'recomputed' | 'protocol' | 'hybrid';
       if (healthSourceConfigured === 'recomputed') {
-        healthSourceUsed = recomputedResult.scored ? 'recomputed' : (protocolResult.scored ? 'protocol' : 'recomputed');
+        if (hasHybrid) {
+          healthSourceUsed = 'hybrid';
+        } else {
+          healthSourceUsed = recomputedResult.scored ? 'recomputed' : (protocolResult.scored ? 'protocol' : 'recomputed');
+        }
       } else if (healthSourceConfigured === 'protocol') {
         healthSourceUsed = protocolResult.scored ? 'protocol' : 'recomputed';
       } else {
@@ -601,6 +610,14 @@ export class LiveObligationIndexer {
 
       if (healthSourceUsed === 'protocol' && protocolResult.scored) {
         activeResult = { ...protocolResult, borrowValue: protocolResult.borrowValueUsd, collateralValue: protocolResult.collateralValueUsd };
+      } else if (healthSourceUsed === 'hybrid' && hasHybrid) {
+        activeResult = {
+          scored: true,
+          healthRatio: dualFields.healthRatioHybrid!,
+          healthRatioRaw: dualFields.healthRatioHybridRaw ?? dualFields.healthRatioHybrid!,
+          borrowValue: dualFields.borrowValueHybrid!,
+          collateralValue: dualFields.collateralValueHybrid!,
+        };
       } else if (healthSourceUsed === 'recomputed' && recomputedResult.scored) {
         activeResult = { ...recomputedResult, borrowValue: recomputedResult.borrowValue, collateralValue: recomputedResult.collateralValue };
       } else if (recomputedResult.scored) {
@@ -1109,6 +1126,7 @@ export class LiveObligationIndexer {
     totalCollateralUsdProtocol?: number;
     totalBorrowUsdAdjProtocol?: number;
     totalCollateralUsdAdjProtocol?: number;
+    lastUpdateSlot: string;
   }> {
     const scored = Array.from(this.cache.values())
       .filter(entry => typeof entry.healthRatio === 'number')
@@ -1144,6 +1162,7 @@ export class LiveObligationIndexer {
         totalCollateralUsdProtocol: entry.totalCollateralUsdProtocol,
         totalBorrowUsdAdjProtocol: entry.totalBorrowUsdAdjProtocol,
         totalCollateralUsdAdjProtocol: entry.totalCollateralUsdAdjProtocol,
+        lastUpdateSlot: entry.decoded.lastUpdateSlot,
       }))
       .sort((a, b) => a.healthRatio - b.healthRatio); // Sort by health ratio (lowest first = riskiest)
 

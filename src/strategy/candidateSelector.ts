@@ -46,6 +46,7 @@ export interface ScoredObligation {
   totalCollateralUsdProtocol?: number;
   totalBorrowUsdAdjProtocol?: number;
   totalCollateralUsdAdjProtocol?: number;
+  lastUpdateSlot?: string;
   // optionally: underlying detail for validation
 }
 
