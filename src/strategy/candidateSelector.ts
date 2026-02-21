@@ -29,10 +29,23 @@ export interface ScoredObligation {
   healthRatioProtocolRaw?: number;
   healthRatioDiff?: number;
   healthSource?: string;
+  healthSourceUsed?: string;
+  healthRatioHybrid?: number;
+  healthRatioHybridRaw?: number;
   borrowValueRecomputed?: number;
   collateralValueRecomputed?: number;
   borrowValueProtocol?: number;
   collateralValueProtocol?: number;
+  borrowValueHybrid?: number;
+  collateralValueHybrid?: number;
+  totalBorrowUsdRecomputed?: number;
+  totalCollateralUsdRecomputed?: number;
+  totalBorrowUsdAdjRecomputed?: number;
+  totalCollateralUsdAdjRecomputed?: number;
+  totalBorrowUsdProtocol?: number;
+  totalCollateralUsdProtocol?: number;
+  totalBorrowUsdAdjProtocol?: number;
+  totalCollateralUsdAdjProtocol?: number;
   // optionally: underlying detail for validation
 }
 

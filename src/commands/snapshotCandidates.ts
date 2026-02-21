@@ -13,6 +13,9 @@ import { selectCandidates, type ScoredObligation } from "../strategy/candidateSe
 import { explainHealth } from "../math/healthBreakdown.js";
 import { divBigintToNumber } from "../utils/bn.js";
 
+const ratio = (a?: number, b?: number) =>
+  (a && b && b > 0) ? (a / b).toFixed(4) : 'n/a';
+
 /**
  * CLI tool for selecting and ranking liquidation candidates from scored obligations
  * 
@@ -229,6 +232,11 @@ async function main() {
         obligationPubkey: o.obligationPubkey,
         ownerPubkey: o.ownerPubkey,
         healthRatio: o.healthRatio,
+        healthRatioRaw:
+          (o as any).healthRatioHybridRaw ??
+          o.healthRatioRecomputedRaw ??
+          o.healthRatioProtocolRaw ??
+          o.healthRatio,
         liquidationEligible: o.liquidationEligible,
         borrowValueUsd: o.borrowValue,
         collateralValueUsd: o.collateralValue,
@@ -242,10 +250,23 @@ async function main() {
         healthRatioProtocolRaw: o.healthRatioProtocolRaw,
         healthRatioDiff: o.healthRatioDiff,
         healthSource: o.healthSource,
+        healthSourceUsed: o.healthSourceUsed,
+        healthRatioHybrid: o.healthRatioHybrid,
+        healthRatioHybridRaw: o.healthRatioHybridRaw,
         borrowValueRecomputed: o.borrowValueRecomputed,
         collateralValueRecomputed: o.collateralValueRecomputed,
         borrowValueProtocol: o.borrowValueProtocol,
         collateralValueProtocol: o.collateralValueProtocol,
+        borrowValueHybrid: o.borrowValueHybrid,
+        collateralValueHybrid: o.collateralValueHybrid,
+        totalBorrowUsdRecomputed: o.totalBorrowUsdRecomputed,
+        totalCollateralUsdRecomputed: o.totalCollateralUsdRecomputed,
+        totalBorrowUsdAdjRecomputed: o.totalBorrowUsdAdjRecomputed,
+        totalCollateralUsdAdjRecomputed: o.totalCollateralUsdAdjRecomputed,
+        totalBorrowUsdProtocol: o.totalBorrowUsdProtocol,
+        totalCollateralUsdProtocol: o.totalCollateralUsdProtocol,
+        totalBorrowUsdAdjProtocol: o.totalBorrowUsdAdjProtocol,
+        totalCollateralUsdAdjProtocol: o.totalCollateralUsdAdjProtocol,
       };
     });
 
@@ -417,6 +438,14 @@ async function main() {
           console.log(`    HR(protocol):                   ${(cAny.healthRatioProtocol ?? 0).toFixed(6)}`);
           console.log(`    HR(recomputed):                 ${(cAny.healthRatioRecomputed ?? 0).toFixed(6)}`);
           console.log(`    ΔHR (abs diff):                 ${(cAny.healthRatioDiff ?? 0).toFixed(6)}`);
+          console.log('\n  Parity (recomputed vs protocol):');
+          console.log(`    Source used:                  ${(cAny.healthSourceUsed ?? 'n/a')}`);
+          console.log(`    Borrow raw ratio:             ${ratio(cAny.totalBorrowUsdRecomputed, cAny.totalBorrowUsdProtocol)}`);
+          console.log(`    Collateral raw ratio:         ${ratio(cAny.totalCollateralUsdRecomputed, cAny.totalCollateralUsdProtocol)}`);
+          console.log(`    Borrow adjusted ratio:        ${ratio(cAny.totalBorrowUsdAdjRecomputed, cAny.totalBorrowUsdAdjProtocol)}`);
+          console.log(`    Collateral adjusted ratio:    ${ratio(cAny.totalCollateralUsdAdjRecomputed, cAny.totalCollateralUsdAdjProtocol)}`);
+          console.log(`    HR(hybrid):                   ${(cAny.healthRatioHybrid ?? 0).toFixed(6)}`);
+          console.log(`    HR(hybrid raw):               ${(cAny.healthRatioHybridRaw ?? 0).toFixed(6)}`);
 
           if ((cAny.healthRatioDiff ?? 0) > 0.05) {
             console.log(`    ⚠️  Large ΔHR detected - possible edge case (elevation group, farms, etc.)`);

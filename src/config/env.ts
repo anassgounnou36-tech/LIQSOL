@@ -32,8 +32,7 @@ export const EnvSchema = z.object({
   // Health ratio source selection
   // - recomputed: use fresh oracle+reserve recompute (forward-looking, catches early liquidations)
   // - protocol: use program's SF values (ground truth, handles elevation groups/farms)
-  // Default: recomputed
-  LIQSOL_HEALTH_SOURCE: z.enum(['recomputed', 'protocol']).optional().default('recomputed'),
+  LIQSOL_HEALTH_SOURCE: z.enum(['recomputed', 'protocol']).optional(),
 
   // PR 8.5: EV-based ranking configuration (opt-in)
   USE_EV_RANKING: z.string().optional().default('false'),

@@ -13,6 +13,7 @@ import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 import { computeHealthRatio } from "../math/health.js";
 import { computeProtocolHealth } from "../math/protocolHealth.js";
 import { isLiquidatable } from "../math/liquidation.js";
+import { divBigintToNumber } from "../utils/bn.js";
 import type { ReserveCache } from "../cache/reserveCache.js";
 import type { OracleCache } from "../cache/oracleCache.js";
 
@@ -82,6 +83,14 @@ export interface ObligationEntry {
   healthRatioHybridRaw?: number;
   borrowValueHybrid?: number;
   collateralValueHybrid?: number;
+  totalBorrowUsdRecomputed?: number;
+  totalCollateralUsdRecomputed?: number;
+  totalBorrowUsdAdjRecomputed?: number;
+  totalCollateralUsdAdjRecomputed?: number;
+  totalBorrowUsdProtocol?: number;
+  totalCollateralUsdProtocol?: number;
+  totalBorrowUsdAdjProtocol?: number;
+  totalCollateralUsdAdjProtocol?: number;
 }
 
 export class LiveObligationIndexer {
@@ -350,6 +359,14 @@ export class LiveObligationIndexer {
     healthRatioHybridRaw?: number;
     borrowValueHybrid?: number;
     collateralValueHybrid?: number;
+    totalBorrowUsdRecomputed?: number;
+    totalCollateralUsdRecomputed?: number;
+    totalBorrowUsdAdjRecomputed?: number;
+    totalCollateralUsdAdjRecomputed?: number;
+    totalBorrowUsdProtocol?: number;
+    totalCollateralUsdProtocol?: number;
+    totalBorrowUsdAdjProtocol?: number;
+    totalCollateralUsdAdjProtocol?: number;
   } {
     // PR7 gate: determine scope by whether the obligation references any loaded reserve
     // Use byReserve index for membership checks (deposit.reserve/borrow.reserve are reserve pubkeys)
@@ -475,6 +492,14 @@ export class LiveObligationIndexer {
         healthRatioHybridRaw?: number;
         borrowValueHybrid?: number;
         collateralValueHybrid?: number;
+        totalBorrowUsdRecomputed?: number;
+        totalCollateralUsdRecomputed?: number;
+        totalBorrowUsdAdjRecomputed?: number;
+        totalCollateralUsdAdjRecomputed?: number;
+        totalBorrowUsdProtocol?: number;
+        totalCollateralUsdProtocol?: number;
+        totalBorrowUsdAdjProtocol?: number;
+        totalCollateralUsdAdjProtocol?: number;
       } = {};
 
       if (recomputedResult.scored) {
@@ -482,6 +507,10 @@ export class LiveObligationIndexer {
         dualFields.healthRatioRecomputedRaw = recomputedResult.healthRatioRaw ?? recomputedResult.healthRatio;
         dualFields.borrowValueRecomputed = recomputedResult.borrowValue;
         dualFields.collateralValueRecomputed = recomputedResult.collateralValue;
+        dualFields.totalBorrowUsdRecomputed = recomputedResult.totalBorrowUsd;
+        dualFields.totalCollateralUsdRecomputed = recomputedResult.totalCollateralUsd;
+        dualFields.totalBorrowUsdAdjRecomputed = recomputedResult.totalBorrowUsdAdj;
+        dualFields.totalCollateralUsdAdjRecomputed = recomputedResult.totalCollateralUsdAdj;
       }
 
       if (protocolResult.scored) {
@@ -489,6 +518,10 @@ export class LiveObligationIndexer {
         dualFields.healthRatioProtocolRaw = protocolResult.healthRatioRaw;
         dualFields.borrowValueProtocol = protocolResult.borrowValueUsd;
         dualFields.collateralValueProtocol = protocolResult.collateralValueUsd;
+        dualFields.totalBorrowUsdProtocol = protocolResult.totalBorrowUsd;
+        dualFields.totalCollateralUsdProtocol = protocolResult.totalCollateralUsd;
+        dualFields.totalBorrowUsdAdjProtocol = protocolResult.borrowValueUsd;
+        dualFields.totalCollateralUsdAdjProtocol = protocolResult.collateralValueUsd;
       }
 
       if (recomputedResult.scored && protocolResult.scored) {
@@ -511,25 +544,34 @@ export class LiveObligationIndexer {
         if (unhealthySf > 0n && depositedSf > 0n && borrowAdjSf > 0n && borrowMktSf > 0n) {
           // Use floating-point for weight ratios (both numerator and denominator are SF-scaled
           // so the 1e18 factors cancel, but we divide as numbers to get a plain ratio)
-          const effectiveLiqWeight = Number(unhealthySf) / Number(depositedSf);
-          const effectiveBorrowWeight = Number(borrowAdjSf) / Number(borrowMktSf);
-
-          const rawRecompCollateral = recomputedResult.totalCollateralUsd;
-          const rawRecompBorrow = recomputedResult.totalBorrowUsd;
-
-          const hybridCollateralAdj = rawRecompCollateral * effectiveLiqWeight;
-          const hybridBorrowAdj = rawRecompBorrow * effectiveBorrowWeight;
+          const effectiveLiqWeight = divBigintToNumber(unhealthySf, depositedSf, 12);
+          const effectiveBorrowWeight = divBigintToNumber(borrowAdjSf, borrowMktSf, 12);
 
           if (
-            Number.isFinite(hybridCollateralAdj) &&
-            Number.isFinite(hybridBorrowAdj) &&
-            hybridBorrowAdj > 0
+            Number.isFinite(effectiveLiqWeight) &&
+            Number.isFinite(effectiveBorrowWeight) &&
+            effectiveLiqWeight > 0 &&
+            effectiveLiqWeight <= 2.5 &&
+            effectiveBorrowWeight > 0 &&
+            effectiveBorrowWeight <= 5
           ) {
-            const hybridRatioRaw = hybridCollateralAdj / hybridBorrowAdj;
-            dualFields.healthRatioHybridRaw = hybridRatioRaw;
-            dualFields.healthRatioHybrid = Math.max(0, Math.min(2, hybridRatioRaw));
-            dualFields.borrowValueHybrid = hybridBorrowAdj;
-            dualFields.collateralValueHybrid = hybridCollateralAdj;
+            const rawRecompCollateral = recomputedResult.totalCollateralUsd;
+            const rawRecompBorrow = recomputedResult.totalBorrowUsd;
+
+            const hybridCollateralAdj = rawRecompCollateral * effectiveLiqWeight;
+            const hybridBorrowAdj = rawRecompBorrow * effectiveBorrowWeight;
+
+            if (
+              Number.isFinite(hybridCollateralAdj) &&
+              Number.isFinite(hybridBorrowAdj) &&
+              hybridBorrowAdj > 0
+            ) {
+              const hybridRatioRaw = hybridCollateralAdj / hybridBorrowAdj;
+              dualFields.healthRatioHybridRaw = hybridRatioRaw;
+              dualFields.healthRatioHybrid = Math.max(0, Math.min(2, hybridRatioRaw));
+              dualFields.borrowValueHybrid = hybridBorrowAdj;
+              dualFields.collateralValueHybrid = hybridCollateralAdj;
+            }
           }
         }
       } else if (recomputedResult.scored && !protocolResult.scored) {
@@ -538,28 +580,16 @@ export class LiveObligationIndexer {
 
       // 4. Determine health source: env override is a debug facility only.
       //    Protocol-first policy: when protocol SF is scored, use it for eligibility.
-      const healthSourceConfigured = (process.env.LIQSOL_HEALTH_SOURCE ?? 'recomputed') as 'recomputed' | 'protocol';
+      const healthSourceConfigured = process.env.LIQSOL_HEALTH_SOURCE as ('recomputed' | 'protocol' | undefined);
       dualFields.healthSourceConfigured = healthSourceConfigured;
 
-      // Debug override: honor explicit 'recomputed' env even when protocol is scored,
-      // but only in non-default mode (i.e. user explicitly set it).  The default env value
-      // is 'recomputed', so we only bypass protocol-first when LIQSOL_HEALTH_SOURCE is
-      // explicitly set to 'recomputed' AND protocol is available - which is an unusual
-      // configuration that operators should document clearly.
-      //
-      // Production policy (protocol-first):
-      //   - If protocol scored  → healthSourceUsed = 'protocol'
-      //   - Else                → healthSourceUsed = 'recomputed'
       let healthSourceUsed: 'recomputed' | 'protocol';
-      if (protocolResult.scored) {
-        // Protocol-first: always use protocol when available, unless explicitly overridden
-        // via LIQSOL_HEALTH_SOURCE=recomputed (debug/testing mode)
-        const forceRecomputed =
-          process.env.LIQSOL_HEALTH_SOURCE === 'recomputed' &&
-          process.env.LIQSOL_HEALTH_SOURCE_OVERRIDE === '1';
-        healthSourceUsed = forceRecomputed ? 'recomputed' : 'protocol';
+      if (healthSourceConfigured === 'recomputed') {
+        healthSourceUsed = recomputedResult.scored ? 'recomputed' : (protocolResult.scored ? 'protocol' : 'recomputed');
+      } else if (healthSourceConfigured === 'protocol') {
+        healthSourceUsed = protocolResult.scored ? 'protocol' : 'recomputed';
       } else {
-        healthSourceUsed = 'recomputed';
+        healthSourceUsed = protocolResult.scored ? 'protocol' : 'recomputed';
       }
       dualFields.healthSourceUsed = healthSourceUsed;
       // Keep legacy healthSource alias for backward compat
@@ -1064,10 +1094,21 @@ export class LiveObligationIndexer {
     healthSource?: string;
     healthSourceUsed?: string;
     healthRatioHybrid?: number;
+    healthRatioHybridRaw?: number;
+    borrowValueHybrid?: number;
+    collateralValueHybrid?: number;
     borrowValueRecomputed?: number;
     collateralValueRecomputed?: number;
     borrowValueProtocol?: number;
     collateralValueProtocol?: number;
+    totalBorrowUsdRecomputed?: number;
+    totalCollateralUsdRecomputed?: number;
+    totalBorrowUsdAdjRecomputed?: number;
+    totalCollateralUsdAdjRecomputed?: number;
+    totalBorrowUsdProtocol?: number;
+    totalCollateralUsdProtocol?: number;
+    totalBorrowUsdAdjProtocol?: number;
+    totalCollateralUsdAdjProtocol?: number;
   }> {
     const scored = Array.from(this.cache.values())
       .filter(entry => typeof entry.healthRatio === 'number')
@@ -1088,10 +1129,21 @@ export class LiveObligationIndexer {
         healthSource: entry.healthSource,
         healthSourceUsed: entry.healthSourceUsed,
         healthRatioHybrid: entry.healthRatioHybrid,
+        healthRatioHybridRaw: entry.healthRatioHybridRaw,
+        borrowValueHybrid: entry.borrowValueHybrid,
+        collateralValueHybrid: entry.collateralValueHybrid,
         borrowValueRecomputed: entry.borrowValueRecomputed,
         collateralValueRecomputed: entry.collateralValueRecomputed,
         borrowValueProtocol: entry.borrowValueProtocol,
         collateralValueProtocol: entry.collateralValueProtocol,
+        totalBorrowUsdRecomputed: entry.totalBorrowUsdRecomputed,
+        totalCollateralUsdRecomputed: entry.totalCollateralUsdRecomputed,
+        totalBorrowUsdAdjRecomputed: entry.totalBorrowUsdAdjRecomputed,
+        totalCollateralUsdAdjRecomputed: entry.totalCollateralUsdAdjRecomputed,
+        totalBorrowUsdProtocol: entry.totalBorrowUsdProtocol,
+        totalCollateralUsdProtocol: entry.totalCollateralUsdProtocol,
+        totalBorrowUsdAdjProtocol: entry.totalBorrowUsdAdjProtocol,
+        totalCollateralUsdAdjProtocol: entry.totalCollateralUsdAdjProtocol,
       }))
       .sort((a, b) => a.healthRatio - b.healthRatio); // Sort by health ratio (lowest first = riskiest)
 
