@@ -145,24 +145,16 @@ function exchangeRateUiFromReserve(reserve: ReserveCacheEntry): number | null {
 }
 
 /**
- * Convert borrowedAmountSf (scaled fraction) to UI units using bigint-safe math,
- * applying the reserve's cumulativeBorrowRateBsf to account for interest accrual.
+ * Convert borrowedAmountSf (scaled fraction) to UI units using bigint-safe math.
  *
- * borrowedAmountSf is a principal stored as principal_raw * WAD.
- * cumulativeBorrowRateBsfRaw is the growth factor stored as rate * WAD.
- *
- * Formula (per Kamino interest math):
- *   borrowBaseRaw = borrowedAmountSfRaw * cumulativeBorrowRateBsfRaw / WAD / WAD
- *
- * When cumulativeBorrowRateBsfRaw = WAD (1e18) there is no accrued interest and
- * the result equals the previous borrowedAmountSfRaw / WAD behaviour.
+ * borrowedAmountSf already includes accrued interest and is stored as:
+ *   borrowedAmountSfRaw = borrowRaw * WAD
  *
  * Returns 0 for invalid/missing values.
  */
 function convertBorrowSfToUi(
   borrowedAmountSf: string | undefined | null,
-  liquidityDecimals: number,
-  cumulativeBorrowRateBsfRaw: bigint
+  liquidityDecimals: number
 ): number {
   if (!borrowedAmountSf) return 0;
 
@@ -171,10 +163,7 @@ function convertBorrowSfToUi(
     if (borrowedSf < 0n) return 0;
 
     const WAD = 10n ** 18n;
-
-    // Apply cumulative borrow rate to account for interest accrual:
-    //   borrowBaseRaw = borrowedAmountSfRaw * cumulativeBorrowRateBsfRaw / WAD / WAD
-    const borrowedTokensRaw = (borrowedSf * cumulativeBorrowRateBsfRaw) / WAD / WAD;
+    const borrowedTokensRaw = borrowedSf / WAD;
 
     // Normalize by liquidity decimals to get UI units
     const liquidityScale = 10n ** BigInt(liquidityDecimals);
@@ -445,11 +434,10 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Convert SF to UI units using safe helper, applying cumulative borrow rate for interest accrual
+    // Convert SF to UI units using safe helper
     const borrowUi = convertBorrowSfToUi(
       borrow.borrowedAmount,
-      reserve.liquidityDecimals,
-      reserve.cumulativeBorrowRateBsfRaw
+      reserve.liquidityDecimals
     );
     
     if (!Number.isFinite(borrowUi)) {

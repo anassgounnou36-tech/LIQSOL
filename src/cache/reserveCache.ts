@@ -93,7 +93,8 @@ export const scopeMintChainMap = new Map<string, number[]>();
  * underlyingLiquidityUi = (depositedNotesUi * totalLiquidityUi) / collateralSupplyUi
  * 
  * Formula details:
- * - borrowedAmountSf is already scaled by 1e18 (WAD), so divide by 1e18 to get raw tokens
+ * - borrowedAmountSf already includes interest and is scaled by 1e18 (WAD)
+ * - divide by 1e18 to get raw tokens
  * - totalLiquidityRaw = availableAmountRaw + (borrowedAmountSfRaw / 1e18)
  * - Use bigint mul-div to avoid precision collapse
  * 
@@ -114,7 +115,6 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
     const availRaw = BigInt(decoded.availableAmountRaw);
     const borrowSfRaw = BigInt(decoded.borrowedAmountSfRaw);
     const supply = BigInt(decoded.collateralMintTotalSupplyRaw);
-    const cumulativeRate = BigInt(decoded.cumulativeBorrowRateBsfRaw);
 
     // Guard: if supply is zero or negative, exchange rate is undefined
     if (supply <= 0n) {
@@ -123,10 +123,7 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
 
     const WAD = 10n ** 18n;
 
-    // Convert borrowedAmountSf to raw tokens, applying cumulative borrow rate for interest accrual:
-    //   borrowRaw = borrowSfRaw * cumulativeBorrowRateBsfRaw / WAD / WAD
-    // When cumulativeRate = WAD this is equivalent to borrowSfRaw / WAD (no accrual).
-    const borrowRaw = (borrowSfRaw * cumulativeRate) / WAD / WAD;
+    const borrowRaw = borrowSfRaw / WAD;
     
     // Calculate total liquidity in raw units
     const totalLiquidityRaw = availRaw + borrowRaw;
