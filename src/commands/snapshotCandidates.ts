@@ -296,9 +296,9 @@ async function main() {
       const borrowValueStr = `$${c.borrowValueUsd.toFixed(2)}`.padStart(12);
       const collateralValueStr = `$${c.collateralValueUsd.toFixed(2)}`.padStart(16);
       const hrChosen = c.healthRatio.toFixed(4).padStart(10);
-      const hrProto = ((c as any).healthRatioProtocol ?? 0).toFixed(4).padStart(9);
-      const hrRecomp = ((c as any).healthRatioRecomputed ?? 0).toFixed(4).padStart(10);
-      const hrDiff = ((c as any).healthRatioDiff ?? 0).toFixed(4).padStart(6);
+      const hrProto = (c.healthRatioProtocol ?? 0).toFixed(4).padStart(9);
+      const hrRecomp = (c.healthRatioRecomputed ?? 0).toFixed(4).padStart(10);
+      const hrDiff = (c.healthRatioDiff ?? 0).toFixed(4).padStart(6);
       const obligationStr = c.obligationPubkey;
 
       console.log(
@@ -402,7 +402,6 @@ async function main() {
 
           // Protocol SF cross-check
           const decoded = entry.decoded;
-          const cAny = c as any;
           const SF_SCALE = 10n ** 18n;
           const sfToUsd = (raw: string | undefined): string => {
             try {
@@ -414,11 +413,11 @@ async function main() {
           console.log(`    Borrowed Assets Market (raw):   $${sfToUsd(decoded.borrowedAssetsMarketValueSfRaw)}`);
           console.log(`    Unhealthy Borrow Value (adj):   $${sfToUsd(decoded.unhealthyBorrowValueSfRaw)}`);
           console.log(`    Borrow Factor Adjusted (adj):   $${sfToUsd(decoded.borrowFactorAdjustedDebtValueSfRaw)}`);
-          console.log(`    HR(protocol):                   ${(cAny.healthRatioProtocol ?? 0).toFixed(6)}`);
-          console.log(`    HR(recomputed):                 ${(cAny.healthRatioRecomputed ?? 0).toFixed(6)}`);
-          console.log(`    ΔHR (abs diff):                 ${(cAny.healthRatioDiff ?? 0).toFixed(6)}`);
+          console.log(`    HR(protocol):                   ${(c.healthRatioProtocol ?? 0).toFixed(6)}`);
+          console.log(`    HR(recomputed):                 ${(c.healthRatioRecomputed ?? 0).toFixed(6)}`);
+          console.log(`    ΔHR (abs diff):                 ${(c.healthRatioDiff ?? 0).toFixed(6)}`);
 
-          if ((cAny.healthRatioDiff ?? 0) > 0.05) {
+          if ((c.healthRatioDiff ?? 0) > 0.05) {
             console.log(`    ⚠️  Large ΔHR detected - possible edge case (elevation group, farms, etc.)`);
           }
           

@@ -776,11 +776,11 @@ export class LiveObligationIndexer {
       this.config.filters = [
         {
           memcmp: {
-            offset: 0, // Use JS number (matching old bot behavior for fast snapshots)
+            offset: "0",
             base64: obligationDiscriminator.toString("base64"),
           },
         },
-      ] as any; // Type assertion needed for filter type compatibility
+      ];
       
       logger.info(
         { discriminator: obligationDiscriminator.toString("hex") },

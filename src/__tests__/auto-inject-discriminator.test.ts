@@ -120,7 +120,7 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     expect(filters.length).toBe(1);
     expect(filters[0]).toHaveProperty("memcmp");
     expect(filters[0]?.memcmp).toBeDefined();
-    expect(filters[0]!.memcmp!.offset).toBe(0); // offset should be number (old bot behavior)
+    expect(filters[0]!.memcmp!.offset).toBe("0"); // offset should be string (geyser filter type)
     expect(filters[0]!.memcmp).toHaveProperty("base64");
     
     await indexer.stop();
@@ -158,7 +158,7 @@ describe("LiveObligationIndexer - Auto-Inject Discriminator", () => {
     expect(filters.length).toBe(1);
     expect(filters[0]).toHaveProperty("memcmp");
     expect(filters[0]?.memcmp).toBeDefined();
-    expect(filters[0]!.memcmp!.offset).toBe(0); // offset should be number (old bot behavior)
+    expect(filters[0]!.memcmp!.offset).toBe("0"); // offset should be string (geyser filter type)
     expect(filters[0]!.memcmp).toHaveProperty("base64");
     
     await indexer.stop();
