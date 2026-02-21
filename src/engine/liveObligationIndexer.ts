@@ -91,6 +91,8 @@ export interface ObligationEntry {
   totalCollateralUsdProtocol?: number;
   totalBorrowUsdAdjProtocol?: number;
   totalCollateralUsdAdjProtocol?: number;
+  slotLag?: number;
+  hybridDisabledReason?: 'sf-stale' | 'weights-invalid' | 'missing-inputs';
 }
 
 export class LiveObligationIndexer {
@@ -118,6 +120,7 @@ export class LiveObligationIndexer {
   private oracleCache?: OracleCache;
   private allowlistMints?: Set<string>; // Set of mints to filter obligations (SOL, USDC, etc.)
   private allowedLiquidityMints?: Set<string>; // Set of liquidity mints to filter via reserve lookup
+  private currentSlotHint: bigint = 0n;
   
   // Stats tracking
   private stats = {
@@ -169,6 +172,10 @@ export class LiveObligationIndexer {
         "Allowlist mode enabled - will only score obligations touching reserves with these liquidity mints"
       );
     }
+  }
+
+  public setCurrentSlotHint(slot: number | bigint): void {
+    this.currentSlotHint = BigInt(slot);
   }
 
   /**
@@ -368,6 +375,8 @@ export class LiveObligationIndexer {
     totalCollateralUsdProtocol?: number;
     totalBorrowUsdAdjProtocol?: number;
     totalCollateralUsdAdjProtocol?: number;
+    slotLag?: number;
+    hybridDisabledReason?: 'sf-stale' | 'weights-invalid' | 'missing-inputs';
   } {
     // PR7 gate: determine scope by whether the obligation references any loaded reserve
     // Use byReserve index for membership checks (deposit.reserve/borrow.reserve are reserve pubkeys)
@@ -503,6 +512,8 @@ export class LiveObligationIndexer {
         totalCollateralUsdProtocol?: number;
         totalBorrowUsdAdjProtocol?: number;
         totalCollateralUsdAdjProtocol?: number;
+        slotLag?: number;
+        hybridDisabledReason?: 'sf-stale' | 'weights-invalid' | 'missing-inputs';
       } = {};
 
       if (recomputedResult.scored) {
@@ -527,35 +538,68 @@ export class LiveObligationIndexer {
         dualFields.totalCollateralUsdAdjProtocol = protocolResult.collateralValueUsd;
       }
 
+      let lastUpdateSlot = 0n;
+      try {
+        if (decoded.lastUpdateSlot !== undefined && decoded.lastUpdateSlot !== null) {
+          lastUpdateSlot = BigInt(decoded.lastUpdateSlot);
+        }
+      } catch {
+        lastUpdateSlot = 0n;
+      }
+
+      const slotLag =
+        this.currentSlotHint > 0n && lastUpdateSlot > 0n
+          ? Number(this.currentSlotHint - lastUpdateSlot)
+          : undefined;
+      dualFields.slotLag = slotLag;
+
+      const HYBRID_MAX_SLOT_LAG = 200_000; // ~30-40 minutes; safe default
+      const sfFreshEnough = slotLag !== undefined && slotLag >= 0 && slotLag <= HYBRID_MAX_SLOT_LAG;
+
       if (recomputedResult.scored && protocolResult.scored) {
         // Use raw (unclamped) ratios for ΔHR to avoid artificially capping the divergence
         const rawRecomp = recomputedResult.healthRatioRaw ?? recomputedResult.healthRatio;
         const rawProto = protocolResult.healthRatioRaw;
         dualFields.healthRatioDiff = Math.abs(rawProto - rawRecomp);
 
-        // Compute hybrid health ratio using protocol-derived effective weights applied to
-        // recomputed RAW USD totals (no parity-ratio mixing), preserving unit consistency.
-        if (protocolResult.totalCollateralUsd > 0 && protocolResult.totalBorrowUsd > 0) {
+        if (!sfFreshEnough) {
+          dualFields.hybridDisabledReason = 'sf-stale';
+        } else if (protocolResult.totalCollateralUsd > 0 && protocolResult.totalBorrowUsd > 0) {
           const liquidationWeight = protocolResult.collateralValueUsd / protocolResult.totalCollateralUsd;
           const borrowFactorWeight = protocolResult.borrowValueUsd / protocolResult.totalBorrowUsd;
-          const rawRecompCollateral = recomputedResult.totalCollateralUsdRaw;
-          const rawRecompBorrow = recomputedResult.totalBorrowUsdRaw;
-          const hybridCollateralAdj = rawRecompCollateral * liquidationWeight;
-          const hybridBorrowAdj = rawRecompBorrow * borrowFactorWeight;
-
           if (
-            Number.isFinite(liquidationWeight) &&
-            Number.isFinite(borrowFactorWeight) &&
-            Number.isFinite(hybridCollateralAdj) &&
-            Number.isFinite(hybridBorrowAdj) &&
-            hybridBorrowAdj > 0
+            !Number.isFinite(liquidationWeight) ||
+            !Number.isFinite(borrowFactorWeight) ||
+            liquidationWeight <= 0 ||
+            liquidationWeight > 1.5 ||
+            borrowFactorWeight <= 0 ||
+            borrowFactorWeight > 5
           ) {
-            const hybridRatioRaw = hybridCollateralAdj / hybridBorrowAdj;
-            dualFields.healthRatioHybridRaw = hybridRatioRaw;
-            dualFields.healthRatioHybrid = Math.max(0, Math.min(2, hybridRatioRaw));
-            dualFields.borrowValueHybrid = hybridBorrowAdj;
-            dualFields.collateralValueHybrid = hybridCollateralAdj;
+            dualFields.hybridDisabledReason = 'weights-invalid';
+          } else {
+            // Compute hybrid health ratio using protocol-derived effective weights applied to
+            // recomputed RAW USD totals (no parity-ratio mixing), preserving unit consistency.
+            const rawRecompCollateral = recomputedResult.totalCollateralUsdRaw;
+            const rawRecompBorrow = recomputedResult.totalBorrowUsdRaw;
+            const hybridCollateralAdj = rawRecompCollateral * liquidationWeight;
+            const hybridBorrowAdj = rawRecompBorrow * borrowFactorWeight;
+
+            if (
+              Number.isFinite(hybridCollateralAdj) &&
+              Number.isFinite(hybridBorrowAdj) &&
+              hybridBorrowAdj > 0
+            ) {
+              const hybridRatioRaw = hybridCollateralAdj / hybridBorrowAdj;
+              dualFields.healthRatioHybridRaw = hybridRatioRaw;
+              dualFields.healthRatioHybrid = Math.max(0, Math.min(2, hybridRatioRaw));
+              dualFields.borrowValueHybrid = hybridBorrowAdj;
+              dualFields.collateralValueHybrid = hybridCollateralAdj;
+            } else {
+              dualFields.hybridDisabledReason = 'missing-inputs';
+            }
           }
+        } else {
+          dualFields.hybridDisabledReason = 'missing-inputs';
         }
       } else if (recomputedResult.scored && !protocolResult.scored) {
         // Only recomputed available - no diff possible
@@ -1114,6 +1158,8 @@ export class LiveObligationIndexer {
     totalBorrowUsdAdjProtocol?: number;
     totalCollateralUsdAdjProtocol?: number;
     lastUpdateSlot?: string;
+    slotLag?: number;
+    hybridDisabledReason?: 'sf-stale' | 'weights-invalid' | 'missing-inputs';
   }> {
     const scored = Array.from(this.cache.values())
       .filter(entry => typeof entry.healthRatio === 'number')
@@ -1151,6 +1197,8 @@ export class LiveObligationIndexer {
         totalBorrowUsdAdjProtocol: entry.totalBorrowUsdAdjProtocol,
         totalCollateralUsdAdjProtocol: entry.totalCollateralUsdAdjProtocol,
         lastUpdateSlot: entry.decoded.lastUpdateSlot,
+        slotLag: entry.slotLag,
+        hybridDisabledReason: entry.hybridDisabledReason,
       }))
       .sort((a, b) => a.healthRatio - b.healthRatio); // Sort by health ratio (lowest first = riskiest)
 

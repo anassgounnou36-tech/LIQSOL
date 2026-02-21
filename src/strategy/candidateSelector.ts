@@ -48,6 +48,8 @@ export interface ScoredObligation {
   totalBorrowUsdAdjProtocol?: number;
   totalCollateralUsdAdjProtocol?: number;
   lastUpdateSlot?: string;
+  slotLag?: number;
+  hybridDisabledReason?: string;
   // optionally: underlying detail for validation
 }
 
