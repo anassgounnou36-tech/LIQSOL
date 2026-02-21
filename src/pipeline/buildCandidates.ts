@@ -155,6 +155,11 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
       obligationPubkey: o.obligationPubkey,
       ownerPubkey: o.ownerPubkey,
       healthRatio: o.healthRatio,
+      healthRatioRaw:
+        (o as any).healthRatioHybridRaw ??
+        o.healthRatioRecomputedRaw ??
+        o.healthRatioProtocolRaw ??
+        o.healthRatio,
       liquidationEligible: o.liquidationEligible,
       borrowValueUsd: o.borrowValue,
       collateralValueUsd: o.collateralValue,
