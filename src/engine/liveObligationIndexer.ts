@@ -13,7 +13,6 @@ import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 import { computeHealthRatio } from "../math/health.js";
 import { computeProtocolHealth } from "../math/protocolHealth.js";
 import { isLiquidatable } from "../math/liquidation.js";
-import { divBigintToNumber } from "../utils/bn.js";
 import type { ReserveCache } from "../cache/reserveCache.js";
 import type { OracleCache } from "../cache/oracleCache.js";
 
@@ -511,8 +510,8 @@ export class LiveObligationIndexer {
         dualFields.healthRatioRecomputedRaw = recomputedResult.healthRatioRaw ?? recomputedResult.healthRatio;
         dualFields.borrowValueRecomputed = recomputedResult.borrowValue;
         dualFields.collateralValueRecomputed = recomputedResult.collateralValue;
-        dualFields.totalBorrowUsdRecomputed = recomputedResult.totalBorrowUsd;
-        dualFields.totalCollateralUsdRecomputed = recomputedResult.totalCollateralUsd;
+        dualFields.totalBorrowUsdRecomputed = recomputedResult.totalBorrowUsdRaw;
+        dualFields.totalCollateralUsdRecomputed = recomputedResult.totalCollateralUsdRaw;
         dualFields.totalBorrowUsdAdjRecomputed = recomputedResult.totalBorrowUsdAdj;
         dualFields.totalCollateralUsdAdjRecomputed = recomputedResult.totalCollateralUsdAdj;
       }
@@ -535,47 +534,27 @@ export class LiveObligationIndexer {
         dualFields.healthRatioDiff = Math.abs(rawProto - rawRecomp);
 
         // Compute hybrid health ratio using protocol-derived effective weights applied to
-        // recomputed raw USD totals.  This corrects for SF interest-accrual effects while
-        // keeping fresh oracle prices.
-        //
-        // effectiveLiqWeight  = unhealthyBorrowValueSf / depositedValueSf
-        // effectiveBorrowWeight = borrowFactorAdjustedDebtValueSf / borrowedAssetsMarketValueSf
-        const unhealthySf = BigInt(decoded.unhealthyBorrowValueSfRaw ?? '0');
-        const depositedSf = BigInt(decoded.depositedValueSfRaw ?? '0');
-        const borrowAdjSf = BigInt(decoded.borrowFactorAdjustedDebtValueSfRaw ?? '0');
-        const borrowMktSf = BigInt(decoded.borrowedAssetsMarketValueSfRaw ?? '0');
-
-        if (unhealthySf > 0n && depositedSf > 0n && borrowAdjSf > 0n && borrowMktSf > 0n) {
-          // Use floating-point for weight ratios (both numerator and denominator are SF-scaled
-          // so the 1e18 factors cancel, but we divide as numbers to get a plain ratio)
-          const effectiveLiqWeight = divBigintToNumber(unhealthySf, depositedSf, 12);
-          const effectiveBorrowWeight = divBigintToNumber(borrowAdjSf, borrowMktSf, 12);
+        // recomputed RAW USD totals (no parity-ratio mixing).
+        if (protocolResult.totalCollateralUsd > 0 && protocolResult.totalBorrowUsd > 0) {
+          const liqWeight = protocolResult.collateralValueUsd / protocolResult.totalCollateralUsd;
+          const bfWeight = protocolResult.borrowValueUsd / protocolResult.totalBorrowUsd;
+          const rawRecompCollateral = recomputedResult.totalCollateralUsdRaw;
+          const rawRecompBorrow = recomputedResult.totalBorrowUsdRaw;
+          const hybridCollateralAdj = rawRecompCollateral * liqWeight;
+          const hybridBorrowAdj = rawRecompBorrow * bfWeight;
 
           if (
-            Number.isFinite(effectiveLiqWeight) &&
-            Number.isFinite(effectiveBorrowWeight) &&
-            effectiveLiqWeight > 0 &&
-            effectiveLiqWeight <= 2.5 &&
-            effectiveBorrowWeight > 0 &&
-            effectiveBorrowWeight <= 5
+            Number.isFinite(liqWeight) &&
+            Number.isFinite(bfWeight) &&
+            Number.isFinite(hybridCollateralAdj) &&
+            Number.isFinite(hybridBorrowAdj) &&
+            hybridBorrowAdj > 0
           ) {
-            const rawRecompCollateral = recomputedResult.totalCollateralUsd;
-            const rawRecompBorrow = recomputedResult.totalBorrowUsd;
-
-            const hybridCollateralAdj = rawRecompCollateral * effectiveLiqWeight;
-            const hybridBorrowAdj = rawRecompBorrow * effectiveBorrowWeight;
-
-            if (
-              Number.isFinite(hybridCollateralAdj) &&
-              Number.isFinite(hybridBorrowAdj) &&
-              hybridBorrowAdj > 0
-            ) {
-              const hybridRatioRaw = hybridCollateralAdj / hybridBorrowAdj;
-              dualFields.healthRatioHybridRaw = hybridRatioRaw;
-              dualFields.healthRatioHybrid = Math.max(0, Math.min(2, hybridRatioRaw));
-              dualFields.borrowValueHybrid = hybridBorrowAdj;
-              dualFields.collateralValueHybrid = hybridCollateralAdj;
-            }
+            const hybridRatioRaw = hybridCollateralAdj / hybridBorrowAdj;
+            dualFields.healthRatioHybridRaw = hybridRatioRaw;
+            dualFields.healthRatioHybrid = Math.max(0, Math.min(2, hybridRatioRaw));
+            dualFields.borrowValueHybrid = hybridBorrowAdj;
+            dualFields.collateralValueHybrid = hybridCollateralAdj;
           }
         }
       } else if (recomputedResult.scored && !protocolResult.scored) {

@@ -452,6 +452,17 @@ async function main() {
           console.log(`    Collateral raw ratio:         ${ratio(cAny.totalCollateralUsdRecomputed, cAny.totalCollateralUsdProtocol)}`);
           console.log(`    Borrow adjusted ratio:        ${ratio(cAny.totalBorrowUsdAdjRecomputed, cAny.totalBorrowUsdAdjProtocol)}`);
           console.log(`    Collateral adjusted ratio:    ${ratio(cAny.totalCollateralUsdAdjRecomputed, cAny.totalCollateralUsdAdjProtocol)}`);
+          const liqWeight = (cAny.totalCollateralUsdProtocol ?? 0) > 0
+            ? (cAny.totalCollateralUsdAdjProtocol ?? 0) / cAny.totalCollateralUsdProtocol
+            : 0;
+          const bfWeight = (cAny.totalBorrowUsdProtocol ?? 0) > 0
+            ? (cAny.totalBorrowUsdAdjProtocol ?? 0) / cAny.totalBorrowUsdProtocol
+            : 0;
+          const hybridCollateralAdj = (cAny.totalCollateralUsdRecomputed ?? 0) * liqWeight;
+          const hybridBorrowAdj = (cAny.totalBorrowUsdRecomputed ?? 0) * bfWeight;
+          console.log(`    Recomputed totals used for hybrid: C_raw=${(cAny.totalCollateralUsdRecomputed ?? 0).toFixed(6)}, B_raw=${(cAny.totalBorrowUsdRecomputed ?? 0).toFixed(6)}`);
+          console.log(`    Protocol weights used for hybrid: liqWeight=${liqWeight.toFixed(6)}, bfWeight=${bfWeight.toFixed(6)}`);
+          console.log(`    Hybrid adjusted totals: C_adj=${hybridCollateralAdj.toFixed(6)}, B_adj=${hybridBorrowAdj.toFixed(6)}`);
           console.log(`    HR(hybrid):                   ${(cAny.healthRatioHybrid ?? 0).toFixed(6)}`);
           console.log(`    HR(hybrid raw):               ${(cAny.healthRatioHybridRaw ?? 0).toFixed(6)}`);
           console.log(`    Obligation lastUpdateSlot:    ${c.lastUpdateSlot ?? 'n/a'}`);

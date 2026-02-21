@@ -111,6 +111,10 @@ export type HealthRatioResult =
       totalBorrowUsd: number;
       /** Total collateral value in USD (unweighted) */
       totalCollateralUsd: number;
+      /** Total borrow value in USD (raw / unweighted) */
+      totalBorrowUsdRaw: number;
+      /** Total collateral value in USD (raw / unweighted) */
+      totalCollateralUsdRaw: number;
       /** Total borrow value in USD (weighted by borrow factor) */
       totalBorrowUsdAdj: number;
       /** Total collateral value in USD (weighted by liquidation threshold) */
@@ -502,6 +506,8 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     collateralValue: collateralUSD,
     totalBorrowUsd: borrowUSDRaw,
     totalCollateralUsd: collateralUSDRaw,
+    totalBorrowUsdRaw: borrowUSDRaw,
+    totalCollateralUsdRaw: collateralUSDRaw,
     totalBorrowUsdAdj: borrowUSD,
     totalCollateralUsdAdj: collateralUSD,
   };

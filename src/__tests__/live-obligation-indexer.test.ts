@@ -441,9 +441,9 @@ describe("LiveObligationIndexer", () => {
         cumulativeBorrowRate: 1000000000000000000n,
         cumulativeBorrowRateBsfRaw: "1000000000000000000",
         loanToValue: 75,
-        liquidationThreshold: 100,
+        liquidationThreshold: 50,
         liquidationBonus: 500,
-        borrowFactor: 100,
+        borrowFactor: 200,
         oraclePubkeys: [new PublicKey("11111111111111111111111111111111")],
         liquidityDecimals: 0,
         collateralDecimals: 0,
@@ -489,6 +489,9 @@ describe("LiveObligationIndexer", () => {
 
       expect(scoring.healthSourceUsed).toBe("hybrid");
       expect(scoring.healthRatio).toBeCloseTo(1 / 3, 6);
+      expect(scoring.collateralValueHybrid).toBeCloseTo(1, 6);
+      expect(scoring.borrowValueHybrid).toBeCloseTo(3, 6);
+      expect(scoring.healthRatioHybridRaw).toBeCloseTo(1 / 3, 6);
       expect(scoring.liquidationEligible).toBe(true);
     });
 
