@@ -1126,7 +1126,7 @@ export class LiveObligationIndexer {
     totalCollateralUsdProtocol?: number;
     totalBorrowUsdAdjProtocol?: number;
     totalCollateralUsdAdjProtocol?: number;
-    lastUpdateSlot: string;
+    lastUpdateSlot?: string;
   }> {
     const scored = Array.from(this.cache.values())
       .filter(entry => typeof entry.healthRatio === 'number')
