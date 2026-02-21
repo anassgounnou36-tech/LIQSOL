@@ -84,6 +84,8 @@ async function main() {
     // Initialize RPC connection
     const connection = getConnection();
     logger.info({ rpcUrl: env.RPC_PRIMARY }, "Connected to Solana RPC");
+    const currentSlot = await connection.getSlot('confirmed');
+    logger.info({ currentSlot }, "Current slot");
 
     // Parse allowlist mints from environment if configured
     // Default to SOL+USDC for PR7 gate behavior
@@ -267,6 +269,7 @@ async function main() {
         totalCollateralUsdProtocol: o.totalCollateralUsdProtocol,
         totalBorrowUsdAdjProtocol: o.totalBorrowUsdAdjProtocol,
         totalCollateralUsdAdjProtocol: o.totalCollateralUsdAdjProtocol,
+        lastUpdateSlot: o.lastUpdateSlot,
       };
     });
 
@@ -448,6 +451,20 @@ async function main() {
           console.log(`    Collateral adjusted ratio:    ${ratio(cAny.totalCollateralUsdAdjRecomputed, cAny.totalCollateralUsdAdjProtocol)}`);
           console.log(`    HR(hybrid):                   ${(cAny.healthRatioHybrid ?? 0).toFixed(6)}`);
           console.log(`    HR(hybrid raw):               ${(cAny.healthRatioHybridRaw ?? 0).toFixed(6)}`);
+          console.log(`    Obligation lastUpdateSlot:    ${c.lastUpdateSlot ?? 'n/a'}`);
+          if (c.lastUpdateSlot) {
+            try {
+              const slotLag = BigInt(currentSlot) - BigInt(c.lastUpdateSlot);
+              console.log(`    Slot lag:                     ${slotLag.toString()}`);
+              if (slotLag > 10_000n) {
+                console.log(`    NOTE: obligation SF values likely stale; protocol HR may differ after refresh`);
+              }
+            } catch {
+              console.log(`    Slot lag:                     n/a`);
+            }
+          } else {
+            console.log(`    Slot lag:                     n/a`);
+          }
 
           if ((cAny.healthRatioDiff ?? 0) > 0.05) {
             console.log(`    ⚠️  Large ΔHR detected - possible edge case (elevation group, farms, etc.)`);
