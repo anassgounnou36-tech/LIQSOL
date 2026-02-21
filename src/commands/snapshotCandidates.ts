@@ -440,7 +440,9 @@ async function main() {
           console.log(`    ΔHR (abs diff):                 ${(cAny.healthRatioDiff ?? 0).toFixed(6)}`);
           console.log('\n  Parity (recomputed vs protocol):');
           console.log(`    Source used:                  ${(cAny.healthSourceUsed ?? 'n/a')}`);
-          console.log(`    Borrow raw ratio:             ${ratio(cAny.totalBorrowUsdRecomputed, cAny.totalBorrowUsdProtocol)}`);
+          const borrowRawRatio = ratio(cAny.totalBorrowUsdRecomputed, cAny.totalBorrowUsdProtocol);
+          console.log(`    Borrow raw ratio:             ${borrowRawRatio}`);
+          console.log(`    Implied borrow inflation factor = Borrow raw ratio: ${borrowRawRatio}`);
           console.log(`    Collateral raw ratio:         ${ratio(cAny.totalCollateralUsdRecomputed, cAny.totalCollateralUsdProtocol)}`);
           console.log(`    Borrow adjusted ratio:        ${ratio(cAny.totalBorrowUsdAdjRecomputed, cAny.totalBorrowUsdAdjProtocol)}`);
           console.log(`    Collateral adjusted ratio:    ${ratio(cAny.totalCollateralUsdAdjRecomputed, cAny.totalCollateralUsdAdjProtocol)}`);

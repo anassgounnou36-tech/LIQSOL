@@ -434,11 +434,9 @@ describe("Health Ratio and Liquidation", () => {
       expect(scored.healthRatio).toBe(2.0); // No debt = max health
     });
 
-    it("should apply cumulativeBorrowRateBsfRaw > 1e18 to increase borrow UI and USD", () => {
-      // Demonstrate that when cumulativeBorrowRateBsfRaw = 1.05e18 (5% interest accrued),
-      // the resulting borrow amount is 5% higher than with no accrual (rate = 1e18).
+    it("should convert borrowedAmountSf to UI without applying cumulativeBorrowRateBsfRaw again", () => {
       const WAD = 1000000000000000000n; // 1e18
-      const rate105 = (WAD * 105n) / 100n; // 1.05 × 1e18
+      const rate13025 = (WAD * 13025n) / 10000n; // 1.3025 × 1e18
 
       const makeReserves = (rate: bigint): Map<string, ReserveCacheEntry> =>
         new Map([
@@ -486,7 +484,7 @@ describe("Health Ratio and Liquidation", () => {
         },
       ];
 
-      // With rate = 1e18 (no accrual): 100 USDC borrow
+      // With any cumulative rate, borrowedAmountSf already includes interest and should decode to 100 USDC.
       const resultBase = computeHealthRatio({
         deposits: [],
         borrows,
@@ -494,20 +492,19 @@ describe("Health Ratio and Liquidation", () => {
         prices,
       });
 
-      // With rate = 1.05e18 (5% accrual): 105 USDC borrow
-      const resultAccrued = computeHealthRatio({
+      const resultWithHigherRate = computeHealthRatio({
         deposits: [],
         borrows,
-        reserves: makeReserves(rate105),
+        reserves: makeReserves(rate13025),
         prices,
       });
 
       const base = expectScored(resultBase);
-      const accrued = expectScored(resultAccrued);
+      const withHigherRate = expectScored(resultWithHigherRate);
 
-      // Accrued borrow should be ~5% higher
-      expect(accrued.totalBorrowUsd).toBeCloseTo(base.totalBorrowUsd * 1.05, 1);
-      expect(accrued.borrowValue).toBeCloseTo(base.borrowValue * 1.05, 1);
+      expect(base.totalBorrowUsd).toBeCloseTo(100, 6);
+      expect(withHigherRate.totalBorrowUsd).toBeCloseTo(100, 6);
+      expect(withHigherRate.borrowValue).toBeCloseTo(base.borrowValue, 6);
     });
   });
 
