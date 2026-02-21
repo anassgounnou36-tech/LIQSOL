@@ -162,6 +162,16 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
       collateralReservePubkey,
       primaryBorrowMint,
       primaryCollateralMint,
+      healthRatioRecomputed: o.healthRatioRecomputed,
+      healthRatioRecomputedRaw: o.healthRatioRecomputedRaw,
+      healthRatioProtocol: o.healthRatioProtocol,
+      healthRatioProtocolRaw: o.healthRatioProtocolRaw,
+      healthRatioDiff: o.healthRatioDiff,
+      healthSource: o.healthSource,
+      borrowValueRecomputed: o.borrowValueRecomputed,
+      collateralValueRecomputed: o.collateralValueRecomputed,
+      borrowValueProtocol: o.borrowValueProtocol,
+      collateralValueProtocol: o.collateralValueProtocol,
     };
   });
 

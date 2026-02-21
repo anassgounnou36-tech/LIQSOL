@@ -11,6 +11,7 @@ import { CommitmentLevel, SubscribeRequestFilterAccounts } from "@triton-one/yel
 import { withRetry } from "../utils/retry.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 import { computeHealthRatio } from "../math/health.js";
+import { computeProtocolHealth } from "../math/protocolHealth.js";
 import { isLiquidatable } from "../math/liquidation.js";
 import type { ReserveCache } from "../cache/reserveCache.js";
 import type { OracleCache } from "../cache/oracleCache.js";
@@ -59,6 +60,20 @@ export interface ObligationEntry {
   collateralValue?: number;
   liquidationEligible?: boolean;
   unscoredReason?: string; // Track why obligation wasn't scored
+
+  // Dual health ratio sources
+  healthRatioRecomputed?: number;
+  healthRatioRecomputedRaw?: number;
+  borrowValueRecomputed?: number;
+  collateralValueRecomputed?: number;
+
+  healthRatioProtocol?: number;
+  healthRatioProtocolRaw?: number;
+  borrowValueProtocol?: number;
+  collateralValueProtocol?: number;
+
+  healthRatioDiff?: number;   // abs(protocol - recomputed)
+  healthSource?: 'recomputed' | 'protocol'; // which source drove healthRatio
 }
 
 export class LiveObligationIndexer {
@@ -311,6 +326,16 @@ export class LiveObligationIndexer {
     collateralValue?: number;
     liquidationEligible?: boolean;
     unscoredReason?: string;
+    healthRatioRecomputed?: number;
+    healthRatioRecomputedRaw?: number;
+    borrowValueRecomputed?: number;
+    collateralValueRecomputed?: number;
+    healthRatioProtocol?: number;
+    healthRatioProtocolRaw?: number;
+    borrowValueProtocol?: number;
+    collateralValueProtocol?: number;
+    healthRatioDiff?: number;
+    healthSource?: 'recomputed' | 'protocol';
   } {
     // PR7 gate: determine scope by whether the obligation references any loaded reserve
     // Use byReserve index for membership checks (deposit.reserve/borrow.reserve are reserve pubkeys)
@@ -406,31 +431,94 @@ export class LiveObligationIndexer {
     }
 
     try {
-      // Compute health ratio using byMint index for health computation
-      const result = computeHealthRatio({
+      // 1. Compute recomputed health (oracle+reserve based)
+      const recomputedResult = computeHealthRatio({
         deposits: decoded.deposits,
         borrows: decoded.borrows,
         reserves: this.reserveCache.byMint,
         prices: this.oracleCache,
+        options: { exposeRawHr: true },
       });
 
-      if (!result.scored) {
-        // Track unscored reason
-        this.stats.unscoredCount++;
-        this.stats.unscoredReasons[result.reason] = (this.stats.unscoredReasons[result.reason] || 0) + 1;
-        return { unscoredReason: result.reason };
+      // 2. Compute protocol health (from Obligation SF fields)
+      const protocolResult = computeProtocolHealth(decoded);
+
+      // 3. Build dual health fields
+      const dualFields: {
+        healthRatioRecomputed?: number;
+        healthRatioRecomputedRaw?: number;
+        borrowValueRecomputed?: number;
+        collateralValueRecomputed?: number;
+        healthRatioProtocol?: number;
+        healthRatioProtocolRaw?: number;
+        borrowValueProtocol?: number;
+        collateralValueProtocol?: number;
+        healthRatioDiff?: number;
+        healthSource?: 'recomputed' | 'protocol';
+      } = {};
+
+      if (recomputedResult.scored) {
+        dualFields.healthRatioRecomputed = recomputedResult.healthRatio;
+        dualFields.healthRatioRecomputedRaw = recomputedResult.healthRatioRaw ?? recomputedResult.healthRatio;
+        dualFields.borrowValueRecomputed = recomputedResult.borrowValue;
+        dualFields.collateralValueRecomputed = recomputedResult.collateralValue;
       }
 
-      // Determine liquidation eligibility
-      // Since health ratio is computed with liquidation-threshold-weighted collateral,
-      // we simply check if healthRatio < 1.0
-      const liquidationEligible = isLiquidatable(result.healthRatio);
+      if (protocolResult.scored) {
+        dualFields.healthRatioProtocol = protocolResult.healthRatio;
+        dualFields.healthRatioProtocolRaw = protocolResult.healthRatioRaw;
+        dualFields.borrowValueProtocol = protocolResult.borrowValueUsd;
+        dualFields.collateralValueProtocol = protocolResult.collateralValueUsd;
+      }
+
+      if (recomputedResult.scored && protocolResult.scored) {
+        dualFields.healthRatioDiff = Math.abs(recomputedResult.healthRatio - protocolResult.healthRatio);
+      }
+
+      // 4. Select active health source via env
+      const healthSource = (process.env.LIQSOL_HEALTH_SOURCE ?? 'recomputed') as 'recomputed' | 'protocol';
+      dualFields.healthSource = healthSource;
+
+      // Normalize both results to a common shape with borrowValue/collateralValue fields
+      type ActiveHealth = { scored: boolean; healthRatio: number; healthRatioRaw?: number; borrowValue: number; collateralValue: number };
+      let activeResult: ActiveHealth | null = null;
+
+      if (healthSource === 'protocol' && protocolResult.scored) {
+        activeResult = { ...protocolResult, borrowValue: protocolResult.borrowValueUsd, collateralValue: protocolResult.collateralValueUsd };
+      } else if (healthSource === 'recomputed' && recomputedResult.scored) {
+        activeResult = { ...recomputedResult, borrowValue: recomputedResult.borrowValue, collateralValue: recomputedResult.collateralValue };
+      } else if (recomputedResult.scored) {
+        activeResult = { ...recomputedResult, borrowValue: recomputedResult.borrowValue, collateralValue: recomputedResult.collateralValue };
+      } else if (protocolResult.scored) {
+        activeResult = { ...protocolResult, borrowValue: protocolResult.borrowValueUsd, collateralValue: protocolResult.collateralValueUsd };
+      }
+
+      if (!activeResult) {
+        // No result from either source
+        if (!recomputedResult.scored) {
+          this.stats.unscoredCount++;
+          this.stats.unscoredReasons[recomputedResult.reason] = (this.stats.unscoredReasons[recomputedResult.reason] || 0) + 1;
+          return { unscoredReason: recomputedResult.reason, ...dualFields };
+        }
+        this.stats.unscoredCount++;
+        this.stats.unscoredReasons["ERROR"] = (this.stats.unscoredReasons["ERROR"] || 0) + 1;
+        return { unscoredReason: "ERROR", ...dualFields };
+      }
+
+      // 5. Track unscored if recomputed failed (primary source)
+      if (!recomputedResult.scored && healthSource !== 'protocol') {
+        this.stats.unscoredCount++;
+        this.stats.unscoredReasons[recomputedResult.reason] = (this.stats.unscoredReasons[recomputedResult.reason] || 0) + 1;
+      }
+
+      const liquidationEligible = isLiquidatable(activeResult.healthRatio);
 
       return {
-        healthRatio: result.healthRatio,
-        borrowValue: result.borrowValue,
-        collateralValue: result.collateralValue,
+        healthRatio: activeResult.healthRatio,
+        borrowValue: activeResult.borrowValue ?? 0,
+        collateralValue: activeResult.collateralValue ?? 0,
         liquidationEligible,
+        ...dualFields,
       };
     } catch (err) {
       logger.warn(
@@ -882,6 +970,16 @@ export class LiveObligationIndexer {
     liquidationEligible: boolean;
     depositsCount: number;
     borrowsCount: number;
+    healthRatioRecomputed?: number;
+    healthRatioRecomputedRaw?: number;
+    healthRatioProtocol?: number;
+    healthRatioProtocolRaw?: number;
+    healthRatioDiff?: number;
+    healthSource?: string;
+    borrowValueRecomputed?: number;
+    collateralValueRecomputed?: number;
+    borrowValueProtocol?: number;
+    collateralValueProtocol?: number;
   }> {
     const scored = Array.from(this.cache.values())
       .filter(entry => typeof entry.healthRatio === 'number')
@@ -894,6 +992,16 @@ export class LiveObligationIndexer {
         liquidationEligible: entry.liquidationEligible!,
         depositsCount: entry.decoded.deposits.length,
         borrowsCount: entry.decoded.borrows.length,
+        healthRatioRecomputed: entry.healthRatioRecomputed,
+        healthRatioRecomputedRaw: entry.healthRatioRecomputedRaw,
+        healthRatioProtocol: entry.healthRatioProtocol,
+        healthRatioProtocolRaw: entry.healthRatioProtocolRaw,
+        healthRatioDiff: entry.healthRatioDiff,
+        healthSource: entry.healthSource,
+        borrowValueRecomputed: entry.borrowValueRecomputed,
+        collateralValueRecomputed: entry.collateralValueRecomputed,
+        borrowValueProtocol: entry.borrowValueProtocol,
+        collateralValueProtocol: entry.collateralValueProtocol,
       }))
       .sort((a, b) => a.healthRatio - b.healthRatio); // Sort by health ratio (lowest first = riskiest)
 

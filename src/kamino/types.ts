@@ -54,6 +54,32 @@ export interface DecodedObligation {
   deposits: ObligationDeposit[];
   /** Array of borrowed positions */
   borrows: ObligationBorrow[];
+
+  // Protocol SF risk values (optional - decoded directly from on-chain Obligation account)
+  /** Raw deposited value in SF (1e18-scaled), stored as string to avoid Number() overflow */
+  depositedValueSfRaw?: string;
+  /** Raw borrowed assets market value in SF (1e18-scaled) */
+  borrowedAssetsMarketValueSfRaw?: string;
+  /** Borrow-factor-adjusted debt value in SF (1e18-scaled) */
+  borrowFactorAdjustedDebtValueSfRaw?: string;
+  /** Allowed borrow value in SF (1e18-scaled) */
+  allowedBorrowValueSfRaw?: string;
+  /** Unhealthy borrow value (borrow limit) in SF (1e18-scaled) */
+  unhealthyBorrowValueSfRaw?: string;
+
+  // Protocol metadata
+  /** Lowest liquidation LTV among deposited reserves */
+  lowestReserveDepositLiquidationLtv?: number;
+  /** Lowest max LTV among deposited reserves */
+  lowestReserveDepositMaxLtvPct?: number;
+  /** Elevation group for the obligation */
+  elevationGroup?: number;
+  /** Highest borrow factor percentage among borrowed reserves */
+  highestBorrowFactorPct?: number;
+  /** Whether the obligation has any active debt */
+  hasDebt?: boolean;
+  /** Whether borrowing is disabled for this obligation */
+  borrowingDisabled?: boolean;
 }
 
 /**
