@@ -239,7 +239,8 @@ async function main() {
           o.healthRatioRecomputedRaw ??
           o.healthRatioProtocolRaw ??
           o.healthRatio,
-        liquidationEligible: o.liquidationEligible,
+        liquidationEligibleProtocol: (o as any).liquidationEligibleProtocol,
+        liquidationEligible: (o as any).liquidationEligibleProtocol ?? o.liquidationEligible,
         borrowValueUsd: o.borrowValue,
         collateralValueUsd: o.collateralValue,
         repayReservePubkey,
@@ -441,6 +442,8 @@ async function main() {
           console.log(`    HR(protocol):                   ${(cAny.healthRatioProtocol ?? 0).toFixed(6)}`);
           console.log(`    HR(recomputed):                 ${(cAny.healthRatioRecomputed ?? 0).toFixed(6)}`);
           console.log(`    ΔHR (abs diff):                 ${(cAny.healthRatioDiff ?? 0).toFixed(6)}`);
+          console.log(`    Liquidatable (chosen):         ${c.liquidationEligible ? 'YES' : 'NO'}`);
+          console.log(`    Liquidatable (protocol):       ${cAny.liquidationEligibleProtocol === undefined ? 'n/a' : (cAny.liquidationEligibleProtocol ? 'YES' : 'NO')}`);
           console.log('\n  Parity (recomputed vs protocol):');
           console.log(`    Source used:                  ${(cAny.healthSourceUsed ?? 'n/a')}`);
           const borrowRawRatio = ratio(cAny.totalBorrowUsdRecomputed, cAny.totalBorrowUsdProtocol);

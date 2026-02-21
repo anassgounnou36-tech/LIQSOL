@@ -160,7 +160,8 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
         o.healthRatioRecomputedRaw ??
         o.healthRatioProtocolRaw ??
         o.healthRatio,
-      liquidationEligible: o.liquidationEligible,
+      liquidationEligibleProtocol: (o as any).liquidationEligibleProtocol,
+      liquidationEligible: (o as any).liquidationEligibleProtocol ?? o.liquidationEligible,
       borrowValueUsd: o.borrowValue,
       collateralValueUsd: o.collateralValue,
       repayReservePubkey,

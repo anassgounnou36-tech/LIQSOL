@@ -15,6 +15,7 @@ export interface ScoredObligation {
   healthRatio: number; // e.g., 0.95 liquidatable, 1.02 near threshold
   healthRatioRaw?: number; // unclamped health ratio for more precise EV calculations
   liquidationEligible: boolean;
+  liquidationEligibleProtocol?: boolean;
   borrowValueUsd: number;
   collateralValueUsd: number;
   // PR: Reserve pubkeys from obligation borrows/deposits

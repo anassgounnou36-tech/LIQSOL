@@ -71,9 +71,9 @@ export function evaluateForecasts(
     let needsRecompute = false;
     let reason: string | undefined;
 
-    // RULE: Liquidatable obligations (liquidationEligible=true OR healthRatioRaw < 1.0) 
-    // are never expired due to TTL. They always pass.
-    const isLiquidatable = f.liquidationEligible === true || (f.healthRatioRaw !== null && f.healthRatioRaw !== undefined && f.healthRatioRaw < 1.0);
+    // RULE: Only protocol-liquidatable entries bypass TTL expiry.
+    // healthRatioRaw is a forecast signal and MUST NOT force TTL bypass.
+    const isLiquidatable = f.liquidationEligible === true;
     
     if (!isLiquidatable) {
       // Freshness expiry
