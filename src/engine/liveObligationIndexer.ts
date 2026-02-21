@@ -72,8 +72,16 @@ export interface ObligationEntry {
   borrowValueProtocol?: number;
   collateralValueProtocol?: number;
 
-  healthRatioDiff?: number;   // abs(protocol - recomputed)
+  healthRatioDiff?: number;   // abs(protocol - recomputed), computed from raw ratios
   healthSource?: 'recomputed' | 'protocol'; // which source drove healthRatio
+  healthSourceConfigured?: 'recomputed' | 'protocol'; // env-configured source
+  healthSourceUsed?: 'recomputed' | 'protocol'; // actual source used after protocol-first logic
+
+  // Hybrid health ratio (recomputed raw USD totals × protocol-derived effective weights)
+  healthRatioHybrid?: number;
+  healthRatioHybridRaw?: number;
+  borrowValueHybrid?: number;
+  collateralValueHybrid?: number;
 }
 
 export class LiveObligationIndexer {
@@ -336,6 +344,12 @@ export class LiveObligationIndexer {
     collateralValueProtocol?: number;
     healthRatioDiff?: number;
     healthSource?: 'recomputed' | 'protocol';
+    healthSourceConfigured?: 'recomputed' | 'protocol';
+    healthSourceUsed?: 'recomputed' | 'protocol';
+    healthRatioHybrid?: number;
+    healthRatioHybridRaw?: number;
+    borrowValueHybrid?: number;
+    collateralValueHybrid?: number;
   } {
     // PR7 gate: determine scope by whether the obligation references any loaded reserve
     // Use byReserve index for membership checks (deposit.reserve/borrow.reserve are reserve pubkeys)
@@ -455,6 +469,12 @@ export class LiveObligationIndexer {
         collateralValueProtocol?: number;
         healthRatioDiff?: number;
         healthSource?: 'recomputed' | 'protocol';
+        healthSourceConfigured?: 'recomputed' | 'protocol';
+        healthSourceUsed?: 'recomputed' | 'protocol';
+        healthRatioHybrid?: number;
+        healthRatioHybridRaw?: number;
+        borrowValueHybrid?: number;
+        collateralValueHybrid?: number;
       } = {};
 
       if (recomputedResult.scored) {
@@ -472,20 +492,86 @@ export class LiveObligationIndexer {
       }
 
       if (recomputedResult.scored && protocolResult.scored) {
-        dualFields.healthRatioDiff = Math.abs(recomputedResult.healthRatio - protocolResult.healthRatio);
+        // Use raw (unclamped) ratios for ΔHR to avoid artificially capping the divergence
+        const rawRecomp = recomputedResult.healthRatioRaw ?? recomputedResult.healthRatio;
+        const rawProto = protocolResult.healthRatioRaw;
+        dualFields.healthRatioDiff = Math.abs(rawProto - rawRecomp);
+
+        // Compute hybrid health ratio using protocol-derived effective weights applied to
+        // recomputed raw USD totals.  This corrects for SF interest-accrual effects while
+        // keeping fresh oracle prices.
+        //
+        // effectiveLiqWeight  = unhealthyBorrowValueSf / depositedValueSf
+        // effectiveBorrowWeight = borrowFactorAdjustedDebtValueSf / borrowedAssetsMarketValueSf
+        const unhealthySf = BigInt(decoded.unhealthyBorrowValueSfRaw ?? '0');
+        const depositedSf = BigInt(decoded.depositedValueSfRaw ?? '0');
+        const borrowAdjSf = BigInt(decoded.borrowFactorAdjustedDebtValueSfRaw ?? '0');
+        const borrowMktSf = BigInt(decoded.borrowedAssetsMarketValueSfRaw ?? '0');
+
+        if (unhealthySf > 0n && depositedSf > 0n && borrowAdjSf > 0n && borrowMktSf > 0n) {
+          // Use floating-point for weight ratios (both numerator and denominator are SF-scaled
+          // so the 1e18 factors cancel, but we divide as numbers to get a plain ratio)
+          const effectiveLiqWeight = Number(unhealthySf) / Number(depositedSf);
+          const effectiveBorrowWeight = Number(borrowAdjSf) / Number(borrowMktSf);
+
+          const rawRecompCollateral = recomputedResult.totalCollateralUsd;
+          const rawRecompBorrow = recomputedResult.totalBorrowUsd;
+
+          const hybridCollateralAdj = rawRecompCollateral * effectiveLiqWeight;
+          const hybridBorrowAdj = rawRecompBorrow * effectiveBorrowWeight;
+
+          if (
+            Number.isFinite(hybridCollateralAdj) &&
+            Number.isFinite(hybridBorrowAdj) &&
+            hybridBorrowAdj > 0
+          ) {
+            const hybridRatioRaw = hybridCollateralAdj / hybridBorrowAdj;
+            dualFields.healthRatioHybridRaw = hybridRatioRaw;
+            dualFields.healthRatioHybrid = Math.max(0, Math.min(2, hybridRatioRaw));
+            dualFields.borrowValueHybrid = hybridBorrowAdj;
+            dualFields.collateralValueHybrid = hybridCollateralAdj;
+          }
+        }
+      } else if (recomputedResult.scored && !protocolResult.scored) {
+        // Only recomputed available - no diff possible
       }
 
-      // 4. Select active health source via env
-      const healthSource = (process.env.LIQSOL_HEALTH_SOURCE ?? 'recomputed') as 'recomputed' | 'protocol';
-      dualFields.healthSource = healthSource;
+      // 4. Determine health source: env override is a debug facility only.
+      //    Protocol-first policy: when protocol SF is scored, use it for eligibility.
+      const healthSourceConfigured = (process.env.LIQSOL_HEALTH_SOURCE ?? 'recomputed') as 'recomputed' | 'protocol';
+      dualFields.healthSourceConfigured = healthSourceConfigured;
+
+      // Debug override: honor explicit 'recomputed' env even when protocol is scored,
+      // but only in non-default mode (i.e. user explicitly set it).  The default env value
+      // is 'recomputed', so we only bypass protocol-first when LIQSOL_HEALTH_SOURCE is
+      // explicitly set to 'recomputed' AND protocol is available - which is an unusual
+      // configuration that operators should document clearly.
+      //
+      // Production policy (protocol-first):
+      //   - If protocol scored  → healthSourceUsed = 'protocol'
+      //   - Else                → healthSourceUsed = 'recomputed'
+      let healthSourceUsed: 'recomputed' | 'protocol';
+      if (protocolResult.scored) {
+        // Protocol-first: always use protocol when available, unless explicitly overridden
+        // via LIQSOL_HEALTH_SOURCE=recomputed (debug/testing mode)
+        const forceRecomputed =
+          process.env.LIQSOL_HEALTH_SOURCE === 'recomputed' &&
+          process.env.LIQSOL_HEALTH_SOURCE_OVERRIDE === '1';
+        healthSourceUsed = forceRecomputed ? 'recomputed' : 'protocol';
+      } else {
+        healthSourceUsed = 'recomputed';
+      }
+      dualFields.healthSourceUsed = healthSourceUsed;
+      // Keep legacy healthSource alias for backward compat
+      dualFields.healthSource = healthSourceUsed;
 
       // Normalize both results to a common shape with borrowValue/collateralValue fields
       type ActiveHealth = { scored: boolean; healthRatio: number; healthRatioRaw?: number; borrowValue: number; collateralValue: number };
       let activeResult: ActiveHealth | null = null;
 
-      if (healthSource === 'protocol' && protocolResult.scored) {
+      if (healthSourceUsed === 'protocol' && protocolResult.scored) {
         activeResult = { ...protocolResult, borrowValue: protocolResult.borrowValueUsd, collateralValue: protocolResult.collateralValueUsd };
-      } else if (healthSource === 'recomputed' && recomputedResult.scored) {
+      } else if (healthSourceUsed === 'recomputed' && recomputedResult.scored) {
         activeResult = { ...recomputedResult, borrowValue: recomputedResult.borrowValue, collateralValue: recomputedResult.collateralValue };
       } else if (recomputedResult.scored) {
         activeResult = { ...recomputedResult, borrowValue: recomputedResult.borrowValue, collateralValue: recomputedResult.collateralValue };
@@ -506,7 +592,7 @@ export class LiveObligationIndexer {
       }
 
       // 5. Track unscored if recomputed failed (primary source)
-      if (!recomputedResult.scored && healthSource !== 'protocol') {
+      if (!recomputedResult.scored && healthSourceUsed !== 'protocol') {
         this.stats.unscoredCount++;
         this.stats.unscoredReasons[recomputedResult.reason] = (this.stats.unscoredReasons[recomputedResult.reason] || 0) + 1;
       }
@@ -976,6 +1062,8 @@ export class LiveObligationIndexer {
     healthRatioProtocolRaw?: number;
     healthRatioDiff?: number;
     healthSource?: string;
+    healthSourceUsed?: string;
+    healthRatioHybrid?: number;
     borrowValueRecomputed?: number;
     collateralValueRecomputed?: number;
     borrowValueProtocol?: number;
@@ -998,6 +1086,8 @@ export class LiveObligationIndexer {
         healthRatioProtocolRaw: entry.healthRatioProtocolRaw,
         healthRatioDiff: entry.healthRatioDiff,
         healthSource: entry.healthSource,
+        healthSourceUsed: entry.healthSourceUsed,
+        healthRatioHybrid: entry.healthRatioHybrid,
         borrowValueRecomputed: entry.borrowValueRecomputed,
         collateralValueRecomputed: entry.collateralValueRecomputed,
         borrowValueProtocol: entry.borrowValueProtocol,

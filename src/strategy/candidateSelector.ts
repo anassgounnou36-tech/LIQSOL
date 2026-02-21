@@ -119,15 +119,20 @@ export function selectCandidates(
   const candidates: Candidate[] = scored
     .filter((o) => Number.isFinite(o.healthRatio) && Number.isFinite(o.borrowValueUsd))
     .map((o) => {
-      const distance = Math.max(0, o.healthRatio - 1);
-      const urgency = o.liquidationEligible ? 1e6 : 1 / (distance + 0.001);
+      const distToThreshold = Math.abs(o.healthRatio - 1);
+      const depthBelow = Math.max(0, 1 - o.healthRatio);
+      // Liquidatable: urgency increases with depth below 1 (deeper = more profitable/urgent)
+      // Non-liquidatable: urgency increases as HR approaches 1 from above
+      const urgency = o.liquidationEligible
+        ? 1e6 * (depthBelow + 0.001)
+        : 1 / (Math.max(0, o.healthRatio - 1) + 0.001);
       const size = Math.log10(Math.max(10, o.borrowValueUsd));
       const priorityScore = urgency * size;
       const predictedLiquidatableSoon = !o.liquidationEligible && o.healthRatio <= near;
 
       return {
         ...o,
-        distanceToLiquidation: distance,
+        distanceToLiquidation: distToThreshold,
         priorityScore,
         predictedLiquidatableSoon,
         // priceMoveToLiquidationPct can be populated downstream when mint info is available (optional for PR8)

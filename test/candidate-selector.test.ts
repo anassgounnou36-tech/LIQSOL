@@ -71,9 +71,9 @@ describe("PR8 Candidate Selector", () => {
     const test1 = candidates.find((c) => c.obligationPubkey === "test1");
     expect(test1?.distanceToLiquidation).toBeCloseTo(0.05, 2);
 
-    // Distance for HR=0.95 (liquidatable) should be 0
+    // Distance for HR=0.95 (liquidatable) should be 0.05 (absolute distance to threshold)
     const test2 = candidates.find((c) => c.obligationPubkey === "test2");
-    expect(test2?.distanceToLiquidation).toBe(0);
+    expect(test2?.distanceToLiquidation).toBeCloseTo(0.05, 2);
   });
 
   it("should mark accounts near threshold as predicted liquidatable soon", () => {

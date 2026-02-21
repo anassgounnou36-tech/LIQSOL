@@ -145,31 +145,41 @@ function exchangeRateUiFromReserve(reserve: ReserveCacheEntry): number | null {
 }
 
 /**
- * Convert borrowedAmountSf (scaled fraction) to UI units using bigint-safe math
- * 
- * borrowedAmountSf is already scaled by 1e18 (WAD). To convert to tokens:
- * 1. Divide by 1e18 to get raw token amount
- * 2. Normalize by liquidity decimals to get UI units
- * 
- * Returns 0 for invalid/missing values
+ * Convert borrowedAmountSf (scaled fraction) to UI units using bigint-safe math,
+ * applying the reserve's cumulativeBorrowRateBsf to account for interest accrual.
+ *
+ * borrowedAmountSf is a principal stored as principal_raw * WAD.
+ * cumulativeBorrowRateBsfRaw is the growth factor stored as rate * WAD.
+ *
+ * Formula (per Kamino interest math):
+ *   borrowBaseRaw = borrowedAmountSfRaw * cumulativeBorrowRateBsfRaw / WAD / WAD
+ *
+ * When cumulativeBorrowRateBsfRaw = WAD (1e18) there is no accrued interest and
+ * the result equals the previous borrowedAmountSfRaw / WAD behaviour.
+ *
+ * Returns 0 for invalid/missing values.
  */
 function convertBorrowSfToUi(
   borrowedAmountSf: string | undefined | null,
-  liquidityDecimals: number
+  liquidityDecimals: number,
+  cumulativeBorrowRateBsfRaw: bigint
 ): number {
   if (!borrowedAmountSf) return 0;
-  
+
   try {
     const borrowedSf = BigInt(borrowedAmountSf);
     if (borrowedSf < 0n) return 0;
-    
-    // Convert SF to raw tokens: divide by 1e18
-    const borrowedTokensRaw = borrowedSf / (10n ** 18n);
-    
+
+    const WAD = 10n ** 18n;
+
+    // Apply cumulative borrow rate to account for interest accrual:
+    //   borrowBaseRaw = borrowedAmountSfRaw * cumulativeBorrowRateBsfRaw / WAD / WAD
+    const borrowedTokensRaw = (borrowedSf * cumulativeBorrowRateBsfRaw) / WAD / WAD;
+
     // Normalize by liquidity decimals to get UI units
     const liquidityScale = 10n ** BigInt(liquidityDecimals);
     const borrowedUi = divBigintToNumber(borrowedTokensRaw, liquidityScale, liquidityDecimals);
-    
+
     return Number.isFinite(borrowedUi) && borrowedUi >= 0 ? borrowedUi : 0;
   } catch {
     return 0;
@@ -435,10 +445,11 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Convert SF to UI units using safe helper
+    // Convert SF to UI units using safe helper, applying cumulative borrow rate for interest accrual
     const borrowUi = convertBorrowSfToUi(
       borrow.borrowedAmount,
-      reserve.liquidityDecimals
+      reserve.liquidityDecimals,
+      reserve.cumulativeBorrowRateBsfRaw
     );
     
     if (!Number.isFinite(borrowUi)) {

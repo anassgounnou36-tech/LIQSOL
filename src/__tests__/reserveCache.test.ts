@@ -778,4 +778,85 @@ describe("Reserve Cache Tests", () => {
       expect(decoder.setReserveMintCache).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe("exchange rate with cumulativeBorrowRateBsfRaw", () => {
+    it("should produce a lower exchange rate (more underlying per share) when cumulativeBorrowRateBsfRaw is higher", async () => {
+      // Scenario:
+      //   availableAmountRaw = 0 (no available liquidity)
+      //   borrowedAmountSfRaw = 1000 * 1e6 * 1e18  (1000 USDC as SF)
+      //   collateralMintTotalSupplyRaw = 1000 * 1e6  (1000 collateral tokens)
+      //
+      // With rate = 1e18 (no accrual):
+      //   borrowRaw = 1000e6*1e18 * 1e18 / 1e18 / 1e18 = 1000e6
+      //   totalLiquidity = 0 + 1000e6 = 1000e6 tokens
+      //   exchange rate = collateralSupply / totalLiquidity = 1000e6 / 1000e6 = 1.0
+      //
+      // With rate = 1.05e18 (5% interest accrued):
+      //   borrowRaw = 1000e6*1e18 * 1.05e18 / 1e18 / 1e18 = 1050e6
+      //   totalLiquidity = 0 + 1050e6 = 1050e6 tokens
+      //   exchange rate = 1000e6 / 1050e6 ≈ 0.952   (fewer collateral tokens per underlying)
+
+      const reservePubkey = new PublicKey("d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q");
+
+      mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
+        { pubkey: reservePubkey, account: {} },
+      ]);
+
+      const makeReserve = (cumulativeRate: string) => ({
+        reservePubkey: reservePubkey.toString(),
+        marketPubkey: marketPubkey.toString(),
+        liquidityMint: USDC_MINT,
+        collateralMint: "collateral-usdc",
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [],
+        loanToValueRatio: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        availableAmountRaw: "0",
+        borrowedAmountSfRaw: "1000000000000000000000000000", // 1000 * 1e6 * 1e18 = 10^27
+        cumulativeBorrowRateBsfRaw: cumulativeRate,
+        collateralMintTotalSupplyRaw: "1000000000", // 1000 * 1e6
+        scopePriceChain: null,
+      });
+
+      // Rate = 1e18 (no accrual)
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: Buffer.alloc(100) },
+      ]);
+      vi.spyOn(discriminator, "anchorDiscriminator").mockReturnValue(Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]));
+      vi.spyOn(decoder, "decodeReserve").mockReturnValue(makeReserve("1000000000000000000"));
+      vi.spyOn(decoder, "setReserveMintCache");
+
+      const cacheBase = await loadReserves(mockConnection, marketPubkey);
+      const entryBase = cacheBase.byMint.get(USDC_MINT)!;
+      expect(entryBase).toBeDefined();
+      const rateBase = entryBase.collateralExchangeRateUi;
+      expect(rateBase).toBeCloseTo(1.0, 5);
+
+      // Rate = 1.05e18 (5% interest accrued) → exchange rate should be lower
+      vi.clearAllMocks();
+      mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
+        { pubkey: reservePubkey, account: {} },
+      ]);
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: Buffer.alloc(100) },
+      ]);
+      vi.spyOn(discriminator, "anchorDiscriminator").mockReturnValue(Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]));
+      vi.spyOn(decoder, "decodeReserve").mockReturnValue(makeReserve("1050000000000000000"));
+      vi.spyOn(decoder, "setReserveMintCache");
+
+      const cacheAccrued = await loadReserves(mockConnection, marketPubkey);
+      const entryAccrued = cacheAccrued.byMint.get(USDC_MINT)!;
+      expect(entryAccrued).toBeDefined();
+      const rateAccrued = entryAccrued.collateralExchangeRateUi;
+
+      // Exchange rate should be lower when more interest has accrued:
+      // rate = collateralSupply / totalLiquidity, so more accrued interest → larger
+      // totalLiquidity → smaller ratio (each collateral token represents more underlying value)
+      expect(rateAccrued).toBeCloseTo(1000 / 1050, 4);
+      expect(rateAccrued).toBeLessThan(rateBase);
+    });
+  });
 });

@@ -433,6 +433,82 @@ describe("Health Ratio and Liquidation", () => {
       expect(scored.borrowValue).toBe(0);
       expect(scored.healthRatio).toBe(2.0); // No debt = max health
     });
+
+    it("should apply cumulativeBorrowRateBsfRaw > 1e18 to increase borrow UI and USD", () => {
+      // Demonstrate that when cumulativeBorrowRateBsfRaw = 1.05e18 (5% interest accrued),
+      // the resulting borrow amount is 5% higher than with no accrual (rate = 1e18).
+      const WAD = 1000000000000000000n; // 1e18
+      const rate105 = (WAD * 105n) / 100n; // 1.05 × 1e18
+
+      const makeReserves = (rate: bigint): Map<string, ReserveCacheEntry> =>
+        new Map([
+          [
+            "USDC",
+            {
+              reservePubkey: PublicKey.unique(),
+              liquidityMint: "USDC",
+              availableAmount: 1000000n,
+              loanToValue: 90,
+              liquidationThreshold: 95,
+              liquidationBonus: 500,
+              borrowFactor: 100,
+              oraclePubkeys: [PublicKey.unique()],
+              liquidityDecimals: 6,
+              collateralDecimals: 6,
+              cumulativeBorrowRate: 0n,
+              cumulativeBorrowRateBsfRaw: rate,
+              collateralMint: "mock-collateral-mint",
+              collateralExchangeRateUi: 1.0,
+              scopePriceChain: null,
+            },
+          ],
+        ]);
+
+      const prices: OracleCache = new Map([
+        [
+          "USDC",
+          {
+            price: 100000000n, // $1 with exponent -8
+            confidence: 0n,
+            slot: 1000000n,
+            exponent: -8,
+            oracleType: "pyth",
+          },
+        ],
+      ]);
+
+      // 100 USDC borrow in SF units (100 * 10^6 * 10^18)
+      const borrows: ObligationBorrow[] = [
+        {
+          reserve: "reserve1",
+          mint: "USDC",
+          borrowedAmount: "100000000000000000000000000",
+        },
+      ];
+
+      // With rate = 1e18 (no accrual): 100 USDC borrow
+      const resultBase = computeHealthRatio({
+        deposits: [],
+        borrows,
+        reserves: makeReserves(WAD),
+        prices,
+      });
+
+      // With rate = 1.05e18 (5% accrual): 105 USDC borrow
+      const resultAccrued = computeHealthRatio({
+        deposits: [],
+        borrows,
+        reserves: makeReserves(rate105),
+        prices,
+      });
+
+      const base = expectScored(resultBase);
+      const accrued = expectScored(resultAccrued);
+
+      // Accrued borrow should be ~5% higher
+      expect(accrued.totalBorrowUsd).toBeCloseTo(base.totalBorrowUsd * 1.05, 1);
+      expect(accrued.borrowValue).toBeCloseTo(base.borrowValue * 1.05, 1);
+    });
   });
 
   describe("isLiquidatable", () => {
