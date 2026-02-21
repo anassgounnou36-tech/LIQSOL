@@ -136,6 +136,7 @@ async function main() {
       bootstrapBatchSize: 100,
       bootstrapConcurrency: 5, // Higher concurrency for batch scoring
     });
+    indexer.setCurrentSlotHint(currentSlot);
 
     // Load snapshot and bootstrap (this will populate cache with scored obligations)
     logger.info("Loading obligation snapshot and computing health scores...");
@@ -271,6 +272,8 @@ async function main() {
         totalBorrowUsdAdjProtocol: o.totalBorrowUsdAdjProtocol,
         totalCollateralUsdAdjProtocol: o.totalCollateralUsdAdjProtocol,
         lastUpdateSlot: o.lastUpdateSlot,
+        slotLag: o.slotLag,
+        hybridDisabledReason: o.hybridDisabledReason,
       };
     });
 
@@ -466,18 +469,10 @@ async function main() {
           console.log(`    HR(hybrid):                   ${(cAny.healthRatioHybrid ?? 0).toFixed(6)}`);
           console.log(`    HR(hybrid raw):               ${(cAny.healthRatioHybridRaw ?? 0).toFixed(6)}`);
           console.log(`    Obligation lastUpdateSlot:    ${c.lastUpdateSlot ?? 'n/a'}`);
-          if (c.lastUpdateSlot) {
-            try {
-              const slotLag = BigInt(currentSlot) - BigInt(c.lastUpdateSlot);
-              console.log(`    Slot lag:                     ${slotLag.toString()}`);
-              if (slotLag > 10_000n) {
-                console.log(`    NOTE: obligation SF values likely stale; protocol HR may differ after refresh`);
-              }
-            } catch {
-              console.log(`    Slot lag:                     n/a`);
-            }
-          } else {
-            console.log(`    Slot lag:                     n/a`);
+          console.log(`    slotLag:                      ${cAny.slotLag ?? 'n/a'}`);
+          if (cAny.hybridDisabledReason) {
+            console.log(`    hybridDisabledReason:         ${cAny.hybridDisabledReason}`);
+            console.log(`    NOTE: hybrid disabled; using pure recomputed forecast due to stale SF`);
           }
 
           if ((cAny.healthRatioDiff ?? 0) > 0.05) {
