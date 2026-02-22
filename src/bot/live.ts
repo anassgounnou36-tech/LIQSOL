@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { PublicKey } from '@solana/web3.js';
+import { pathToFileURL } from 'url';
 import { loadEnv } from '../config/env.js';
 import { logger } from '../observability/logger.js';
 import { runInitialPipeline } from '../pipeline/runInitialPipeline.js';
@@ -202,10 +203,13 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  console.error('[Live] FATAL ERROR:', err instanceof Error ? err.message : String(err));
-  if (err instanceof Error && err.stack) {
-    console.error('[Live] Stack:', err.stack);
-  }
-  process.exit(1);
-});
+const isDirectRun =
+  process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error('[Live] FATAL ERROR:', err instanceof Error ? err.message : String(err));
+    if (err instanceof Error && err.stack) console.error('[Live] Stack:', err.stack);
+    process.exit(1);
+  });
+}
