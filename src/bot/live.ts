@@ -1,11 +1,8 @@
 #!/usr/bin/env node
-import fs from 'fs';
-import path from 'path';
 import { PublicKey } from '@solana/web3.js';
 import { loadEnv } from '../config/env.js';
 import { logger } from '../observability/logger.js';
-import { buildCandidates } from '../pipeline/buildCandidates.js';
-import { buildQueue } from '../pipeline/buildQueue.js';
+import { runInitialPipeline } from '../pipeline/runInitialPipeline.js';
 import { startBotStartupScheduler, reloadWatchlistFromQueue } from '../scheduler/botStartupScheduler.js';
 import { SOL_MINT, USDC_MINT } from '../constants/mints.js';
 
@@ -29,7 +26,10 @@ import { SOL_MINT, USDC_MINT } from '../constants/mints.js';
  *   - LIQSOL_BROADCAST: Set to 'true' for live broadcasting
  */
 
-async function main() {
+export async function startIntegratedLiveRunner(opts: {
+  broadcast: boolean;
+  refreshIntervalMs: number;
+}): Promise<void> {
   console.log('╔════════════════════════════════════════════════╗');
   console.log('║  LIQSOL Bot - Professional Live Runner        ║');
   console.log('║  Integrated Candidate + Queue + Executor      ║');
@@ -56,17 +56,6 @@ async function main() {
     process.exit(1);
   }
 
-  // Check if obligations.jsonl exists
-  const obligationsPath = path.join(process.cwd(), 'data', 'obligations.jsonl');
-  if (!fs.existsSync(obligationsPath)) {
-    console.error('❌ ERROR: data/obligations.jsonl not found');
-    console.error('');
-    console.error('The live runner requires an obligation snapshot to build candidates.');
-    console.error('Please run: npm run snapshot:obligations:wsl');
-    console.error('');
-    process.exit(1);
-  }
-
   // Display configuration
   console.log('Configuration:');
   console.log(`  RPC Endpoint: ${env.RPC_PRIMARY}`);
@@ -75,7 +64,7 @@ async function main() {
   console.log(`  Yellowstone gRPC: ${env.YELLOWSTONE_GRPC_URL}`);
 
   // Parse broadcast mode
-  const broadcast = process.env.LIQSOL_BROADCAST === 'true';
+  const broadcast = opts.broadcast;
   console.log(`  Mode: ${broadcast ? 'BROADCAST (LIVE) 🔴' : 'DRY-RUN (SAFE)'}`);
 
   if (!broadcast) {
@@ -105,7 +94,7 @@ async function main() {
   }
 
   // Parse refresh interval
-  const refreshIntervalMs = Number(env.LIVE_CANDIDATE_REFRESH_INTERVAL_MS) || 120_000;
+  const refreshIntervalMs = opts.refreshIntervalMs;
   console.log(`  Candidate Refresh: ${(refreshIntervalMs / 1000).toFixed(0)}s\n`);
 
   // Set executor mode via env for scheduler
@@ -121,17 +110,12 @@ async function main() {
   console.log('[Live] Building initial candidates and queue...\n');
 
   try {
-    // Build candidates from obligations.jsonl
-    await buildCandidates({
+    await runInitialPipeline({
       marketPubkey,
       programId,
       allowlistMints: allowlistMints.length > 0 ? allowlistMints : undefined,
       topN: Number(env.CAND_TOP ?? 50),
       nearThreshold: Number(env.CAND_NEAR ?? 1.02),
-    });
-
-    // Build queue from candidates.json (uses replace mode by default)
-    await buildQueue({
       flashloanMint: 'USDC',
     });
 
@@ -174,17 +158,12 @@ async function main() {
     console.log('[Live] ═══ PERIODIC REFRESH START ═══');
 
     try {
-      // Rebuild candidates from obligations.jsonl
-      await buildCandidates({
+      await runInitialPipeline({
         marketPubkey,
         programId,
         allowlistMints: allowlistMints.length > 0 ? allowlistMints : undefined,
         topN: Number(env.CAND_TOP ?? 50),
         nearThreshold: Number(env.CAND_NEAR ?? 1.02),
-      });
-
-      // Rebuild queue from candidates.json (uses replace mode by default)
-      await buildQueue({
         flashloanMint: 'USDC',
       });
 
@@ -212,6 +191,14 @@ async function main() {
   process.on('SIGTERM', () => {
     console.log('\n[Live] Shutting down gracefully...');
     process.exit(0);
+  });
+}
+
+async function main() {
+  const env = loadEnv();
+  await startIntegratedLiveRunner({
+    broadcast: process.env.LIQSOL_BROADCAST === 'true',
+    refreshIntervalMs: Number(env.LIVE_CANDIDATE_REFRESH_INTERVAL_MS ?? 120000),
   });
 }
 

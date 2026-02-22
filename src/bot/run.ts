@@ -1,4 +1,4 @@
-import { startBotStartupScheduler } from '../scheduler/botStartupScheduler.js';
+import { startIntegratedLiveRunner } from './live.js';
 import { loadEnv } from '../config/env.js';
 import { logger } from '../observability/logger.js';
 
@@ -67,8 +67,11 @@ async function main() {
   
   console.log('\n[Bot] Starting bot with scheduler and listeners...\n');
   
-  // Start the scheduler (which includes Yellowstone listeners and executor loop)
-  await startBotStartupScheduler();
+  // Start integrated live runner (snapshot + candidates + queue + scheduler/listeners)
+  await startIntegratedLiveRunner({
+    broadcast: opts.broadcast ?? false,
+    refreshIntervalMs: Number(process.env.LIVE_CANDIDATE_REFRESH_INTERVAL_MS ?? 120000),
+  });
   
   logger.info('Bot running - press Ctrl+C to stop');
   
