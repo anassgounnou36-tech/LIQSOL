@@ -203,8 +203,8 @@ const isDirectRun =
 
 if (isDirectRun) {
   main().catch((err) => {
-    console.error('[Live] FATAL ERROR:', err instanceof Error ? err.message : String(err));
-    if (err instanceof Error && err.stack) console.error('[Live] Stack:', err.stack);
+    console.error("[SnapshotObligations] FATAL ERROR:", err instanceof Error ? err.message : String(err));
+    if (err instanceof Error && err.stack) console.error("[SnapshotObligations] Stack:", err.stack);
     process.exit(1);
   });
 }
