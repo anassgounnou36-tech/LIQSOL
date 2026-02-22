@@ -16,12 +16,12 @@ describe('Compiled Instruction Validation', () => {
     const { KAMINO_DISCRIMINATORS } = await import('../src/execute/decodeKaminoKindFromCompiled.js');
     
     expect(KAMINO_DISCRIMINATORS).toBeDefined();
-    expect(KAMINO_DISCRIMINATORS.refreshReserve).toBe('07930aa66d3aa710');
-    expect(KAMINO_DISCRIMINATORS.refreshObligation).toBe('a8e5e45f8c4c29c0');
-    expect(KAMINO_DISCRIMINATORS.liquidateObligationAndRedeemReserveCollateral).toBe('d88378ff5e9e5028');
-    expect(KAMINO_DISCRIMINATORS.refreshObligationFarmsForReserve).toBe('d79cf84dbd8fe9e2');
-    expect(KAMINO_DISCRIMINATORS.flashBorrowReserveLiquidity).toBe('d60e1307b8c6ef35');
-    expect(KAMINO_DISCRIMINATORS.flashRepayReserveLiquidity).toBe('f69c6e18b02e3e8d');
+    expect(KAMINO_DISCRIMINATORS.refreshReserve).toBe('02da8aeb4fc91966');
+    expect(KAMINO_DISCRIMINATORS.refreshObligation).toBe('218493e497c04859');
+    expect(KAMINO_DISCRIMINATORS.liquidateObligationAndRedeemReserveCollateral).toBe('b1479abce2854a37');
+    expect(KAMINO_DISCRIMINATORS.refreshObligationFarmsForReserve).toBe('8c90fd150a4af803');
+    expect(KAMINO_DISCRIMINATORS.flashBorrowReserveLiquidity).toBe('87e734a70734d4c1');
+    expect(KAMINO_DISCRIMINATORS.flashRepayReserveLiquidity).toBe('b97500cb60f5b4ba');
   });
   
   it('should have decodeInstructionKind function', async () => {
@@ -37,13 +37,13 @@ describe('Compiled Instruction Validation', () => {
     // Test refresh reserve
     expect(decodeInstructionKind(
       KNOWN_PROGRAM_IDS.KAMINO_KLEND,
-      '07930aa66d3aa710'
+      '02da8aeb4fc91966'
     )).toBe('refreshReserve');
     
     // Test liquidation
     expect(decodeInstructionKind(
       KNOWN_PROGRAM_IDS.KAMINO_KLEND,
-      'd88378ff5e9e5028'
+      'b1479abce2854a37'
     )).toBe('liquidateObligationAndRedeemReserveCollateral');
     
     // Test unknown Kamino instruction
@@ -97,7 +97,7 @@ describe('Compiled Instruction Validation', () => {
     
     expect(KLEND_PROGRAM_ID).toBeDefined();
     expect(KLEND_PROGRAM_ID.toBase58()).toBe('KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
-    expect(LIQUIDATE_V1_DISCRIMINATOR).toBe('d88378ff5e9e5028');
+    expect(LIQUIDATE_V1_DISCRIMINATOR).toBe('b1479abce2854a37');
   });
   
   it('should verify validation returns proper result structure', async () => {
