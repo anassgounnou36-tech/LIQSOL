@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { writeFileSync, mkdirSync, renameSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { execSync } from "child_process";
+import { pathToFileURL } from "url";
 import bs58 from "bs58";
 import { getConnection } from "../solana/connection.js";
 import { loadReadonlyEnv } from "../config/env.js";
@@ -55,12 +56,18 @@ export async function snapshotObligationPubkeysToFile(opts: {
   // Filter: Match Obligation discriminator at offset 0
   // Note: Use base58 encoding for memcmp filter (base64 fails for RPC)
   // Note: No dataSize filter - Kamino V2 obligations are ~1300+ bytes (not 410)
-  // Relying on discriminator alone is sufficient and version-independent
+  // Use discriminator + market filters for precise market-specific snapshots
   const filters = [
     {
       memcmp: {
         offset: 0,
         bytes: bs58.encode(obligationDiscriminator),
+      },
+    },
+    {
+      memcmp: {
+        offset: 32, // 8(discriminator) + 8(tag) + 16(lastUpdate)
+        bytes: marketPubkey.toBase58(),
       },
     },
   ];
@@ -78,7 +85,7 @@ export async function snapshotObligationPubkeysToFile(opts: {
 
   logger.info({ total: rawAccounts.length }, "Fetched obligation pubkeys");
 
-  // Collect pubkeys (discriminator filter already applied, no need for market filter)
+  // Collect pubkeys (discriminator + market filters already applied)
   const obligationPubkeys: string[] = rawAccounts.map(ra => ra.pubkey.toString());
 
   logger.info({ count: obligationPubkeys.length }, "Collected obligation pubkeys");
@@ -191,7 +198,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  logger.fatal({ err }, "Fatal error");
-  process.exit(1);
-});
+const isDirectRun =
+  process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error('[Live] FATAL ERROR:', err instanceof Error ? err.message : String(err));
+    if (err instanceof Error && err.stack) console.error('[Live] Stack:', err.stack);
+    process.exit(1);
+  });
+}
