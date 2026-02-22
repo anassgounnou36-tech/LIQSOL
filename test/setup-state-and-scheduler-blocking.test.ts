@@ -45,4 +45,29 @@ describe('setup state + blocked-plan downgrade', () => {
     expect(updated[0]?.ttlStr).toBe('blocked-insufficient-rent');
     expect(updated[0]?.liquidationEligible).toBe(false);
   });
+
+  it('downgrades blocked plan with custom blocked reason in ttlStr', async () => {
+    const plan: FlashloanPlan = {
+      planVersion: 2,
+      key: 'plan-3',
+      obligationPubkey: 'obligation-pubkey-3',
+      mint: 'USDC',
+      amountUsd: 100,
+      repayMint: 'repay-mint',
+      collateralMint: 'collateral-mint',
+      repayReservePubkey: 'repay-reserve',
+      collateralReservePubkey: 'collateral-reserve',
+      ev: 1,
+      hazard: 0.2,
+      ttlMin: 1,
+      createdAtMs: Date.now(),
+      liquidationEligible: true,
+    };
+    saveQueue([plan]);
+    await downgradeBlockedPlan('plan-3', 'obligation-market-mismatch');
+    const updated = loadQueue();
+    expect(updated[0]?.ttlMin).toBe(999999);
+    expect(updated[0]?.ttlStr).toBe('obligation-market-mismatch');
+    expect(updated[0]?.liquidationEligible).toBe(false);
+  });
 });

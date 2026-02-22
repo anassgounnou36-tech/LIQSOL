@@ -125,6 +125,8 @@ export class LiveObligationIndexer {
   // Stats tracking
   private stats = {
     skippedOtherMarketsCount: 0,
+    skippedOtherMarketBootstrap: 0,
+    skippedOtherMarketUpdates: 0,
     emptyObligations: 0,
     unscoredCount: 0,
     unscoredReasons: {} as Record<string, number>,
@@ -253,6 +255,7 @@ export class LiveObligationIndexer {
     let successCount = 0;
     let missingCount = 0;
     let failedCount = 0;
+    let skippedOtherMarketBootstrap = 0;
 
     // Process batches with limited concurrency
     for (let i = 0; i < batches.length; i += this.config.bootstrapConcurrency) {
@@ -276,6 +279,13 @@ export class LiveObligationIndexer {
 
               try {
                 const decoded = decodeObligation(Buffer.from(account.data), pubkey);
+                if (this.config.marketPubkey) {
+                  const expected = this.config.marketPubkey.toBase58();
+                  if (decoded.marketPubkey !== expected) {
+                    skippedOtherMarketBootstrap++;
+                    continue;
+                  }
+                }
                 const pubkeyStr = pubkey.toString();
                 
                 // Compute health scoring if caches are available
@@ -317,6 +327,8 @@ export class LiveObligationIndexer {
       },
       "RPC bootstrap completed"
     );
+    this.stats.skippedOtherMarketBootstrap += skippedOtherMarketBootstrap;
+    logger.info({ skippedOtherMarketBootstrap }, "Bootstrap market filter stats");
   }
 
   /**
@@ -711,6 +723,13 @@ export class LiveObligationIndexer {
     try {
       // Decode the obligation account
       const decoded = decodeObligation(accountData, pubkey);
+      if (this.config.marketPubkey) {
+        const expected = this.config.marketPubkey.toBase58();
+        if (decoded.marketPubkey !== expected) {
+          this.stats.skippedOtherMarketUpdates++;
+          return;
+        }
+      }
       
       // Update cache only if this is newer data (higher slot) or same slot but newer timestamp
       const existing = this.cache.get(pubkeyStr);
@@ -1072,6 +1091,8 @@ export class LiveObligationIndexer {
     scoredCount: number;
     liquidatableCount: number;
     skippedOtherMarketsCount: number;
+    skippedOtherMarketBootstrap: number;
+    skippedOtherMarketUpdates: number;
     emptyObligations: number;
     unscoredCount: number;
     unscoredReasons: Record<string, number>;
@@ -1100,6 +1121,8 @@ export class LiveObligationIndexer {
       scoredCount,
       liquidatableCount,
       skippedOtherMarketsCount: this.stats.skippedOtherMarketsCount,
+      skippedOtherMarketBootstrap: this.stats.skippedOtherMarketBootstrap,
+      skippedOtherMarketUpdates: this.stats.skippedOtherMarketUpdates,
       emptyObligations: this.stats.emptyObligations,
       unscoredCount: this.stats.unscoredCount,
       unscoredReasons: this.stats.unscoredReasons,

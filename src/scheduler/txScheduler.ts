@@ -50,7 +50,7 @@ export async function dropPlanFromQueue(planKey: string): Promise<void> {
   await writeJsonAtomic(QUEUE_PATH, filtered);
 }
 
-export async function downgradeBlockedPlan(planKey: string): Promise<void> {
+export async function downgradeBlockedPlan(planKey: string, blockedReason = 'blocked-insufficient-rent'): Promise<void> {
   const q = loadQueue();
   let updated = false;
   const downgraded = q.map(plan => {
@@ -59,7 +59,7 @@ export async function downgradeBlockedPlan(planKey: string): Promise<void> {
     return {
       ...plan,
       ttlMin: 999999,
-      ttlStr: 'blocked-insufficient-rent',
+      ttlStr: blockedReason,
       liquidationEligible: false,
     };
   });

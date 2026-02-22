@@ -160,6 +160,14 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   if (!obligation) {
     throw new Error(`Failed to load obligation: ${p.obligationPubkey.toBase58()}`);
   }
+
+  const obligationMarket = obligation.state.lendingMarket.toString();
+  const expectedMarket = p.marketPubkey.toBase58();
+  if (obligationMarket !== expectedMarket) {
+    throw new Error(
+      `[LiqBuilder] Obligation market mismatch: obligationMarket=${obligationMarket} expectedMarket=${expectedMarket} obligation=${p.obligationPubkey.toBase58()}`
+    );
+  }
   
   // 2) Select repay reserve from obligation borrows
   // PR: Strategy - prioritize expected reserve pubkey (deterministic), fallback to preference or highest USD

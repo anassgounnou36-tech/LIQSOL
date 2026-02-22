@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PublicKey } from '@solana/web3.js';
 import { runInitialPipeline } from '../pipeline/runInitialPipeline.js';
 import * as snapshotModule from '../commands/snapshotObligations.js';
@@ -31,10 +31,15 @@ vi.mock('../pipeline/buildQueue.js', () => ({
 describe('runInitialPipeline', () => {
   const marketPubkey = new PublicKey('ByYiM4A4wW8fQ5h6pw4QmMkPY7Xx8SFEY7XhMThjX7kY');
   const programId = new PublicKey('KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
+  const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
 
   beforeEach(() => {
     vi.clearAllMocks();
     existsSyncMock.mockReturnValue(true);
+  });
+
+  afterAll(() => {
+    infoSpy.mockRestore();
   });
 
   it('creates obligations snapshot when missing, then builds candidates and queue in replace mode', async () => {
@@ -65,6 +70,7 @@ describe('runInitialPipeline', () => {
       flashloanMint: 'USDC',
       mode: 'replace',
     });
+    expect(infoSpy).not.toHaveBeenCalled();
   });
 
   it('skips snapshot creation when obligations snapshot already exists', async () => {
@@ -82,5 +88,8 @@ describe('runInitialPipeline', () => {
       flashloanMint: 'SOL',
       mode: 'replace',
     });
+    expect(infoSpy).toHaveBeenCalledWith(
+      'INFO: Using existing obligations snapshot at data/obligations.jsonl. If you see refresh_obligation 6006 errors, regenerate snapshot via npm run snapshot:obligations.'
+    );
   });
 });

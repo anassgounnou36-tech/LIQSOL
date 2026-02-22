@@ -602,6 +602,13 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     metadata = result.metadata;
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes('[LiqBuilder] Obligation market mismatch:')) {
+      const planKey = String(target.key);
+      markBlocked(planKey, 'obligation-market-mismatch');
+      await downgradeBlockedPlan(planKey, 'obligation-market-mismatch');
+      console.log(`[Executor] blockedReason: "obligation-market-mismatch" planKey=${planKey}`);
+      return { status: 'blocked-obligation-market-mismatch', planKey };
+    }
     
     // Check if it's OBLIGATION_HEALTHY error from buildFullTransaction
     if (errMsg === 'OBLIGATION_HEALTHY') {

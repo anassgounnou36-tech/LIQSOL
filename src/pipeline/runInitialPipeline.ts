@@ -20,6 +20,10 @@ export async function runInitialPipeline(opts: {
       programId: opts.programId,
       outputPath: obligationsPath,
     });
+  } else {
+    console.info(
+      'INFO: Using existing obligations snapshot at data/obligations.jsonl. If you see refresh_obligation 6006 errors, regenerate snapshot via npm run snapshot:obligations.'
+    );
   }
 
   await buildCandidates({
