@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { PublicKey } from "@solana/web3.js";
 import { writeFileSync, mkdirSync, renameSync } from "fs";
-import { join } from "path";
+import { dirname, join, resolve } from "path";
 import { execSync } from "child_process";
 import bs58 from "bs58";
 import { getConnection } from "../solana/connection.js";
@@ -22,6 +22,109 @@ import { checkYellowstoneNativeBinding } from "../yellowstone/preflight.js";
  * 
  * Outputs obligation pubkeys (one per line) to data/obligations.jsonl
  */
+
+export async function snapshotObligationPubkeysToFile(opts: {
+  marketPubkey: PublicKey;
+  programId: PublicKey;
+  outputPath: string;
+}): Promise<void> {
+  const { marketPubkey, programId, outputPath } = opts;
+  logger.info(
+    { market: marketPubkey.toString(), program: programId.toString(), outputPath },
+    "Starting obligation snapshot via Solana RPC..."
+  );
+
+  // Calculate discriminator for Obligation account
+  const obligationDiscriminator = anchorDiscriminator("Obligation");
+  
+  logger.info(
+    { discriminator: obligationDiscriminator.toString("hex") },
+    "Using Obligation discriminator"
+  );
+
+  // Initialize Solana RPC connection
+  // Note: Previously used 'finalized' commitment. Now using centralized connection
+  // which uses 'confirmed' for consistency. This provides good balance between
+  // speed and reliability across all commands.
+  const connection = getConnection();
+  
+  const env = loadReadonlyEnv();
+  logger.info({ rpcUrl: env.RPC_PRIMARY }, "Connected to Solana RPC");
+
+  // Define filters for getProgramAccounts
+  // Filter: Match Obligation discriminator at offset 0
+  // Note: Use base58 encoding for memcmp filter (base64 fails for RPC)
+  // Note: No dataSize filter - Kamino V2 obligations are ~1300+ bytes (not 410)
+  // Relying on discriminator alone is sufficient and version-independent
+  const filters = [
+    {
+      memcmp: {
+        offset: 0,
+        bytes: bs58.encode(obligationDiscriminator),
+      },
+    },
+  ];
+
+  // Fetch all matching accounts via RPC
+  // Use dataSlice to prevent massive response (only get pubkeys, not account data)
+  // Note: length: 1 (not 0) for compatibility with all RPC nodes
+  logger.info("Fetching obligation pubkeys via getProgramAccounts...");
+  
+  const rawAccounts = await connection.getProgramAccounts(programId, {
+    filters,
+    encoding: "base64",
+    dataSlice: { offset: 0, length: 1 }, // Only return pubkeys + metadata, not account data
+  });
+
+  logger.info({ total: rawAccounts.length }, "Fetched obligation pubkeys");
+
+  // Collect pubkeys (discriminator filter already applied, no need for market filter)
+  const obligationPubkeys: string[] = rawAccounts.map(ra => ra.pubkey.toString());
+
+  logger.info({ count: obligationPubkeys.length }, "Collected obligation pubkeys");
+
+  // Validate minimum expected obligations (fail fast on configuration errors)
+  const MIN_EXPECTED_OBLIGATIONS = 50;
+  if (obligationPubkeys.length < MIN_EXPECTED_OBLIGATIONS) {
+    throw new Error(
+      `Snapshot returned only ${obligationPubkeys.length} obligations (expected at least ${MIN_EXPECTED_OBLIGATIONS}). ` +
+      `Likely bad filters or incorrect program ID. Check RPC endpoint, discriminator, and program ID.`
+    );
+  }
+
+  // Ensure output directory exists
+  const resolvedOutputPath = resolve(outputPath);
+  mkdirSync(dirname(resolvedOutputPath), { recursive: true });
+  const tempPath = `${resolvedOutputPath}.tmp.${Date.now()}`;
+
+  // Write one pubkey per line
+  const content = obligationPubkeys.join("\n") + "\n";
+  writeFileSync(tempPath, content, "utf-8");
+
+  // Atomic rename
+  renameSync(tempPath, resolvedOutputPath);
+
+  logger.info(
+    { outputPath: resolvedOutputPath, count: obligationPubkeys.length },
+    "Snapshot complete"
+  );
+
+  // Validate output
+  const isValid = obligationPubkeys.every(pubkey => {
+    try {
+      new PublicKey(pubkey);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  if (!isValid) {
+    throw new Error("Output contains invalid pubkeys");
+  }
+
+  logger.info("All pubkeys validated as valid base58");
+}
 
 async function main() {
   // Preflight: Check Yellowstone native binding availability for WSL fallback only
@@ -76,109 +179,12 @@ async function main() {
     process.exit(1);
   }
 
-  logger.info(
-    { market: marketPubkey.toString(), program: programId.toString() },
-    "Starting obligation snapshot via Solana RPC..."
-  );
-
-  // Calculate discriminator for Obligation account
-  const obligationDiscriminator = anchorDiscriminator("Obligation");
-  
-  logger.info(
-    { discriminator: obligationDiscriminator.toString("hex") },
-    "Using Obligation discriminator"
-  );
-
   try {
-    // Initialize Solana RPC connection
-    // Note: Previously used 'finalized' commitment. Now using centralized connection
-    // which uses 'confirmed' for consistency. This provides good balance between
-    // speed and reliability across all commands.
-    const connection = getConnection();
-    
-    logger.info({ rpcUrl: env.RPC_PRIMARY }, "Connected to Solana RPC");
-
-    // Define filters for getProgramAccounts
-    // Filter: Match Obligation discriminator at offset 0
-    // Note: Use base58 encoding for memcmp filter (base64 fails for RPC)
-    // Note: No dataSize filter - Kamino V2 obligations are ~1300+ bytes (not 410)
-    // Relying on discriminator alone is sufficient and version-independent
-    const filters = [
-      {
-        memcmp: {
-          offset: 0,
-          bytes: bs58.encode(obligationDiscriminator),
-        },
-      },
-    ];
-
-    // Fetch all matching accounts via RPC
-    // Use dataSlice to prevent massive response (only get pubkeys, not account data)
-    // Note: length: 1 (not 0) for compatibility with all RPC nodes
-    logger.info("Fetching obligation pubkeys via getProgramAccounts...");
-    
-    const rawAccounts = await connection.getProgramAccounts(programId, {
-      filters,
-      encoding: "base64",
-      dataSlice: { offset: 0, length: 1 }, // Only return pubkeys + metadata, not account data
+    await snapshotObligationPubkeysToFile({
+      marketPubkey,
+      programId,
+      outputPath: join("data", "obligations.jsonl"),
     });
-
-    logger.info({ total: rawAccounts.length }, "Fetched obligation pubkeys");
-
-    // Collect pubkeys (discriminator filter already applied, no need for market filter)
-    const obligationPubkeys: string[] = rawAccounts.map(ra => ra.pubkey.toString());
-
-    logger.info({ count: obligationPubkeys.length }, "Collected obligation pubkeys");
-
-    // Validate minimum expected obligations (fail fast on configuration errors)
-    const MIN_EXPECTED_OBLIGATIONS = 50;
-    if (obligationPubkeys.length < MIN_EXPECTED_OBLIGATIONS) {
-      throw new Error(
-        `Snapshot returned only ${obligationPubkeys.length} obligations (expected at least ${MIN_EXPECTED_OBLIGATIONS}). ` +
-        `Likely bad filters or incorrect program ID. Check RPC endpoint, discriminator, and program ID.`
-      );
-    }
-
-    // Ensure data directory exists
-    const dataDir = join(process.cwd(), "data");
-    try {
-      mkdirSync(dataDir, { recursive: true });
-    } catch {
-      // Directory might already exist, that's fine
-    }
-
-    // Write to temp file then rename for atomicity
-    const outputPath = join(dataDir, "obligations.jsonl");
-    const tempPath = join(dataDir, `.obligations.jsonl.tmp.${Date.now()}`);
-
-    // Write one pubkey per line
-    const content = obligationPubkeys.join("\n") + "\n";
-    writeFileSync(tempPath, content, "utf-8");
-
-    // Atomic rename
-    renameSync(tempPath, outputPath);
-
-    logger.info(
-      { outputPath, count: obligationPubkeys.length },
-      "Snapshot complete"
-    );
-
-    // Validate output
-    const isValid = obligationPubkeys.every(pubkey => {
-      try {
-        new PublicKey(pubkey);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-
-    if (!isValid) {
-      logger.error("Output contains invalid pubkeys");
-      process.exit(1);
-    }
-
-    logger.info("All pubkeys validated as valid base58");
   } catch (err) {
     logger.fatal({ err }, "Failed to snapshot obligations");
     process.exit(1);
