@@ -73,6 +73,7 @@ export interface BuildKaminoLiquidationParams {
 export interface KaminoLiquidationResult {
   setupIxs: TransactionInstruction[]; // ATA create instructions (only for missing ATAs)
   setupAtaNames: string[]; // Names of ATAs in setupIxs for labeling (e.g., ['repay', 'collateral'])
+  missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }>;
   preReserveIxs: TransactionInstruction[]; // PRE: RefreshReserve(collateral), RefreshReserve(repay) for slot freshness
   coreIxs: TransactionInstruction[]; // CORE: RefreshObligation + RefreshFarms (0-2 farm instructions)
   liquidationIxs: TransactionInstruction[]; // LIQUIDATE: LiquidateObligationAndRedeemReserveCollateral
@@ -442,7 +443,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // Only create ATAs that don't exist to keep liquidation TX small
   console.log('[LiqBuilder] Checking ATA existence...');
   
-  const ataChecks = [
+  const ataChecks: Array<{ name: 'repay' | 'collateral' | 'withdrawLiq'; ata: PublicKey; mint: PublicKey; tokenProgram: PublicKey }> = [
     { name: 'repay', ata: userSourceLiquidityAta, mint: repayLiquidityMint, tokenProgram: repayTokenProgramId },
     { name: 'collateral', ata: userDestinationCollateralAta, mint: withdrawCollateralMint, tokenProgram: collateralTokenProgramId },
     { name: 'withdrawLiq', ata: userDestinationLiquidityAta, mint: withdrawLiquidityMint, tokenProgram: withdrawLiquidityTokenProgramId },
@@ -454,6 +455,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   const setupIxs: TransactionInstruction[] = [];
   const setupAtaNames: string[] = [];
+  const missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }> = [];
   
   for (let i = 0; i < ataChecks.length; i++) {
     const check = ataChecks[i];
@@ -469,6 +471,11 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
         tokenProgramId: check.tokenProgram,
       }));
       setupAtaNames.push(check.name);
+      missingAtas.push({
+        mint: check.mint.toBase58(),
+        ataAddress: check.ata.toBase58(),
+        purpose: check.name,
+      });
     } else {
       console.log(`[LiqBuilder] ATA ${check.name} exists: ${check.ata.toBase58()}`);
     }
@@ -835,6 +842,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   return {
     setupIxs,
     setupAtaNames,
+    missingAtas,
     preReserveIxs, // Reserve refreshes for slot freshness (collateral, repay)
     coreIxs, // RefreshObligation + RefreshFarms (0-2 farm instructions)
     liquidationIxs, // LiquidateObligationAndRedeemReserveCollateral

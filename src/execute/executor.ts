@@ -10,7 +10,15 @@ import { sendWithBoundedRetry, formatAttemptResults } from './broadcastRetry.js'
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { isPlanComplete, getMissingFields } from '../scheduler/planValidation.js';
 import { buildKaminoRefreshAndLiquidateIxsCanonical, validateCompiledInstructionWindow, decodeCompiledInstructionKinds } from '../kamino/canonicalLiquidationIxs.js';
-import { dropPlanFromQueue } from '../scheduler/txScheduler.js';
+import { downgradeBlockedPlan, dropPlanFromQueue } from '../scheduler/txScheduler.js';
+import { isBlocked, markAtaCreated, markBlocked } from '../state/setupState.js';
+
+const LAMPORTS_PER_SOL = 1_000_000_000;
+const ATA_ACCOUNT_SIZE = 165;
+const SETUP_FEE_BUFFER_LAMPORTS = 2_000_000;
+let lastUnderfundedWarnMs = 0;
+let startupFeePayerCheckDone = false;
+let cachedAtaRentLamports: number | undefined;
 
 interface Plan {
   planVersion?: number;
@@ -72,6 +80,12 @@ function loadPlans(): Plan[] {
   return [];
 }
 
+function shouldWarnUnderfundedDryRun(nowMs: number): boolean {
+  if ((nowMs - lastUnderfundedWarnMs) < 60_000) return false;
+  lastUnderfundedWarnMs = nowMs;
+  return true;
+}
+
 /**
  * Build full transaction with liquidation pipeline using CANONICAL builder.
  * 
@@ -107,6 +121,7 @@ async function buildFullTransaction(
 ): Promise<{ 
   setupIxs: TransactionInstruction[]; 
   setupLabels: string[]; 
+  missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }>;
   ixs: TransactionInstruction[]; 
   labels: string[];
   metadata: {
@@ -317,6 +332,7 @@ async function buildFullTransaction(
   return {
     setupIxs: finalCanonical.setupIxs,
     setupLabels: finalCanonical.setupLabels,
+    missingAtas: finalCanonical.missingAtas,
     ixs: finalCanonical.instructions,
     labels: finalCanonical.labels,
     metadata: {
@@ -367,6 +383,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
     const minEv = Number(env.EXEC_MIN_EV ?? env.SCHED_MIN_EV ?? 0);
     const maxTtlMin = Number(env.EXEC_MAX_TTL_MIN ?? env.SCHED_MAX_TTL_MIN ?? 999999);
+    const minFeePayerLamports = Math.floor(Number(env.EXEC_MIN_FEE_PAYER_SOL ?? 0.05) * LAMPORTS_PER_SOL);
     const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
     const ttlGraceMs = Number(env.TTL_GRACE_MS ?? 60_000);
     const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
@@ -375,6 +392,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     console.log('[Executor] Filter thresholds:');
     console.log(`  EXEC_MIN_EV: ${minEv}`);
     console.log(`  EXEC_MAX_TTL_MIN: ${maxTtlMin}`);
+    console.log(`  EXEC_MIN_FEE_PAYER_SOL: ${Number(env.EXEC_MIN_FEE_PAYER_SOL ?? 0.05)}`);
     console.log(`  TTL_GRACE_MS: ${ttlGraceMs}`);
     console.log(`  TTL_UNKNOWN_PASSES: ${ttlUnknownPasses}`);
     console.log(`  SCHED_FORCE_INCLUDE_LIQUIDATABLE: ${forceIncludeLiquidatable}`);
@@ -383,6 +401,23 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     if (!Array.isArray(plans) || plans.length === 0) {
       console.log('No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
       return { status: 'no-plans' };
+    }
+
+    if (!startupFeePayerCheckDone) {
+      startupFeePayerCheckDone = true;
+      try {
+        const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
+        const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
+        const startupSigner = Keypair.fromSecretKey(Uint8Array.from(secret));
+        const startupBalanceLamports = await connection.getBalance(startupSigner.publicKey);
+        if (startupBalanceLamports < minFeePayerLamports) {
+          console.warn(
+            `[Executor] Fee payer low balance: ${(startupBalanceLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL < ${(minFeePayerLamports / LAMPORTS_PER_SOL).toFixed(2)} SOL (EXEC_MIN_FEE_PAYER_SOL)`
+          );
+        }
+      } catch (err) {
+        console.warn(`[Executor] Startup fee payer balance check failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
 
     // Filter with reason tracking
@@ -512,6 +547,11 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       await dropPlanFromQueue(String(target.key));
       continue; // Skip to next candidate
     }
+
+    if (isBlocked(String(target.key))) {
+      console.log(`[Executor] Skipping blocked plan ${String(target.key).slice(0, 8)} (insufficient-rent cooldown)`);
+      continue;
+    }
     
     const now = Date.now();
     const createdAtMs = Number(target.createdAtMs ?? 0);
@@ -544,6 +584,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   // Wrap in try/catch to handle swap sizing failures gracefully without crashing the bot
   let setupIxs: TransactionInstruction[];
   let setupLabels: string[];
+  let missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }>;
   let ixs: TransactionInstruction[];
   let labels: string[];
   let metadata: { hasFarmsRefresh: boolean };
@@ -555,6 +596,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     });
     setupIxs = result.setupIxs;
     setupLabels = result.setupLabels;
+    missingAtas = result.missingAtas;
     ixs = result.ixs;
     labels = result.labels;
     metadata = result.metadata;
@@ -596,6 +638,30 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       console.log(`  [${idx}] ${label}`);
     });
     console.log('═══════════════════════════════════\n');
+
+    if (cachedAtaRentLamports === undefined) {
+      cachedAtaRentLamports = await connection.getMinimumBalanceForRentExemption(ATA_ACCOUNT_SIZE);
+    }
+    const rentPerAtaLamports = cachedAtaRentLamports;
+    const rentLamports = rentPerAtaLamports * missingAtas.length;
+    const requiredLamports = Math.max(rentLamports + SETUP_FEE_BUFFER_LAMPORTS, minFeePayerLamports);
+    const feePayerLamports = await connection.getBalance(signer.publicKey);
+    const balanceTooLow = feePayerLamports < requiredLamports;
+    if (balanceTooLow) {
+      const planKey = String(target.key);
+      markBlocked(planKey, 'insufficient-rent');
+      await downgradeBlockedPlan(planKey);
+      if (dry && shouldWarnUnderfundedDryRun(Date.now())) {
+        console.warn(
+          `[Executor] setup-blocked insufficient-rent: fee payer ${(feePayerLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL, required ${(requiredLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL, min ${(minFeePayerLamports / LAMPORTS_PER_SOL).toFixed(2)} SOL`
+        );
+      } else {
+        console.log(
+          `[Executor] Setup blocked (insufficient-rent): ${(feePayerLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL < ${(requiredLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL`
+        );
+      }
+      return { status: 'blocked-insufficient-rent', planKey, requiredLamports, feePayerLamports };
+    }
     
     // Build and sign setup transaction
     const setupBh = await connection.getLatestBlockhash();
@@ -662,6 +728,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           console.log('[Executor] ✅ Setup transaction confirmed successfully!');
           console.log(`[Executor] Signature: ${finalSetupAttempt.signature}`);
           console.log('[Executor] ATAs created. Liquidation will proceed in next cycle.');
+          for (const ata of missingAtas) {
+            markAtaCreated(ata.mint);
+          }
           return { 
             status: 'setup-completed', 
             signature: finalSetupAttempt.signature
