@@ -557,6 +557,9 @@ describe("LiveObligationIndexer", () => {
 
       expect(scoring.healthSourceUsed).toBe("recomputed");
       expect(scoring.healthRatioHybrid).toBeUndefined();
+      expect(scoring.healthRatioHybridRaw).toBeUndefined();
+      expect(scoring.borrowValueHybrid).toBeUndefined();
+      expect(scoring.collateralValueHybrid).toBeUndefined();
       expect(scoring.hybridDisabledReason).toBe("sf-stale");
       expect(scoring.slotLag).toBeGreaterThan(200000);
     });
