@@ -3,6 +3,7 @@
  * 
  * Discriminators are the first 8 bytes of instruction data, computed as:
  * sha256("global:instruction_name")[0..8] for Anchor instructions.
+ * Discriminators are derived from snake_case Rust method names, not camelCase.
  */
 
 import { PublicKey } from "@solana/web3.js";
@@ -15,20 +16,20 @@ export const KLEND_PROGRAM_ID = new PublicKey('KLend2g3cP87fffoy8q1mQqGKjrxjC8bo
  */
 export const KAMINO_DISCRIMINATORS = {
   // Reserve operations
-  refreshReserve: '07930aa66d3aa710',
+  refreshReserve: '02da8aeb4fc91966',
   
   // Obligation operations
-  refreshObligation: 'a8e5e45f8c4c29c0',
+  refreshObligation: '218493e497c04859',
   
   // Liquidation operations
-  liquidateObligationAndRedeemReserveCollateral: 'd88378ff5e9e5028',
+  liquidateObligationAndRedeemReserveCollateral: 'b1479abce2854a37',
   
   // Farm operations
-  refreshObligationFarmsForReserve: 'd79cf84dbd8fe9e2',
+  refreshObligationFarmsForReserve: '8c90fd150a4af803',
   
   // Flash loan operations
-  flashBorrowReserveLiquidity: 'd60e1307b8c6ef35',
-  flashRepayReserveLiquidity: 'f69c6e18b02e3e8d',
+  flashBorrowReserveLiquidity: '87e734a70734d4c1',
+  flashRepayReserveLiquidity: 'b97500cb60f5b4ba',
 } as const;
 
 /**
