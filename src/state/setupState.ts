@@ -45,7 +45,7 @@ export function markBlocked(planKey: string, reason: string): void {
 export function isBlocked(planKey: string): boolean {
   const blocked = loadSetupState().blocked[planKey];
   if (!blocked) return false;
-  return (Date.now() - Number(blocked.ts ?? 0)) < BLOCKED_COOLDOWN_MS;
+  return (Date.now() - blocked.ts) < BLOCKED_COOLDOWN_MS;
 }
 
 export function markAtaCreated(mint: string): void {

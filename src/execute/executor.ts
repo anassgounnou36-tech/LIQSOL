@@ -18,6 +18,7 @@ const ATA_ACCOUNT_SIZE = 165;
 const SETUP_FEE_BUFFER_LAMPORTS = 2_000_000;
 let lastUnderfundedWarnMs = 0;
 let startupFeePayerCheckDone = false;
+let cachedAtaRentLamports: number | undefined;
 
 interface Plan {
   planVersion?: number;
@@ -638,13 +639,14 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     });
     console.log('═══════════════════════════════════\n');
 
-    let rentLamports = 0;
-    for (let i = 0; i < missingAtas.length; i++) {
-      rentLamports += await connection.getMinimumBalanceForRentExemption(ATA_ACCOUNT_SIZE);
+    if (cachedAtaRentLamports === undefined) {
+      cachedAtaRentLamports = await connection.getMinimumBalanceForRentExemption(ATA_ACCOUNT_SIZE);
     }
-    const requiredLamports = rentLamports + SETUP_FEE_BUFFER_LAMPORTS;
+    const rentPerAtaLamports = cachedAtaRentLamports;
+    const rentLamports = rentPerAtaLamports * missingAtas.length;
+    const requiredLamports = Math.max(rentLamports + SETUP_FEE_BUFFER_LAMPORTS, minFeePayerLamports);
     const feePayerLamports = await connection.getBalance(signer.publicKey);
-    const balanceTooLow = feePayerLamports < requiredLamports || feePayerLamports < minFeePayerLamports;
+    const balanceTooLow = feePayerLamports < requiredLamports;
     if (balanceTooLow) {
       const planKey = String(target.key);
       markBlocked(planKey, 'insufficient-rent');

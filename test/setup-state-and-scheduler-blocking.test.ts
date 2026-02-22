@@ -25,7 +25,7 @@ describe('setup state + blocked-plan downgrade', () => {
     const plan: FlashloanPlan = {
       planVersion: 2,
       key: 'plan-2',
-      obligationPubkey: 'plan-2',
+      obligationPubkey: 'obligation-pubkey-2',
       mint: 'USDC',
       amountUsd: 100,
       repayMint: 'repay-mint',
