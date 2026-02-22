@@ -59,6 +59,7 @@ export interface CanonicalLiquidationResult {
   // Setup instructions (ATA creation) - should be sent in separate transaction
   setupIxs: TransactionInstruction[];
   setupLabels: string[];
+  missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }>;
   
   // Main liquidation instruction sequence
   instructions: TransactionInstruction[];
@@ -197,6 +198,7 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
   return {
     setupIxs,
     setupLabels,
+    missingAtas: liquidationResult.missingAtas,
     instructions,
     labels,
     repayMint: liquidationResult.repayMint,

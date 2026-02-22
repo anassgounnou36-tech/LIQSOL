@@ -82,6 +82,7 @@ export const EnvSchema = z.object({
   // PR12: Execution thresholds for dry-run executor
   EXEC_MIN_EV: z.string().optional().default('0'),
   EXEC_MAX_TTL_MIN: z.string().optional().default('10'),
+  EXEC_MIN_FEE_PAYER_SOL: z.string().optional().default('0.05'),
   SCHEDULED_MIN_LIQUIDATION_DELAY_MS: z.string().optional().default('0'),
 
   // Candidate selection tuning

@@ -50,6 +50,24 @@ export async function dropPlanFromQueue(planKey: string): Promise<void> {
   await writeJsonAtomic(QUEUE_PATH, filtered);
 }
 
+export async function downgradeBlockedPlan(planKey: string): Promise<void> {
+  const q = loadQueue();
+  let updated = false;
+  const downgraded = q.map(plan => {
+    if (String(plan.key) !== String(planKey)) return plan;
+    updated = true;
+    return {
+      ...plan,
+      ttlMin: 999999,
+      ttlStr: 'blocked-insufficient-rent',
+      liquidationEligible: false,
+    };
+  });
+  if (updated) {
+    await writeJsonAtomic(QUEUE_PATH, downgraded);
+  }
+}
+
 export function enqueuePlans(plans: FlashloanPlan[]): FlashloanPlan[] {
   const existing = loadQueue();
   const map = new Map<string, FlashloanPlan>();
@@ -220,4 +238,3 @@ export function startSchedulerRefreshLoop(params: TtlManagerParams, candidateSou
   // Return cleanup function
   return () => clearInterval(intervalId);
 }
-
