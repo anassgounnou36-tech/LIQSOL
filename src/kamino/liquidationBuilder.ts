@@ -377,6 +377,32 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   console.log(`[LiqBuilder] Gathered ${uniqueReserves.length} unique reserves in canonical order (deposits→borrows)`);
   console.log(`[LiqBuilder]   Deposits: ${deposits.length}, Borrows: ${borrows.length}`);
+  const dbg = process.env.DEBUG_REFRESH_OBLIGATION === '1';
+  if (dbg) {
+    console.log('\n[LiqBuilder][DEBUG_REFRESH_OBLIGATION] Obligation slot dump');
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] obligation=${p.obligationPubkey.toBase58()}`);
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] market=${p.marketPubkey.toBase58()}`);
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] repayExpected=${p.expectedRepayReservePubkey?.toBase58() ?? 'none'}`);
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] collateralExpected=${p.expectedCollateralReservePubkey?.toBase58() ?? 'none'}`);
+
+    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] deposits (slot order):');
+    deposits.forEach((d: any, i: number) => {
+      const reserve = d.depositReserve?.toString?.() ?? String(d.depositReserve);
+      const amt = d.depositedAmount?.toString?.() ?? String(d.depositedAmount ?? 'unknown');
+      console.log(`  [${i}] reserve=${reserve} depositedAmount=${amt}`);
+    });
+
+    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] borrows (slot order):');
+    borrows.forEach((b: any, i: number) => {
+      const reserve = b.borrowReserve?.toString?.() ?? String(b.borrowReserve);
+      const amtSf = b.borrowedAmountSf?.toString?.() ?? String(b.borrowedAmountSf ?? 'unknown');
+      console.log(`  [${i}] reserve=${reserve} borrowedAmountSf=${amtSf}`);
+    });
+
+    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] refresh remaining reserves (deduped deposits→borrows):');
+    uniqueReserves.forEach((r, i) => console.log(`  [${i}] ${r}`));
+    console.log('');
+  }
   
   // Validate that expected reserves are in the unique set
   if (p.expectedRepayReservePubkey) {
