@@ -22,6 +22,8 @@ describe('Environment Tests', () => {
     expect(env.RPC_PRIMARY).toBe('https://api.mainnet-beta.solana.com');
     expect(env.LOG_LEVEL).toBe('info');
     expect(env.NODE_ENV).toBe('test');
+    expect(env.EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS).toBe(300);
+    expect(env.LIQSOL_EXEC_MINT_ALLOWLIST).toBeUndefined();
   });
 
   it('should throw when RPC_PRIMARY is not a valid URL', () => {
