@@ -19,7 +19,7 @@ function parseArgs(): BotRunOptions {
   const args = process.argv.slice(2);
   
   return {
-    broadcast: args.includes('--broadcast') || process.env.LIQSOL_BROADCAST === 'true',
+    broadcast: args.includes('--broadcast') || ['true', '1', 'yes'].includes((process.env.LIQSOL_BROADCAST ?? '').toLowerCase()),
     maxInflight: Number(process.env.BOT_MAX_INFLIGHT ?? 1),
     minEv: Number(process.env.EXEC_MIN_EV ?? 0),
     maxAttemptsPerCycle: Number(process.env.BOT_MAX_ATTEMPTS_PER_CYCLE ?? 10),
@@ -32,11 +32,11 @@ async function main() {
   console.log('║  PR2: Real liquidation execution path        ║');
   console.log('╚═══════════════════════════════════════════════╝\n');
   
-  // Parse options
-  const opts = parseArgs();
-  
   // Load environment
   const env = loadEnv();
+  
+  // Parse options
+  const opts = parseArgs();
   
   // Display configuration
   console.log('Configuration:');
