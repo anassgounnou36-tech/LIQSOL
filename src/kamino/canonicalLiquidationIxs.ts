@@ -82,19 +82,18 @@ export interface CanonicalLiquidationResult {
  * 2. flashBorrow (if using flashloan)
  * 
  * PRE BLOCK (contiguous):
- * 3. preRefreshReserve(collateral)
- * 4. preRefreshReserve(repay)
- * 5. refreshObligation (with remaining accounts ordered deposits→borrows)
- * 6. refreshFarmsForObligationForReserve (0-2 instructions for collateral/debt farms, if exist)
+ * 3. preRefreshReserve (N refreshReserve for all obligation reserves, deposits→borrows)
+ * 4. refreshObligation (with remaining accounts ordered deposits→borrows)
+ * 5. refreshFarmsForObligationForReserve (0-2 instructions for collateral/debt farms, if exist)
  * 
  * LIQUIDATE:
- * 7. liquidateObligationAndRedeemReserveCollateral
+ * 6. liquidateObligationAndRedeemReserveCollateral
  * 
  * POST BLOCK (immediately after liquidation):
- * 8. refreshFarmsForObligationForReserve (same farm set and order as PRE, if exist)
+ * 7. refreshFarmsForObligationForReserve (same farm set and order as PRE, if exist)
  * 
- * 9. swap instructions (if provided, after POST farms)
- * 10. flashRepay (if using flashloan)
+ * 8. swap instructions (if provided, after POST farms)
+ * 9. flashRepay (if using flashloan)
  * 
  * @param config - Canonical configuration with all parameters
  * @returns Canonical instruction sequence with labels
@@ -156,10 +155,11 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
   const setupIxs = liquidationResult.setupIxs;
   const setupLabels = liquidationResult.setupAtaNames.map(name => `setup:ata:${name}`);
   
-  // 3-4. PRE-RESERVE instructions (collateral first, then repay)
+  // 3. PRE-RESERVE instructions (all obligation reserves, deposits→borrows)
   instructions.push(...liquidationResult.preReserveIxs);
-  labels.push('preRefreshReserve:collateral');
-  labels.push('preRefreshReserve:repay');
+  for (let i = 0; i < liquidationResult.preReserveIxs.length; i++) {
+    labels.push(`preRefreshReserve:${i}`);
+  }
   
   // 5-6. CORE instructions (obligation + farms)
   instructions.push(...liquidationResult.coreIxs);
@@ -257,8 +257,7 @@ export function decodeCompiledInstructionKinds(tx: VersionedTransaction): Instru
  * 
  * Expected canonical sequence:
  * PRE (contiguous, immediately before liquidation):
- * - refreshReserve (collateral)
- * - refreshReserve (repay)
+ * - refreshReserve (N contiguous instructions, one per obligation reserve)
  * - refreshObligation
  * - refreshFarmsForObligationForReserve (0-2 instructions for collateral/debt, if exist)
  * 
@@ -271,7 +270,7 @@ export function decodeCompiledInstructionKinds(tx: VersionedTransaction): Instru
  * Key validation points:
  * 1. Last instruction before liquidation must be farms refresh (or obligation if no farms)
  * 2. First instruction after liquidation must be farms refresh (or nothing/swap if no farms)
- * 3. The 4 instructions before liquidation (or 2-3 if no farms) must match canonical PRE order
+ * 3. Contiguous refreshReserve run before refreshObligation must be valid (min 2)
  * 
  * Uses semantic matching by programId + discriminator for reliable v0 transaction validation.
  * 
@@ -310,31 +309,82 @@ export function validateCompiledInstructionWindow(
     };
   }
   
-  // Build expected sequence BEFORE liquidation
-  // Order: reserves(collateral, repay) → obligation → farms (if exist)
-  // NOTE: We look backwards from liquidation, so we read right-to-left in the array
-  const expectedPreSequence = hasFarmsRefresh
-    ? ['refreshReserve', 'refreshReserve', 'refreshObligation', 'refreshObligationFarmsForReserve']
-    : ['refreshReserve', 'refreshReserve', 'refreshObligation'];
-  
-  // Validate PRE sequence
-  const preStartIdx = liquidateIdx - expectedPreSequence.length;
+  let cursor = liquidateIdx - 1;
+
+  if (hasFarmsRefresh) {
+    if (cursor < 0 || kinds[cursor].kind !== 'refreshObligationFarmsForReserve') {
+      let diagnostics = 'Missing or invalid farms refresh immediately before liquidation\n\n';
+      diagnostics += 'Expected: refreshObligationFarmsForReserve\n';
+      diagnostics += `Actual: ${cursor >= 0 ? kinds[cursor].kind : 'none'}\n`;
+      diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
+      const windowStart = Math.max(0, liquidateIdx - 6);
+      const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
+      for (let i = windowStart; i < windowEnd; i++) {
+        const marker = i === liquidateIdx ? ' ← LIQUIDATE' : '';
+        diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
+      }
+      return { valid: false, diagnostics };
+    }
+    cursor -= 1;
+  }
+
+  if (cursor < 0 || kinds[cursor].kind !== 'refreshObligation') {
+    let diagnostics = 'Missing or invalid refreshObligation before liquidation\n\n';
+    diagnostics += 'Expected: refreshObligation\n';
+    diagnostics += `Actual: ${cursor >= 0 ? kinds[cursor].kind : 'none'}\n`;
+    diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
+    const windowStart = Math.max(0, liquidateIdx - 6);
+    const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
+    for (let i = windowStart; i < windowEnd; i++) {
+      const marker = i === liquidateIdx ? ' ← LIQUIDATE' : '';
+      diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
+    }
+    return { valid: false, diagnostics };
+  }
+
+  const obligationIdx = cursor;
+  cursor -= 1;
+
+  let nPreReserves = 0;
+  while (cursor >= 0 && kinds[cursor].kind === 'refreshReserve') {
+    nPreReserves += 1;
+    cursor -= 1;
+  }
+
+  if (nPreReserves < 2) {
+    let diagnostics = 'Invalid PRE reserve window before refreshObligation\n\n';
+    diagnostics += `Expected at least 2 contiguous refreshReserve instructions immediately before refreshObligation\n`;
+    diagnostics += `Actual contiguous refreshReserve count: ${nPreReserves}\n`;
+    diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
+    const windowStart = Math.max(0, liquidateIdx - 6);
+    const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
+    for (let i = windowStart; i < windowEnd; i++) {
+      const marker = i === liquidateIdx ? ' ← LIQUIDATE' : i === obligationIdx ? ' ← REFRESH OBLIGATION' : '';
+      diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
+    }
+    return { valid: false, diagnostics };
+  }
+
+  const preStartIdx = obligationIdx - nPreReserves;
+
   if (preStartIdx < 0) {
     return {
       valid: false,
-      diagnostics: `Not enough instructions before liquidation. Expected ${expectedPreSequence.length}, found ${liquidateIdx}`,
+      diagnostics: `Not enough instructions before liquidation to include ${nPreReserves} reserve refreshes`,
     };
   }
-  
-  // Extract actual PRE sequence
+
   const actualPreSequence = kinds.slice(preStartIdx, liquidateIdx).map(k => k.kind);
-  
-  // Compare PRE sequences
+  const expectedPreSequence = [
+    ...Array(nPreReserves).fill('refreshReserve'),
+    'refreshObligation',
+    ...(hasFarmsRefresh ? ['refreshObligationFarmsForReserve'] : []),
+  ];
+
   const preMatches = expectedPreSequence.every((expected, idx) => actualPreSequence[idx] === expected);
-  
   if (!preMatches) {
     let diagnostics = 'Compiled PRE instruction window does not match expected sequence\n\n';
-    diagnostics += 'Expected PRE sequence (immediately before liquidation):\n';
+    diagnostics += `Expected PRE sequence with ${nPreReserves} reserve refresh(es) immediately before liquidation:\n`;
     expectedPreSequence.forEach((kind, idx) => {
       diagnostics += `  [${preStartIdx + idx}] ${kind}\n`;
     });
@@ -382,7 +432,7 @@ export function validateCompiledInstructionWindow(
   
   // Validation passed
   let diagnostics = '✓ Compiled instruction window validation passed\n\n';
-  diagnostics += 'Validated canonical sequence around liquidation:\n\n';
+  diagnostics += `Validated canonical sequence around liquidation (${nPreReserves} PRE reserve refreshes):\n\n`;
   diagnostics += 'PRE (immediately before liquidation):\n';
   for (let i = preStartIdx; i < liquidateIdx; i++) {
     diagnostics += `  [${i}] ${kinds[i].kind}\n`;

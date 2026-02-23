@@ -106,15 +106,15 @@ async function main() {
     console.log(`[Test]   Derived collateral mint: ${result.collateralMint.toBase58()}`);
     
     // Verify instruction count matches expected pattern (NEW CANONICAL ORDER)
-    // Expected: 2 PRE-reserve + 1 obligation + farms (0-2) = 3-5 core ixs
+    // Expected: N PRE-reserve (N>=2) + 1 obligation + farms (0-2)
     // POST: farms (0-2, mirrors PRE)
     const { ataCount, farmRefreshCount, farmModes } = result;
-    const expectedPreReserveCount = 2; // collateral + repay
+    const minPreReserveCount = 2;
     const expectedCoreCount = 1 + farmRefreshCount; // obligation + farms (0-2)
     const expectedPostFarmCount = farmRefreshCount; // mirrors PRE farms
     
-    if (result.preReserveIxs.length !== expectedPreReserveCount) {
-      console.error(`[Test] ERROR: Expected ${expectedPreReserveCount} pre-reserve instructions, got ${result.preReserveIxs.length}`);
+    if (result.preReserveIxs.length < minPreReserveCount) {
+      console.error(`[Test] ERROR: Expected at least ${minPreReserveCount} pre-reserve instructions, got ${result.preReserveIxs.length}`);
       process.exit(1);
     }
     if (result.coreIxs.length !== expectedCoreCount) {
@@ -128,7 +128,7 @@ async function main() {
     
     console.log(`[Test]   ✓ Instruction count matches expected canonical structure`);
     console.log(`[Test]     - Setup ATA instructions: ${ataCount}`);
-    console.log(`[Test]     - PRE-reserve: ${expectedPreReserveCount} (collateral + repay)`);
+    console.log(`[Test]     - PRE-reserve: ${result.preReserveIxs.length} (all obligation reserves, min ${minPreReserveCount})`);
     console.log(`[Test]     - Core: ${expectedCoreCount} (obligation + ${farmRefreshCount} farms)`);
     console.log(`[Test]     - POST-farms: ${expectedPostFarmCount} (mirrors PRE farms)`);
     console.log(`[Test]     - Farm modes: ${farmModes.length > 0 ? farmModes.map(m => m === 0 ? 'collateral' : 'debt').join(', ') : 'none'}`);
@@ -138,9 +138,10 @@ async function main() {
     let idx = 0;
     
     // PRE-reserve instructions (for RefreshObligation slot freshness)
-    console.log(`[Test]   [${idx}] PRE: RefreshReserve(collateral)`);
-    console.log(`[Test]   [${idx + 1}] PRE: RefreshReserve(repay)`);
-    idx += 2;
+    for (let i = 0; i < result.preReserveIxs.length; i++) {
+      console.log(`[Test]   [${idx}] PRE: RefreshReserve(${i})`);
+      idx += 1;
+    }
     
     // Core: Obligation refresh
     console.log(`[Test]   [${idx}] CORE: RefreshObligation`);
