@@ -46,8 +46,7 @@ describe('Canonical Liquidation Order', () => {
     const canonicalOrder = [
       'computeBudget',
       'flashBorrow (optional)',
-      'PRE: RefreshReserve(collateral)',
-      'PRE: RefreshReserve(repay)',
+      'PRE: RefreshReserve(N, all obligation reserves)',
       'CORE: RefreshObligation',
       'CORE: RefreshFarms (0-2, if exist)',
       'LIQUIDATE',
@@ -56,14 +55,13 @@ describe('Canonical Liquidation Order', () => {
       'flashRepay (optional)',
     ];
     
-    expect(canonicalOrder).toHaveLength(10);
+    expect(canonicalOrder).toHaveLength(9);
     expect(canonicalOrder[0]).toBe('computeBudget');
-    expect(canonicalOrder[2]).toBe('PRE: RefreshReserve(collateral)');
-    expect(canonicalOrder[3]).toBe('PRE: RefreshReserve(repay)');
-    expect(canonicalOrder[4]).toBe('CORE: RefreshObligation');
-    expect(canonicalOrder[5]).toBe('CORE: RefreshFarms (0-2, if exist)');
-    expect(canonicalOrder[6]).toBe('LIQUIDATE');
-    expect(canonicalOrder[7]).toBe('POST: RefreshFarms (mirrors PRE)');
+    expect(canonicalOrder[2]).toBe('PRE: RefreshReserve(N, all obligation reserves)');
+    expect(canonicalOrder[3]).toBe('CORE: RefreshObligation');
+    expect(canonicalOrder[4]).toBe('CORE: RefreshFarms (0-2, if exist)');
+    expect(canonicalOrder[5]).toBe('LIQUIDATE');
+    expect(canonicalOrder[6]).toBe('POST: RefreshFarms (mirrors PRE)');
   });
   
   it('should verify KLend adjacency requirements', () => {
@@ -72,8 +70,7 @@ describe('Canonical Liquidation Order', () => {
       before_liquidation: {
         last_instruction: 'RefreshFarms (or RefreshObligation if no farms)',
         sequence: [
-          'RefreshReserve(collateral)',
-          'RefreshReserve(repay)',
+          'RefreshReserve(N contiguous, min 2)',
           'RefreshObligation',
           'RefreshFarms (0-2, if exist)',
         ],
@@ -86,7 +83,7 @@ describe('Canonical Liquidation Order', () => {
       },
     };
     
-    expect(adjacencyRules.before_liquidation.sequence).toHaveLength(4);
+    expect(adjacencyRules.before_liquidation.sequence).toHaveLength(3);
     expect(adjacencyRules.after_liquidation.first_instruction).toContain('RefreshFarms');
     expect(adjacencyRules.removed.post_reserve_refresh).toContain('Removed');
   });

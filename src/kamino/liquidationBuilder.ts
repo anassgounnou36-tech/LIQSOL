@@ -64,7 +64,7 @@ export interface BuildKaminoLiquidationParams {
  * ReserveStale Fix: Added preRefreshIxs for slot freshness before RefreshObligation
  * 
  * KLend Adjacency Fix: Restructured to match strict check_refresh validation:
- * - preReserveIxs: RefreshReserve(collateral) + RefreshReserve(repay) only
+ * - preReserveIxs: RefreshReserve for all obligation reserves (deposits→borrows)
  * - coreIxs: RefreshObligation + RefreshFarms (collateral and/or debt, 0-2 instructions)
  * - liquidationIxs: LiquidateObligationAndRedeemReserveCollateral
  * - postFarmIxs: Same RefreshFarms as coreIxs (mirrors PRE farms for adjacency)
@@ -74,7 +74,7 @@ export interface KaminoLiquidationResult {
   setupIxs: TransactionInstruction[]; // ATA create instructions (only for missing ATAs)
   setupAtaNames: string[]; // Names of ATAs in setupIxs for labeling (e.g., ['repay', 'collateral'])
   missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }>;
-  preReserveIxs: TransactionInstruction[]; // PRE: RefreshReserve(collateral), RefreshReserve(repay) for slot freshness
+  preReserveIxs: TransactionInstruction[]; // PRE: RefreshReserve for all obligation reserves (deposits→borrows)
   coreIxs: TransactionInstruction[]; // CORE: RefreshObligation + RefreshFarms (0-2 farm instructions)
   liquidationIxs: TransactionInstruction[]; // LIQUIDATE: LiquidateObligationAndRedeemReserveCollateral
   postFarmIxs: TransactionInstruction[]; // POST: RefreshFarms (mirrors coreIxs farms, immediately after liquidation)
@@ -574,22 +574,16 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     });
   };
   
-  const repayReservePubkey = repayReserve.address;
-  const collateralReservePubkey = collateralReserve.address;
-  
   // ========================================================================
   // STEP 1: Build PRE-RESERVE refresh instructions (for RefreshObligation slot freshness)
-  // Order: collateral then repay (matches KLend's expected order)
+  // Order: all obligation reserves in canonical deposits→borrows order
   // ========================================================================
   const preReserveIxs: TransactionInstruction[] = [];
-  
-  console.log(`[LiqBuilder] Building PRE-RESERVE RefreshReserve for collateral reserve (slot freshness)`);
-  const preCollateralRefreshIx = buildRefreshReserveIx(collateralReservePubkey, 'preRefreshReserve:collateral');
-  preReserveIxs.push(preCollateralRefreshIx);
-  
-  console.log(`[LiqBuilder] Building PRE-RESERVE RefreshReserve for repay reserve (slot freshness)`);
-  const preRepayRefreshIx = buildRefreshReserveIx(repayReservePubkey, 'preRefreshReserve:repay');
-  preReserveIxs.push(preRepayRefreshIx);
+  for (let i = 0; i < uniqueReserves.length; i++) {
+    const r = uniqueReserves[i];
+    console.log(`[LiqBuilder] Building PRE-RESERVE RefreshReserve for reserve[${i}] ${r}`);
+    preReserveIxs.push(buildRefreshReserveIx(r, `preRefreshReserve:${i}`));
+  }
   
   // ========================================================================
   // STEP 2: Build CORE instructions (RefreshObligation + RefreshFarms)
@@ -869,7 +863,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     setupIxs,
     setupAtaNames,
     missingAtas,
-    preReserveIxs, // Reserve refreshes for slot freshness (collateral, repay)
+    preReserveIxs, // Reserve refreshes for slot freshness (all obligation reserves)
     coreIxs, // RefreshObligation + RefreshFarms (0-2 farm instructions)
     liquidationIxs, // LiquidateObligationAndRedeemReserveCollateral
     postFarmIxs, // RefreshFarms (mirrors PRE farms, immediately after liquidation)
