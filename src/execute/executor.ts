@@ -20,6 +20,33 @@ let lastUnderfundedWarnMs = 0;
 let startupFeePayerCheckDone = false;
 let cachedAtaRentLamports: number | undefined;
 
+function dumpCompiledIxAccounts(opts: {
+  tx: VersionedTransaction;
+  ixIndex: number;
+  label?: string;
+}) {
+  const dbg = process.env.DEBUG_REFRESH_OBLIGATION === '1';
+  if (!dbg) return;
+
+  const msg: any = opts.tx.message;
+  const compiled = msg.compiledInstructions?.[opts.ixIndex];
+  if (!compiled) {
+    console.error(`[Executor][DEBUG_REFRESH_OBLIGATION] No compiled instruction at index=${opts.ixIndex}`);
+    return;
+  }
+
+  const keys = msg.staticAccountKeys as PublicKey[];
+  const programId = keys[compiled.programIdIndex]?.toBase58?.() ?? 'unknown';
+  console.error(`\n[Executor][DEBUG_REFRESH_OBLIGATION] Compiled ix accounts dump index=${opts.ixIndex} label=${opts.label ?? 'unknown'}`);
+  console.error(`[Executor][DEBUG_REFRESH_OBLIGATION] programId=${programId}`);
+  console.error(`[Executor][DEBUG_REFRESH_OBLIGATION] accounts (${compiled.accountKeyIndexes.length}):`);
+  compiled.accountKeyIndexes.forEach((k: number, i: number) => {
+    const pk = keys[k];
+    console.error(`  [${i}] ${pk ? pk.toBase58() : `missingKeyIndex(${k})`}`);
+  });
+  console.error('');
+}
+
 interface Plan {
   planVersion?: number;
   key: string;
@@ -886,6 +913,11 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           
           // If it's 6006, provide specific guidance
           if (customCode === 6006) {
+            // Extra diagnostics for 6006: dump exact compiled accounts for the failed ix.
+            // Especially useful if label says refreshObligation.
+            dumpCompiledIxAccounts({ tx, ixIndex, label: ixLabel });
+            console.error(`[Executor][DEBUG_REFRESH_OBLIGATION] failedIxLabel=${ixLabel}`);
+            console.error(`[Executor][DEBUG_REFRESH_OBLIGATION] obligation=${target.obligationPubkey}`);
             console.error('\n  💡 LIKELY CAUSE:');
             console.error('     The reserves selected for liquidation do not match the obligation\'s');
             console.error('     actual borrows/deposits. This happens when:');
