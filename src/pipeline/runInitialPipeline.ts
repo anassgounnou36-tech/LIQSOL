@@ -7,7 +7,7 @@ import { buildQueue } from './buildQueue.js';
 export async function runInitialPipeline(opts: {
   marketPubkey: PublicKey;
   programId: PublicKey;
-  allowlistMints?: string[];
+  execAllowlistMints?: string[];
   topN: number;
   nearThreshold: number;
   flashloanMint: 'USDC' | 'SOL';
@@ -25,7 +25,7 @@ export async function runInitialPipeline(opts: {
   await buildCandidates({
     marketPubkey: opts.marketPubkey,
     programId: opts.programId,
-    allowlistMints: opts.allowlistMints,
+    execAllowlistMints: opts.execAllowlistMints,
     topN: opts.topN,
     nearThreshold: opts.nearThreshold,
   });

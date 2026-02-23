@@ -16,6 +16,12 @@ import { divBigintToNumber } from "../utils/bn.js";
 const ratio = (a?: number, b?: number) =>
   (a && b && b > 0) ? (a / b).toFixed(4) : 'n/a';
 
+function parseMintAllowlistCsv(s?: string): string[] | undefined {
+  if (!s) return undefined;
+  const items = s.split(",").map((x) => x.trim()).filter(Boolean);
+  return items.length ? items : undefined;
+}
+
 /**
  * CLI tool for selecting and ranking liquidation candidates from scored obligations
  * 
@@ -25,7 +31,8 @@ const ratio = (a?: number, b?: number) =>
  *   - KAMINO_MARKET_PUBKEY: The market pubkey to filter obligations
  *   - KAMINO_KLEND_PROGRAM_ID: The Kamino Lending program ID
  *   - RPC_PRIMARY: Solana RPC endpoint URL
- *   - LIQSOL_LIQ_MINT_ALLOWLIST (optional): Comma-separated list of liquidity mint addresses to filter
+ *   - LIQSOL_EXEC_MINT_ALLOWLIST (optional): Comma-separated list of execution mints
+ *   - LIQSOL_LIQ_MINT_ALLOWLIST (optional, fallback): Comma-separated list of execution mints
  * 
  * Loads reserves and oracles, bootstraps scored obligations, selects candidates,
  * and writes machine-readable output to data/candidates.json.
@@ -87,41 +94,28 @@ async function main() {
     const currentSlot = await connection.getSlot('confirmed');
     logger.info({ currentSlot }, "Current slot");
 
-    // Parse allowlist mints from environment if configured
-    // Default to SOL+USDC for PR7 gate behavior
-    let allowlistMints: string[] = [SOL_MINT, USDC_MINT];
-
-    if (env.LIQSOL_LIQ_MINT_ALLOWLIST !== undefined) {
-      if (env.LIQSOL_LIQ_MINT_ALLOWLIST.length > 0) {
-        allowlistMints = env.LIQSOL_LIQ_MINT_ALLOWLIST
-          .split(",")
-          .map((m) => m.trim())
-          .filter(Boolean);
-      } else {
-        // Empty string disables allowlist
-        allowlistMints = [];
-      }
-    }
-
-    if (allowlistMints.length > 0) {
+    const execAllowlistMints = parseMintAllowlistCsv(
+      process.env.LIQSOL_EXEC_MINT_ALLOWLIST ?? process.env.LIQSOL_LIQ_MINT_ALLOWLIST
+    );
+    if (execAllowlistMints) {
       logger.info(
-        { allowlistMints },
+        { execAllowlistMints },
         "Execution allowlist enabled (repay/collateral leg selection only)"
       );
     } else {
       logger.info("Execution allowlist disabled - any mint allowed for leg selection");
     }
 
-    const allowedLiquidityMints = allowlistMints.length > 0 ? new Set(allowlistMints) : undefined;
+    const allowedLiquidityMints = execAllowlistMints ? new Set(execAllowlistMints) : undefined;
 
     // Load reserves/oracles over FULL market (no allowlist for scoring)
     logger.info("Loading reserves for market...");
-    const reserveCache = await loadReserves(connection, marketPubkey, undefined);
+    const reserveCache = await loadReserves(connection, marketPubkey);
     logger.info({ reserveCount: reserveCache.byReserve.size }, "Reserves loaded");
 
     // Load oracles
     logger.info("Loading oracles...");
-    const oracleCache = await loadOracles(connection, reserveCache, undefined);
+    const oracleCache = await loadOracles(connection, reserveCache);
     logger.info({ oracleCount: oracleCache.size }, "Oracles loaded");
 
     // Create indexer WITHOUT allowlist (scoring must see full portfolio)

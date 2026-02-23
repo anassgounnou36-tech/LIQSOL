@@ -19,6 +19,7 @@ const SETUP_FEE_BUFFER_LAMPORTS = 2_000_000;
 let lastUnderfundedWarnMs = 0;
 let startupFeePayerCheckDone = false;
 let cachedAtaRentLamports: number | undefined;
+const dryRunSetupRequiredCache = new Map<string, number>();
 
 function dumpCompiledIxAccounts(opts: {
   tx: VersionedTransaction;
@@ -415,6 +416,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const ttlGraceMs = Number(env.TTL_GRACE_MS ?? 60_000);
     const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
     const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'true') === 'true';
+    const dryRunSetupCacheTtlMs = Math.max(0, Number(env.EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS ?? 300) * 1000);
 
     console.log('[Executor] Filter thresholds:');
     console.log(`  EXEC_MIN_EV: ${minEv}`);
@@ -540,9 +542,11 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   // Multi-attempt executor: try multiple candidates per tick
   const maxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_CYCLE ?? 10);
   console.log(`[Executor] Selected ${candidates.length} eligible plans, attempting up to ${maxAttempts}`);
+  let lastDryRunSetupCacheSkip: { planKey: string; blockedUntilMs: number } | undefined;
 
   for (let attemptIdx = 0; attemptIdx < Math.min(maxAttempts, candidates.length); attemptIdx++) {
     const target = candidates[attemptIdx];
+    const planKey = String(target.key);
     console.log(`\n[Executor] ═══ Attempt ${attemptIdx + 1}/${Math.min(maxAttempts, candidates.length)}: ${String(target.key).slice(0, 8)}... ═══`);
     
     // PR2: Validate plan version and required fields
@@ -575,9 +579,18 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       continue; // Skip to next candidate
     }
 
-    if (isBlocked(String(target.key))) {
+    if (isBlocked(planKey)) {
       console.log(`[Executor] Skipping blocked plan ${String(target.key).slice(0, 8)} (insufficient-rent cooldown)`);
       continue;
+    }
+
+    if (dry && dryRunSetupCacheTtlMs > 0) {
+      const blockedUntilMs = dryRunSetupRequiredCache.get(planKey);
+      if (blockedUntilMs && nowMs < blockedUntilMs) {
+        console.log(`[Executor] Skipping ${planKey.slice(0, 8)} due to dry-run setup cache (${Math.ceil((blockedUntilMs - nowMs) / 1000)}s remaining)`);
+        lastDryRunSetupCacheSkip = { planKey, blockedUntilMs };
+        continue;
+      }
     }
     
     const now = Date.now();
@@ -675,7 +688,6 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const feePayerLamports = await connection.getBalance(signer.publicKey);
     const balanceTooLow = feePayerLamports < requiredLamports;
     if (balanceTooLow) {
-      const planKey = String(target.key);
       markBlocked(planKey, 'insufficient-rent');
       await downgradeBlockedPlan(planKey);
       if (dry && shouldWarnUnderfundedDryRun(Date.now())) {
@@ -725,6 +737,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       // In dry-run mode, return 'setup-required' and skip liquidation simulation
       // Rationale: simulateTransaction does not persist ATA state, so liquidation would fail with AccountNotInitialized (3012)
       console.log('[Executor] Setup would be required in broadcast mode.');
+      if (dry && dryRunSetupCacheTtlMs > 0) {
+        dryRunSetupRequiredCache.set(planKey, Date.now() + dryRunSetupCacheTtlMs);
+      }
       console.log('[Executor] Returning status "setup-required" without simulating liquidation (ATAs do not persist in simulation).\n');
       return { status: 'setup-required' };
       
@@ -1040,6 +1055,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   }
   } // end for loop (multi-attempt)
   
+  if (lastDryRunSetupCacheSkip) {
+    return { status: 'skipped-dry-run-setup-cache', ...lastDryRunSetupCacheSkip };
+  }
+
   // All attempts completed without success
   console.log('[Executor] All attempts completed');
   return { status: 'all-attempts-completed' };

@@ -26,8 +26,9 @@ export const EnvSchema = z.object({
   
   // Optional: comma-separated list of liquidity mint addresses for allowlist filtering (PR7 gate)
   // Example: "So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-  // Default: SOL+USDC for PR7 gate behavior. Set to empty string to disable allowlist.
+  // Deprecated execution allowlist key (kept for backward compatibility).
   LIQSOL_LIQ_MINT_ALLOWLIST: z.string().optional(),
+  LIQSOL_EXEC_MINT_ALLOWLIST: z.string().optional(),
 
   // Health ratio source selection
   // - recomputed: use fresh oracle+reserve recompute (forward-looking, catches early liquidations)
@@ -83,6 +84,7 @@ export const EnvSchema = z.object({
   EXEC_MIN_EV: z.string().optional().default('0'),
   EXEC_MAX_TTL_MIN: z.string().optional().default('10'),
   EXEC_MIN_FEE_PAYER_SOL: z.string().optional().default('0.05'),
+  EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).optional().default(300),
   SCHEDULED_MIN_LIQUIDATION_DELAY_MS: z.string().optional().default('0'),
 
   // Candidate selection tuning

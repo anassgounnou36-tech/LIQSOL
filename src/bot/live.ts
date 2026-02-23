@@ -5,7 +5,12 @@ import { loadEnv } from '../config/env.js';
 import { logger } from '../observability/logger.js';
 import { runInitialPipeline } from '../pipeline/runInitialPipeline.js';
 import { startBotStartupScheduler, reloadWatchlistFromQueue } from '../scheduler/botStartupScheduler.js';
-import { SOL_MINT, USDC_MINT } from '../constants/mints.js';
+
+function parseMintAllowlistCsv(s?: string): string[] | undefined {
+  if (!s) return undefined;
+  const items = s.split(',').map(x => x.trim()).filter(Boolean);
+  return items.length ? items : undefined;
+}
 
 /**
  * Professional Integrated Live Runner
@@ -75,24 +80,14 @@ export async function startIntegratedLiveRunner(opts: {
     console.log('\n🔴 BROADCAST MODE ENABLED: Real transactions will be sent!');
   }
 
-  // Parse allowlist
-  let allowlistMints: string[] = [SOL_MINT, USDC_MINT];
-  if (env.LIQSOL_LIQ_MINT_ALLOWLIST !== undefined) {
-    if (env.LIQSOL_LIQ_MINT_ALLOWLIST.length > 0) {
-      allowlistMints = env.LIQSOL_LIQ_MINT_ALLOWLIST
-        .split(',')
-        .map((m) => m.trim())
-        .filter(Boolean);
-    } else {
-      allowlistMints = [];
-    }
-  }
-
-  if (allowlistMints.length > 0) {
-    console.log(`  Allowlist: ${allowlistMints.length} mint(s)`);
-  } else {
-    console.log('  Allowlist: Disabled (all mints)');
-  }
+  const execAllowlist = parseMintAllowlistCsv(
+    process.env.LIQSOL_EXEC_MINT_ALLOWLIST ?? process.env.LIQSOL_LIQ_MINT_ALLOWLIST
+  );
+  console.log(
+    execAllowlist
+      ? `  Execution allowlist: ${execAllowlist.length} mint(s)`
+      : '  Execution allowlist: Disabled (all mints)'
+  );
 
   // Parse refresh interval
   const refreshIntervalMs = opts.refreshIntervalMs;
@@ -114,7 +109,7 @@ export async function startIntegratedLiveRunner(opts: {
     await runInitialPipeline({
       marketPubkey,
       programId,
-      allowlistMints: allowlistMints.length > 0 ? allowlistMints : undefined,
+      execAllowlistMints: execAllowlist,
       topN: Number(env.CAND_TOP ?? 50),
       nearThreshold: Number(env.CAND_NEAR ?? 1.02),
       flashloanMint: 'USDC',
@@ -162,7 +157,7 @@ export async function startIntegratedLiveRunner(opts: {
       await runInitialPipeline({
         marketPubkey,
         programId,
-        allowlistMints: allowlistMints.length > 0 ? allowlistMints : undefined,
+        execAllowlistMints: execAllowlist,
         topN: Number(env.CAND_TOP ?? 50),
         nearThreshold: Number(env.CAND_NEAR ?? 1.02),
         flashloanMint: 'USDC',

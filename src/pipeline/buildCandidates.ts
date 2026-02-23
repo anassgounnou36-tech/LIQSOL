@@ -12,7 +12,7 @@ import { logger } from '../observability/logger.js';
 export interface BuildCandidatesOptions {
   marketPubkey: PublicKey;
   programId: PublicKey;
-  allowlistMints?: string[];
+  execAllowlistMints?: string[];
   topN?: number;
   nearThreshold?: number;
   outputPath?: string;
@@ -26,7 +26,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
   const {
     marketPubkey,
     programId,
-    allowlistMints,
+    execAllowlistMints,
     topN = 50,
     nearThreshold = 1.02,
     outputPath = 'data/candidates.json',
@@ -39,23 +39,23 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
   const yellowstoneToken = process.env.YELLOWSTONE_X_TOKEN || '';
 
   // Parse allowlist mints (execution-only filter)
-  const allowedLiquidityMints = allowlistMints && allowlistMints.length > 0 
-    ? new Set(allowlistMints) 
+  const allowedLiquidityMints = execAllowlistMints && execAllowlistMints.length > 0
+    ? new Set(execAllowlistMints)
     : undefined;
 
   if (allowedLiquidityMints) {
-    logger.info({ allowlistMints }, 'Execution allowlist enabled (repay/collateral leg selection only)');
+    logger.info({ execAllowlistMints }, 'Execution allowlist enabled (repay/collateral leg selection only)');
   } else {
     logger.info('Execution allowlist disabled - any mint allowed for leg selection');
   }
 
   // Load reserves/oracles over FULL market (no allowlist for scoring)
   logger.info('Loading reserves for market...');
-  const reserveCache = await loadReserves(connection, marketPubkey, undefined);
+  const reserveCache = await loadReserves(connection, marketPubkey);
   logger.info({ reserveCount: reserveCache.byReserve.size }, 'Reserves loaded');
 
   logger.info('Loading oracles...');
-  const oracleCache = await loadOracles(connection, reserveCache, undefined);
+  const oracleCache = await loadOracles(connection, reserveCache);
   logger.info({ oracleCount: oracleCache.size }, 'Oracles loaded');
 
   // Create indexer WITHOUT allowlist (scoring must see full portfolio)

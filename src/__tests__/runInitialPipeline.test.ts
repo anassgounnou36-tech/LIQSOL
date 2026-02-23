@@ -43,7 +43,7 @@ describe('runInitialPipeline', () => {
     await runInitialPipeline({
       marketPubkey,
       programId,
-      allowlistMints: ['So11111111111111111111111111111111111111112'],
+      execAllowlistMints: ['So11111111111111111111111111111111111111112'],
       topN: 25,
       nearThreshold: 1.01,
       flashloanMint: 'USDC',
@@ -57,7 +57,7 @@ describe('runInitialPipeline', () => {
     expect(buildCandidatesModule.buildCandidates).toHaveBeenCalledWith({
       marketPubkey,
       programId,
-      allowlistMints: ['So11111111111111111111111111111111111111112'],
+      execAllowlistMints: ['So11111111111111111111111111111111111111112'],
       topN: 25,
       nearThreshold: 1.01,
     });
