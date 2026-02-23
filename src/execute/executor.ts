@@ -1,17 +1,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
+import { AddressLookupTableAccount, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { getConnection } from '../solana/connection.js';
-import { buildJupiterSwapIxs } from './swapBuilder.js';
 import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
-import { resolveMintFlexible } from '../solana/mint.js';
-import { sendWithBoundedRetry, formatAttemptResults } from './broadcastRetry.js';
+import { sendWithBoundedRetry, sendWithRebuildRetry, formatAttemptResults } from './broadcastRetry.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { isPlanComplete, getMissingFields } from '../scheduler/planValidation.js';
-import { buildKaminoRefreshAndLiquidateIxsCanonical, validateCompiledInstructionWindow, decodeCompiledInstructionKinds } from '../kamino/canonicalLiquidationIxs.js';
+import { validateCompiledInstructionWindow, decodeCompiledInstructionKinds } from '../kamino/canonicalLiquidationIxs.js';
 import { downgradeBlockedPlan, dropPlanFromQueue } from '../scheduler/txScheduler.js';
 import { isBlocked, markAtaCreated, markBlocked } from '../state/setupState.js';
+import { buildPlanTransactions } from './planTxBuilder.js';
+import { buildVersionedTx } from './versionedTx.js';
+import { buildComputeBudgetIxs } from '../execution/computeBudget.js';
+import { Presubmitter } from '../presubmit/presubmitter.js';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
@@ -20,6 +22,8 @@ let lastUnderfundedWarnMs = 0;
 let startupFeePayerCheckDone = false;
 let cachedAtaRentLamports: number | undefined;
 const dryRunSetupRequiredCache = new Map<string, number>();
+const obligationHealthyCooldown = new Map<string, number>(); // planKey -> untilMs
+let presubmitterSingleton: Presubmitter | undefined;
 
 function dumpCompiledIxAccounts(opts: {
   tx: VersionedTransaction;
@@ -46,6 +50,41 @@ function dumpCompiledIxAccounts(opts: {
     console.error(`  [${i}] ${pk ? pk.toBase58() : `missingKeyIndex(${k})`}`);
   });
   console.error('');
+}
+
+function extractCustomCode(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object' || !('InstructionError' in err)) return undefined;
+  const instructionError = (err as { InstructionError?: unknown }).InstructionError as unknown[] | undefined;
+  const innerError = instructionError?.[1];
+  if (innerError && typeof innerError === 'object' && 'Custom' in innerError) {
+    return (innerError as { Custom?: number }).Custom;
+  }
+  return undefined;
+}
+
+function shouldFallbackToSetupOnly(simErr: unknown, logs: string[] | undefined): boolean {
+  const customCode = extractCustomCode(simErr);
+  if (customCode === 6032) return true;
+  if (!logs || logs.length === 0) return false;
+  return logs.some((l) => /NoFlashRepayFound|missing swap/i.test(l));
+}
+
+function withUpdatedComputeBudget(
+  instructions: TransactionInstruction[],
+  labels: string[],
+  cuLimit: number,
+  cuPrice: number
+): { instructions: TransactionInstruction[]; labels: string[] } {
+  const start = labels.findIndex((l) => l.startsWith('computeBudget:'));
+  if (start < 0) return { instructions, labels };
+  let end = start;
+  while (end < labels.length && labels[end].startsWith('computeBudget:')) end++;
+  const computeIxs = buildComputeBudgetIxs({ cuLimit, cuPriceMicroLamports: cuPrice });
+  const computeLabels = ['computeBudget:limit', ...(computeIxs.length > 1 ? ['computeBudget:price'] : [])];
+  return {
+    instructions: [...instructions.slice(0, start), ...computeIxs, ...instructions.slice(end)],
+    labels: [...labels.slice(0, start), ...computeLabels, ...labels.slice(end)],
+  };
 }
 
 interface Plan {
@@ -145,13 +184,18 @@ async function buildFullTransaction(
   signer: Keypair,
   market: PublicKey,
   programId: PublicKey,
-  opts: { includeSwap?: boolean; useRealSwapSizing?: boolean } = {}
+  opts: { includeSwap?: boolean; useRealSwapSizing?: boolean; dry?: boolean } = {}
 ): Promise<{ 
   setupIxs: TransactionInstruction[]; 
   setupLabels: string[]; 
   missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }>;
-  ixs: TransactionInstruction[]; 
+  ixs: TransactionInstruction[];
   labels: string[];
+  swapIxs: TransactionInstruction[];
+  swapLookupTables: AddressLookupTableAccount[];
+  atomicIxs: TransactionInstruction[];
+  atomicLabels: string[];
+  atomicLookupTables: AddressLookupTableAccount[];
   metadata: {
     repayMint: PublicKey;
     collateralMint: PublicKey;
@@ -159,215 +203,33 @@ async function buildFullTransaction(
     hasFarmsRefresh: boolean;
   };
 }> {
-  const connection = getConnection();
-  
-  // Get env for config
-  const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
-  const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
-  
-  // Parse expected reserve pubkeys from plan
-  let repayMintPreference: PublicKey | undefined;
-  let expectedRepayReservePubkey: PublicKey | undefined;
-  let expectedCollateralReservePubkey: PublicKey | undefined;
-  
-  if (plan.repayMint) {
-    try {
-      repayMintPreference = resolveMintFlexible(plan.repayMint);
-    } catch (err) {
-      console.error(
-        `[Executor] Failed to resolve repayMint for plan ${plan.key}:`,
-        err instanceof Error ? err.message : String(err)
-      );
-      throw err;
-    }
-  }
-  
-  if (plan.repayReservePubkey) {
-    try {
-      expectedRepayReservePubkey = new PublicKey(plan.repayReservePubkey);
-      console.log(`[Executor] Using expected repay reserve: ${expectedRepayReservePubkey.toBase58()}`);
-    } catch (err) {
-      console.warn(
-        `[Executor] Invalid repayReservePubkey in plan: ${plan.repayReservePubkey}`,
-        err instanceof Error ? err.message : String(err)
-      );
-    }
-  }
-  
-  if (plan.collateralReservePubkey) {
-    try {
-      expectedCollateralReservePubkey = new PublicKey(plan.collateralReservePubkey);
-      console.log(`[Executor] Using expected collateral reserve: ${expectedCollateralReservePubkey.toBase58()}`);
-    } catch (err) {
-      console.warn(
-        `[Executor] Invalid collateralReservePubkey in plan: ${plan.collateralReservePubkey}`,
-        err instanceof Error ? err.message : String(err)
-      );
-    }
-  }
-  
-  // Step 1: Build canonical liquidation sequence WITHOUT swap (to size seized collateral)
-  const mint = (plan.mint || 'USDC') as string;
-  const amountUi = String(plan.amountUi ?? plan.amountUsd ?? '100');
-  
-  const canonicalConfig = {
-    connection,
+  const built = await buildPlanTransactions({
+    connection: getConnection(),
     signer,
-    marketPubkey: market,
+    market,
     programId,
-    obligationPubkey: new PublicKey(plan.obligationPubkey),
-    cuLimit,
-    cuPrice,
-    flashloan: {
-      mint,
-      amountUi,
-    },
-    repayMintPreference,
-    repayAmountUi: plan.amountUi,
-    expectedRepayReservePubkey,
-    expectedCollateralReservePubkey,
-  };
-  
-  // Build initial canonical instructions (without swap)
-  const initialCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(canonicalConfig);
-  
-  // Extract setup instructions and metadata
-  const setupIxs = initialCanonical.setupIxs;
-  const { repayMint, collateralMint, withdrawCollateralMint, hasFarmsRefresh } = initialCanonical;
-  
-  // Step 2: Handle swap sizing if needed
-  let swapInstructions: TransactionInstruction[] = [];
-  
-  if (opts.includeSwap && !collateralMint.equals(repayMint)) {
-    console.log('[Executor] Swap required: collateral mint differs from repay mint');
-    console.log(`[Executor]   Collateral (liquidity): ${collateralMint.toBase58()}`);
-    console.log(`[Executor]   Collateral (redemption): ${withdrawCollateralMint.toBase58()}`);
-    console.log(`[Executor]   Repay: ${repayMint.toBase58()}`);
-    
-    // Gate swap sizing behind ATA setup
-    if (setupIxs.length > 0) {
-      console.log('[Executor] ⚠️  Swap sizing skipped: Setup required (ATAs missing)');
-      console.log('[Executor] Setup transaction must be sent first. Swap sizing will run in next cycle.');
-    } else if (opts.useRealSwapSizing) {
-      console.log('[Executor] Using REAL swap sizing via deterministic seized-delta estimation...');
-      
-      try {
-        // Import seized delta estimator
-        const { estimateSeizedCollateralDeltaBaseUnits } = await import('./seizedDeltaEstimator.js');
-        const { formatBaseUnitsToUiString } = await import('./swapBuilder.js');
-        
-        // Build simulation transaction using canonical builder (WITHOUT flashloan, WITHOUT swap)
-        // This avoids error 6032 (NoFlashRepayFound) during simulation
-        const simConfig = {
-          ...canonicalConfig,
-          flashloan: undefined, // No flashloan in simulation
-        };
-        
-        const simCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(simConfig);
-        
-        // Build and sign simulation transaction
-        const bh = await connection.getLatestBlockhash();
-        const simMsg = new TransactionMessage({
-          payerKey: signer.publicKey,
-          recentBlockhash: bh.blockhash,
-          instructions: simCanonical.instructions,
-        });
-        const simCompiledMsg = simMsg.compileToLegacyMessage();
-        const simTx = new VersionedTransaction(simCompiledMsg);
-        simTx.sign([signer]);
-        
-        // Estimate seized collateral via account-delta approach
-        const seizedCollateralBaseUnits = await estimateSeizedCollateralDeltaBaseUnits({
-          connection,
-          liquidator: signer.publicKey,
-          collateralMint: withdrawCollateralMint,
-          simulateTx: simTx,
-          instructionLabels: simCanonical.labels,
-        });
-        
-        console.log(`[Executor] Estimated seized: ${seizedCollateralBaseUnits} base units`);
-        
-        // Apply safety haircut
-        const haircutBps = Number(process.env.SWAP_IN_HAIRCUT_BPS ?? 100);
-        const haircutMultiplier = 10000n - BigInt(haircutBps);
-        const inAmountBaseUnits = (seizedCollateralBaseUnits * haircutMultiplier) / 10000n;
-        
-        console.log(`[Executor] After ${haircutBps} bps haircut: ${inAmountBaseUnits} base units`);
-        
-        // Build Jupiter swap
-        const slippageBps = Number(process.env.SWAP_SLIPPAGE_BPS ?? 100);
-        const swapResult = await buildJupiterSwapIxs({
-          inputMint: collateralMint,
-          outputMint: repayMint,
-          inAmountBaseUnits,
-          slippageBps,
-          userPubkey: signer.publicKey,
-          connection,
-        });
-        
-        // Collect all swap instructions
-        swapInstructions = [
-          ...swapResult.setupIxs,
-          ...swapResult.swapIxs,
-          ...swapResult.cleanupIxs,
-        ];
-        
-        console.log(`[Executor] Built ${swapInstructions.length} swap instruction(s)`);
-        
-        if (swapResult.estimatedOutAmountBaseUnits) {
-          const repayDecimals = plan.repayDecimals ?? 6;
-          const estimatedOutUi = formatBaseUnitsToUiString(swapResult.estimatedOutAmountBaseUnits, repayDecimals);
-          console.log(`[Executor]   Estimated output: ${estimatedOutUi} ${repayMint.toBase58().slice(0, 8)}`);
-        }
-        
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        
-        // Check if it's a 6016 ObligationHealthy soft failure
-        // Re-throw this special error so it can be caught by the parent function
-        if (errMsg === 'OBLIGATION_HEALTHY') {
-          console.error('[Executor] ℹ️  6016 ObligationHealthy detected during seized-delta estimation');
-          console.error('[Executor] Skipping this plan and continuing with next cycle.\n');
-          throw new Error('OBLIGATION_HEALTHY');
-        }
-        
-        console.error('[Executor] Failed to estimate seized collateral or build swap:', errMsg);
-        
-        const enableFallback = (process.env.SWAP_SIZING_FALLBACK_ENABLED ?? 'true') === 'true';
-        
-        if (enableFallback) {
-          console.warn('[Executor] ⚠️  FALLBACK: Seized-delta sizing failed, proceeding with liquidation-only');
-          console.warn(`[Executor]   Error: ${err instanceof Error ? err.message : String(err)}`);
-        } else {
-          throw new Error(
-            `Swap required but sizing failed: ${err instanceof Error ? err.message : String(err)}`
-          );
-        }
-      }
-    } else {
-      console.log('[Executor] useRealSwapSizing=false, skipping swap (dry-run/test mode)');
-    }
-  }
-  
-  // Step 3: Build final canonical transaction with swap (if generated)
-  const finalConfig = {
-    ...canonicalConfig,
-    swap: swapInstructions.length > 0 ? { instructions: swapInstructions } : undefined,
-  };
-  
-  const finalCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(finalConfig);
-  
+    plan,
+    includeSwap: opts.includeSwap ?? true,
+    useRealSwapSizing: opts.useRealSwapSizing ?? true,
+    dry: opts.dry ?? false,
+  });
+
   return {
-    setupIxs: finalCanonical.setupIxs,
-    setupLabels: finalCanonical.setupLabels,
-    missingAtas: finalCanonical.missingAtas,
-    ixs: finalCanonical.instructions,
-    labels: finalCanonical.labels,
+    setupIxs: built.setupIxs,
+    setupLabels: built.setupLabels,
+    missingAtas: built.missingAtas,
+    ixs: built.mainIxs,
+    labels: built.mainLabels,
+    swapIxs: built.swapIxs,
+    swapLookupTables: built.swapLookupTables,
+    atomicIxs: built.atomicIxs,
+    atomicLabels: built.atomicLabels,
+    atomicLookupTables: built.atomicLookupTables,
     metadata: {
-      repayMint,
-      collateralMint,
-      withdrawCollateralMint,
-      hasFarmsRefresh,
+      repayMint: built.repayMint,
+      collateralMint: built.collateralMint,
+      withdrawCollateralMint: built.withdrawCollateralMint,
+      hasFarmsRefresh: built.hasFarmsRefresh,
     },
   };
 }
@@ -417,6 +279,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
     const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'true') === 'true';
     const dryRunSetupCacheTtlMs = Math.max(0, Number(env.EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS ?? 300) * 1000);
+    const presubmitEnabled = (env.PRESUBMIT_ENABLED ?? 'false') === 'true';
+    const presubmitTopK = Number(env.PRESUBMIT_TOPK ?? 5);
+    const presubmitRefreshMs = Number(process.env.PRESUBMIT_REFRESH_MS ?? 3000);
 
     console.log('[Executor] Filter thresholds:');
     console.log(`  EXEC_MIN_EV: ${minEv}`);
@@ -539,6 +404,29 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     return { status: 'no-eligible' };
   }
 
+  if (presubmitEnabled) {
+    if (!presubmitterSingleton) {
+      const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
+      const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
+      const signer = Keypair.fromSecretKey(Uint8Array.from(secret));
+      const market = new PublicKey(env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
+      const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
+      presubmitterSingleton = new Presubmitter({
+        connection,
+        signer,
+        market,
+        programId,
+        topK: presubmitTopK,
+        refreshMs: presubmitRefreshMs,
+      });
+    }
+    try {
+      await presubmitterSingleton.prebuildTopK(candidates as FlashloanPlan[]);
+    } catch (err) {
+      console.warn('[Executor] Presubmit prebuild failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   // Multi-attempt executor: try multiple candidates per tick
   const maxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_CYCLE ?? 10);
   console.log(`[Executor] Selected ${candidates.length} eligible plans, attempting up to ${maxAttempts}`);
@@ -581,6 +469,12 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
     if (isBlocked(planKey)) {
       console.log(`[Executor] Skipping blocked plan ${String(target.key).slice(0, 8)} (insufficient-rent cooldown)`);
+      continue;
+    }
+
+    const healthyCooldownUntil = obligationHealthyCooldown.get(planKey) ?? 0;
+    if (healthyCooldownUntil > Date.now()) {
+      console.log(`[Executor] Skipping ${planKey.slice(0, 8)} due to obligation-healthy cooldown (${Math.ceil((healthyCooldownUntil - Date.now()) / 1000)}s remaining)`);
       continue;
     }
 
@@ -627,18 +521,38 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   let missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }>;
   let ixs: TransactionInstruction[];
   let labels: string[];
-  let metadata: { hasFarmsRefresh: boolean };
+  let swapIxs: TransactionInstruction[];
+  let swapLookupTables: AddressLookupTableAccount[];
+  let atomicIxs: TransactionInstruction[];
+  let atomicLabels: string[];
+  let atomicLookupTables: AddressLookupTableAccount[];
+  let metadata: { hasFarmsRefresh: boolean; repayMint: PublicKey; collateralMint: PublicKey; withdrawCollateralMint: PublicKey };
+  let presubmittedTx: VersionedTransaction | undefined;
   
   try {
+    if (presubmitEnabled && presubmitterSingleton && target.obligationPubkey) {
+      const entry = await presubmitterSingleton.getOrBuild(target as FlashloanPlan);
+      if (entry.tx && !entry.needsSetupFirst && entry.mode === 'atomic') {
+        console.log(`[Executor] using presubmitted tx for ${target.obligationPubkey}`);
+        presubmittedTx = entry.tx;
+      }
+    }
+
     const result = await buildFullTransaction(target, signer, market, programId, {
       includeSwap: true,
       useRealSwapSizing,
+      dry,
     });
     setupIxs = result.setupIxs;
     setupLabels = result.setupLabels;
     missingAtas = result.missingAtas;
     ixs = result.ixs;
     labels = result.labels;
+    swapIxs = result.swapIxs;
+    swapLookupTables = result.swapLookupTables;
+    atomicIxs = result.atomicIxs;
+    atomicLabels = result.atomicLabels;
+    atomicLookupTables = result.atomicLookupTables;
     metadata = result.metadata;
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -646,6 +560,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     // Check if it's OBLIGATION_HEALTHY error from buildFullTransaction
     if (errMsg === 'OBLIGATION_HEALTHY') {
       console.error('[Executor] ℹ️  6016 ObligationHealthy - plan skipped');
+      obligationHealthyCooldown.set(planKey, Date.now() + (5 * 60 * 1000));
       return { status: 'obligation-healthy' };
     }
     
@@ -660,7 +575,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   // TX Size Fix: Handle setup transaction if needed
   if (setupIxs.length > 0) {
     console.log(`\n[Executor] ⚠️  Setup required: ${setupIxs.length} ATA(s) need to be created`);
-    console.log(`[Executor] Setup will be processed in a separate transaction to keep liquidation TX small`);
+    console.log(`[Executor] Building atomic setup+liquidation path`);
     
     // Assertion: Verify setup labels match setup instructions
     // This should never fail unless there's a bug in the label generation logic
@@ -702,52 +617,43 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       return { status: 'blocked-insufficient-rent', planKey, requiredLamports, feePayerLamports };
     }
     
-    // Build and sign setup transaction
-    const setupBh = await connection.getLatestBlockhash();
-    const setupMsg = new TransactionMessage({
-      payerKey: signer.publicKey,
-      recentBlockhash: setupBh.blockhash,
-      instructions: setupIxs,
+    const atomicBh = await connection.getLatestBlockhash();
+    const atomicTx = await buildVersionedTx({
+      payer: signer.publicKey,
+      blockhash: atomicBh.blockhash,
+      instructions: atomicIxs,
+      lookupTables: atomicLookupTables,
+      signer,
     });
-    const setupCompiledMsg = setupMsg.compileToLegacyMessage();
-    const setupTx = new VersionedTransaction(setupCompiledMsg);
-    setupTx.sign([signer]);
-    
-    if (dry || !broadcast) {
-      // Dry-run or non-broadcast mode: Simulate setup transaction for logging, then return without simulating liquidation
-      console.log('[Executor] Simulating setup transaction...');
-      const setupSim = await connection.simulateTransaction(setupTx);
-      
-      if (setupSim.value.err) {
-        console.error('[Executor] Setup simulation error:', setupSim.value.err);
-        if (setupSim.value.logs && setupSim.value.logs.length > 0) {
-          console.error('\n[Executor] ═══ SETUP SIMULATION LOGS ═══');
-          setupSim.value.logs.forEach((log, i) => {
-            console.error(`  [${i}] ${log}`);
-          });
-          console.error('═══════════════════════════════════\n');
-        }
-        return { status: 'setup-sim-error' };
+
+    console.log('[Executor] Simulating atomic setup+liquidation transaction...');
+    const atomicSim = await connection.simulateTransaction(atomicTx);
+    if (atomicSim.value.err) {
+      const customCode = extractCustomCode(atomicSim.value.err);
+      if (customCode === 6016) {
+        obligationHealthyCooldown.set(planKey, Date.now() + (5 * 60 * 1000));
+        return { status: 'obligation-healthy' };
       }
-      
-      console.log('[Executor] Setup simulation success');
-      console.log(`  CU used: ${setupSim.value.unitsConsumed ?? 'unknown'}`);
-      console.log(`  Logs: ${setupSim.value.logs?.length ?? 0} entries`);
-      
-      // In dry-run mode, return 'setup-required' and skip liquidation simulation
-      // Rationale: simulateTransaction does not persist ATA state, so liquidation would fail with AccountNotInitialized (3012)
-      console.log('[Executor] Setup would be required in broadcast mode.');
-      if (dry && dryRunSetupCacheTtlMs > 0) {
-        dryRunSetupRequiredCache.set(planKey, Date.now() + dryRunSetupCacheTtlMs);
-      }
-      console.log('[Executor] Returning status "setup-required" without simulating liquidation (ATAs do not persist in simulation).\n');
-      return { status: 'setup-required' };
-      
-    } else {
-      // Broadcast setup transaction
-      console.log('[Executor] Broadcasting setup transaction...');
-      
-      try {
+
+      const swapWasSkippedForSetup = swapIxs.length === 0 && !metadata.collateralMint.equals(metadata.repayMint);
+      if (
+        broadcast &&
+        swapWasSkippedForSetup &&
+        shouldFallbackToSetupOnly(atomicSim.value.err, atomicSim.value.logs ?? undefined)
+      ) {
+        console.log('[Executor] Atomic preflight indicates setup-first required for swap sizing, falling back to setup-only broadcast.');
+        const setupBh = await connection.getLatestBlockhash();
+        const setupMsg = new TransactionMessage({
+          payerKey: signer.publicKey,
+          recentBlockhash: setupBh.blockhash,
+          instructions: setupIxs,
+        });
+        const setupTx = await buildVersionedTx({
+          payer: signer.publicKey,
+          blockhash: setupBh.blockhash,
+          instructions: setupIxs,
+          signer,
+        });
         const setupAttempts = await sendWithBoundedRetry(
           connection,
           setupTx,
@@ -755,38 +661,65 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           setupMsg,
           {
             maxAttempts: 2,
-            cuLimit: 200_000, // Setup TX is small
+            cuLimit: 200_000,
             cuPrice: Number(process.env.EXEC_CU_PRICE ?? 0),
             cuLimitBumpFactor: 1.5,
             cuPriceBumpMicrolamports: 50000,
           }
         );
-        
         console.log(formatAttemptResults(setupAttempts));
-        
         const finalSetupAttempt = setupAttempts[setupAttempts.length - 1];
-        
-        if (finalSetupAttempt && finalSetupAttempt.success) {
-          console.log('[Executor] ✅ Setup transaction confirmed successfully!');
-          console.log(`[Executor] Signature: ${finalSetupAttempt.signature}`);
-          console.log('[Executor] ATAs created. Liquidation will proceed in next cycle.');
-          for (const ata of missingAtas) {
-            markAtaCreated(ata.mint);
-          }
-          return { 
-            status: 'setup-completed', 
-            signature: finalSetupAttempt.signature
-          };
-        } else {
-          console.error('[Executor] ❌ Setup transaction failed');
-          return { status: 'setup-failed' };
+        if (finalSetupAttempt?.success) {
+          for (const ata of missingAtas) markAtaCreated(ata.mint);
+          return { status: 'setup-completed', signature: finalSetupAttempt.signature };
         }
-        
-      } catch (err) {
-        console.error('[Executor] Setup broadcast error:', err instanceof Error ? err.message : String(err));
-        return { status: 'setup-error' };
+        return { status: 'setup-failed' };
       }
+
+      if (dry && dryRunSetupCacheTtlMs > 0) {
+        dryRunSetupRequiredCache.set(planKey, Date.now() + dryRunSetupCacheTtlMs);
+      }
+      return { status: dry ? 'dry-atomic-sim-failed' : 'atomic-preflight-failed' };
     }
+
+    if (dry || !broadcast) {
+      if (dry && dryRunSetupCacheTtlMs > 0) {
+        dryRunSetupRequiredCache.delete(planKey);
+      }
+      return { status: 'dry-atomic-sim-ok' };
+    }
+
+    const atomicMaxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_PLAN ?? 2);
+    const atomicCuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
+    const atomicCuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
+    const atomicAttempts = await sendWithRebuildRetry(
+      connection,
+      signer,
+      async ({ blockhash, cuLimit, cuPrice }) => {
+        const rebuilt = withUpdatedComputeBudget(atomicIxs, atomicLabels, cuLimit, cuPrice);
+        return buildVersionedTx({
+          payer: signer.publicKey,
+          blockhash,
+          instructions: rebuilt.instructions,
+          lookupTables: atomicLookupTables,
+          signer,
+        });
+      },
+      {
+        maxAttempts: atomicMaxAttempts,
+        cuLimit: atomicCuLimit,
+        cuPrice: atomicCuPrice,
+        cuLimitBumpFactor: 1.5,
+        cuPriceBumpMicrolamports: 50000,
+      }
+    );
+    console.log(formatAttemptResults(atomicAttempts));
+    const finalAtomicAttempt = atomicAttempts[atomicAttempts.length - 1];
+    if (finalAtomicAttempt?.success) {
+      for (const ata of missingAtas) markAtaCreated(ata.mint);
+      return { status: 'atomic-sent', signature: finalAtomicAttempt.signature };
+    }
+    return { status: 'atomic-preflight-failed' };
   }
   
   // Assertion: Verify labels match instructions
@@ -812,20 +745,22 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
   // Build and sign transaction
   const bh = await connection.getLatestBlockhash();
-  const msg = new TransactionMessage({
-    payerKey: signer.publicKey,
-    recentBlockhash: bh.blockhash,
+  const tx = presubmittedTx ?? await buildVersionedTx({
+    payer: signer.publicKey,
+    blockhash: bh.blockhash,
     instructions: ixs,
+    lookupTables: swapLookupTables,
+    signer,
   });
-  const compiledMsg = msg.compileToLegacyMessage();
-  const tx = new VersionedTransaction(compiledMsg);
-  tx.sign([signer]);
 
   // COMPILED INSTRUCTION WINDOW VALIDATION
   // Validate the compiled transaction against expected canonical sequence
   // This catches any divergence between label-based validation and actual compiled message
   console.log('\n[Executor] Validating compiled instruction window...');
-  const validation = validateCompiledInstructionWindow(tx, metadata.hasFarmsRefresh);
+  const validationHasFarms = presubmittedTx
+    ? decodeCompiledInstructionKinds(tx).some((kind) => kind.kind === 'refreshObligationFarmsForReserve')
+    : metadata.hasFarmsRefresh;
+  const validation = validateCompiledInstructionWindow(tx, validationHasFarms);
   
   if (!validation.valid) {
     console.error('[Executor] ⚠️  COMPILED VALIDATION MISMATCH:');
@@ -917,6 +852,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           
           // If it's 6016 ObligationHealthy, treat as soft failure (skip and continue)
           if (customCode === 6016) {
+            obligationHealthyCooldown.set(planKey, Date.now() + (5 * 60 * 1000));
             console.error('\n  ℹ️  SOFT FAILURE (6016 ObligationHealthy):');
             console.error('     The obligation is currently healthy and cannot be liquidated.');
             console.error('     This is a legitimate runtime state - the obligation may have been');
@@ -991,11 +927,19 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     console.log(`[Executor] Retry config: maxAttempts=${maxAttempts}, cuLimit=${cuLimit}, cuPrice=${cuPrice}`);
     
     try {
-      const attempts = await sendWithBoundedRetry(
+      const attempts = await sendWithRebuildRetry(
         connection,
-        tx,
         signer,
-        msg, // Pass TransactionMessage before compilation
+        async ({ blockhash, cuLimit, cuPrice }) => {
+          const rebuilt = withUpdatedComputeBudget(ixs, labels, cuLimit, cuPrice);
+          return buildVersionedTx({
+            payer: signer.publicKey,
+            blockhash,
+            instructions: rebuilt.instructions,
+            lookupTables: swapLookupTables,
+            signer,
+          });
+        },
         {
           maxAttempts,
           cuLimit,

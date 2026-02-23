@@ -98,6 +98,11 @@ export const EnvSchema = z.object({
   // TTL expiry configuration
   TTL_GRACE_MS: z.string().optional().default('60000'), // 60 seconds grace period after predicted liquidation
   TTL_UNKNOWN_PASSES: z.string().optional().default('true'), // Whether plans with unknown TTL should pass (not be marked expired)
+
+  // Presubmit cache
+  PRESUBMIT_ENABLED: z.string().optional().default('false'),
+  PRESUBMIT_TOPK: z.string().optional().default('5'),
+  PRESUBMIT_TTL_MS: z.string().optional().default('60000'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
