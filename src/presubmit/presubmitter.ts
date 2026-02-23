@@ -7,7 +7,7 @@ import { buildVersionedTx } from '../execute/versionedTx.js';
  * Presubmit cache entry for a ready-to-send transaction
  */
 export type PresubmitEntry = {
-  tx?: VersionedTransaction;
+  tx?: VersionedTransaction; // undefined when mode='partial' and needsSetupFirst=true
   builtAt: number; // timestamp in ms
   lastSimSlot?: number;
   expectedSeized?: bigint;

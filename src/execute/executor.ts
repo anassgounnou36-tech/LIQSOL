@@ -18,11 +18,12 @@ import { Presubmitter } from '../presubmit/presubmitter.js';
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
 const SETUP_FEE_BUFFER_LAMPORTS = 2_000_000;
+const OBLIGATION_HEALTHY_COOLDOWN_MS = 5 * 60 * 1000;
 let lastUnderfundedWarnMs = 0;
 let startupFeePayerCheckDone = false;
 let cachedAtaRentLamports: number | undefined;
 const dryRunSetupRequiredCache = new Map<string, number>();
-const obligationHealthyCooldown = new Map<string, number>(); // planKey -> untilMs
+const obligationHealthyCooldown = new Map<string, number>(); // planKey -> absolute expiry timestamp (ms)
 let presubmitterSingleton: Presubmitter | undefined;
 
 function dumpCompiledIxAccounts(opts: {
@@ -560,7 +561,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     // Check if it's OBLIGATION_HEALTHY error from buildFullTransaction
     if (errMsg === 'OBLIGATION_HEALTHY') {
       console.error('[Executor] ℹ️  6016 ObligationHealthy - plan skipped');
-      obligationHealthyCooldown.set(planKey, Date.now() + (5 * 60 * 1000));
+      obligationHealthyCooldown.set(planKey, Date.now() + OBLIGATION_HEALTHY_COOLDOWN_MS);
       return { status: 'obligation-healthy' };
     }
     
@@ -631,7 +632,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     if (atomicSim.value.err) {
       const customCode = extractCustomCode(atomicSim.value.err);
       if (customCode === 6016) {
-        obligationHealthyCooldown.set(planKey, Date.now() + (5 * 60 * 1000));
+        obligationHealthyCooldown.set(planKey, Date.now() + OBLIGATION_HEALTHY_COOLDOWN_MS);
         return { status: 'obligation-healthy' };
       }
 
@@ -852,7 +853,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           
           // If it's 6016 ObligationHealthy, treat as soft failure (skip and continue)
           if (customCode === 6016) {
-            obligationHealthyCooldown.set(planKey, Date.now() + (5 * 60 * 1000));
+            obligationHealthyCooldown.set(planKey, Date.now() + OBLIGATION_HEALTHY_COOLDOWN_MS);
             console.error('\n  ℹ️  SOFT FAILURE (6016 ObligationHealthy):');
             console.error('     The obligation is currently healthy and cannot be liquidated.');
             console.error('     This is a legitimate runtime state - the obligation may have been');
