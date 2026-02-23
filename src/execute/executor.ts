@@ -542,11 +542,12 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   // Multi-attempt executor: try multiple candidates per tick
   const maxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_CYCLE ?? 10);
   console.log(`[Executor] Selected ${candidates.length} eligible plans, attempting up to ${maxAttempts}`);
+  let lastDryRunSetupCacheSkip: { planKey: string; blockedUntilMs: number } | undefined;
 
-    for (let attemptIdx = 0; attemptIdx < Math.min(maxAttempts, candidates.length); attemptIdx++) {
-      const target = candidates[attemptIdx];
-      const planKey = String(target.key);
-      console.log(`\n[Executor] ═══ Attempt ${attemptIdx + 1}/${Math.min(maxAttempts, candidates.length)}: ${String(target.key).slice(0, 8)}... ═══`);
+  for (let attemptIdx = 0; attemptIdx < Math.min(maxAttempts, candidates.length); attemptIdx++) {
+    const target = candidates[attemptIdx];
+    const planKey = String(target.key);
+    console.log(`\n[Executor] ═══ Attempt ${attemptIdx + 1}/${Math.min(maxAttempts, candidates.length)}: ${String(target.key).slice(0, 8)}... ═══`);
     
     // PR2: Validate plan version and required fields
     try {
@@ -587,13 +588,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       const blockedUntilMs = dryRunSetupRequiredCache.get(planKey);
       if (blockedUntilMs && nowMs < blockedUntilMs) {
         console.log(`[Executor] Skipping ${planKey.slice(0, 8)} due to dry-run setup cache (${Math.ceil((blockedUntilMs - nowMs) / 1000)}s remaining)`);
-        if (attemptIdx === Math.min(maxAttempts, candidates.length) - 1) {
-          return { status: 'skipped-dry-run-setup-cache', planKey, blockedUntilMs };
-        }
+        lastDryRunSetupCacheSkip = { planKey, blockedUntilMs };
         continue;
-      }
-      if (blockedUntilMs && nowMs >= blockedUntilMs) {
-        dryRunSetupRequiredCache.delete(planKey);
       }
     }
     
@@ -1059,6 +1055,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   }
   } // end for loop (multi-attempt)
   
+  if (lastDryRunSetupCacheSkip) {
+    return { status: 'skipped-dry-run-setup-cache', ...lastDryRunSetupCacheSkip };
+  }
+
   // All attempts completed without success
   console.log('[Executor] All attempts completed');
   return { status: 'all-attempts-completed' };
