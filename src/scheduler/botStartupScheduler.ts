@@ -70,6 +70,9 @@ async function initRealtime(): Promise<RealtimeForecastUpdater> {
     const env = loadEnv();
     const grpcUrl = env.YELLOWSTONE_GRPC_URL;
     const token = env.YELLOWSTONE_X_TOKEN;
+    if (!grpcUrl) {
+      throw new Error('YELLOWSTONE_GRPC_URL is missing');
+    }
 
     const obligationPubkeys = deriveObligationPubkeysFromQueue();
     logger.info({ count: obligationPubkeys.length }, 'Derived obligation pubkeys from queue');
@@ -187,7 +190,16 @@ export async function startBotStartupScheduler(): Promise<void> {
   };
 
   // Initialize event-driven refresh (listeners + orchestrator)
-  await initRealtime();
+  const enableRealtime = (process.env.ENABLE_REALTIME_REFRESH ?? 'true') === 'true';
+  if (enableRealtime) {
+    try {
+      await initRealtime();
+    } catch (err) {
+      logger.warn({ err }, 'Realtime init failed; continuing without Yellowstone listeners');
+    }
+  } else {
+    logger.info('Realtime refresh disabled via ENABLE_REALTIME_REFRESH=false');
+  }
   
   async function runCycleGuarded(): Promise<void> {
     if (cycleInProgress) {

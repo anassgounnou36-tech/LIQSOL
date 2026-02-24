@@ -35,8 +35,8 @@ export class YellowstonePriceListener extends EventEmitter {
   private messagesReceived = 0;
   private lastMessageAt = 0;
   
-  // Dedupe eviction: last slot per oracle pubkey (no memory leak)
-  private lastSlotByOracle = new Map<string, number>();
+  // Dedupe eviction: last (slot, writeVersion) per oracle pubkey (no memory leak)
+  private lastSeenByOracle = new Map<string, { slot: number; writeVersion: number }>();
   
   private pending: PriceUpdateEvent[] = [];
   private debounceTimer: NodeJS.Timeout | null = null;
@@ -153,10 +153,15 @@ export class YellowstonePriceListener extends EventEmitter {
     if (!this.running) return;
     const slot = Number(msg.slot ?? 0);
     
-    // Dedupe eviction: ignore stale/duplicate slots per oracle
-    const last = this.lastSlotByOracle.get(oraclePubkey) ?? 0;
-    if (!(slot > last)) return;
-    this.lastSlotByOracle.set(oraclePubkey, slot);
+    // Dedupe eviction: ignore stale/duplicate updates by (slot, writeVersion)
+    const writeVersion = Number(msg.writeVersion ?? -1);
+    const last = this.lastSeenByOracle.get(oraclePubkey);
+    const isNewer =
+      !last ||
+      slot > last.slot ||
+      (slot === last.slot && writeVersion > last.writeVersion);
+    if (!isNewer) return;
+    this.lastSeenByOracle.set(oraclePubkey, { slot, writeVersion });
 
     // Reset reconnect backoff after first successful message
     if (this.messagesReceived === 0) {
@@ -226,7 +231,7 @@ export class YellowstonePriceListener extends EventEmitter {
     this.emit('stopped');
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.pending = [];
-    this.lastSlotByOracle.clear();
+    this.lastSeenByOracle.clear();
     this.cleanupStream();
     this.client = null;
   }

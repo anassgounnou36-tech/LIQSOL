@@ -20,3 +20,13 @@ export async function writeJsonAtomic(filePath: string, data: unknown): Promise<
   // Atomic rename
   await fs.promises.rename(tmpPath, filePath);
 }
+
+export function writeJsonAtomicSync(filePath: string, data: unknown): void {
+  const dir = path.dirname(filePath);
+  const tmpPath = path.join(dir, `${path.basename(filePath)}.tmp`);
+  const json = JSON.stringify(data, null, 2);
+
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(tmpPath, json, { encoding: 'utf8' });
+  fs.renameSync(tmpPath, filePath);
+}
