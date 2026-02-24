@@ -39,6 +39,7 @@ export interface CanonicalLiquidationConfig {
     mint: string;
     amountUi: string;
   };
+  flashloanBorrowIxIndexOffset?: number;
   
   // Liquidation parameters
   repayMintPreference?: PublicKey;
@@ -120,7 +121,7 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
   let flashRepayIx: TransactionInstruction | undefined;
   
   if (config.flashloan) {
-    const borrowIxIndex = instructions.length;
+    const borrowIxIndex = instructions.length + (config.flashloanBorrowIxIndexOffset ?? 0);
     const flashloanResult = await buildKaminoFlashloanIxs({
       connection: config.connection,
       marketPubkey: config.marketPubkey,

@@ -1,6 +1,6 @@
-import { refreshSubset } from '../forecast/forecastManager.js';
 import { buildMintObligationMapping, type MintToKeys, type KeyToMints } from './mintObligationMapping.js';
 import { logger } from '../observability/logger.js';
+import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 
 export interface OrchestratorConfig {
   minPricePctChange: number; // not used in PR1 (no price decode), keep for future
@@ -14,14 +14,16 @@ export class EventRefreshOrchestrator {
   private lastRefreshMsByKey = new Map<string, number>();
   private mintToKeys: MintToKeys;
   private keyToMints: KeyToMints;
+  private onRefresh?: (keys: string[], reason: string) => void;
 
-  constructor(cfg?: Partial<OrchestratorConfig>) {
+  constructor(cfg?: Partial<OrchestratorConfig>, onRefresh?: (keys: string[], reason: string) => void) {
     this.cfg = {
       minPricePctChange: cfg?.minPricePctChange ?? 1.0,
       minHealthDelta: cfg?.minHealthDelta ?? 0.01,
       minRefreshIntervalMs: cfg?.minRefreshIntervalMs ?? 3000,
       batchLimit: cfg?.batchLimit ?? Number(process.env.EVENT_REFRESH_BATCH_LIMIT ?? 50),
     };
+    this.onRefresh = onRefresh;
 
     const mapping = buildMintObligationMapping();
     this.mintToKeys = mapping.mintToKeys;
@@ -61,82 +63,59 @@ export class EventRefreshOrchestrator {
       return;
     }
 
-    const results = refreshSubset([key], undefined, 'account-change');
-    for (const r of results) {
-      if (r.changed) {
-        logger.info(
-          {
-            key: r.key,
-            evBefore: Number(r.before?.ev ?? 0),
-            evAfter: Number(r.after?.ev ?? 0),
-            ttlBefore: Number(r.before?.ttlMin ?? Infinity),
-            ttlAfter: Number(r.after?.ttlMin ?? Infinity),
-            hazardBefore: Number(r.before?.hazard ?? 0),
-            hazardAfter: Number(r.after?.hazard ?? 0),
-          },
-          'Account refresh changed'
-        );
-      } else {
-        logger.debug({ key: r.key, reason: r.reason }, 'Account refresh no significant change');
-      }
-    }
+    this.onRefresh?.([key], 'account-change');
   }
 
-  // Price update: refresh only obligations mapped to the updated mint; bounded batch; single-pass throttle
-  handlePriceUpdate(ev: { oraclePubkey: string; slot: number; mint?: string }): void {
-    const mint = ev.mint; // PR1: this must be resolved externally before calling
-    if (!mint) {
-      logger.debug({ oraclePubkey: ev.oraclePubkey }, 'Price update without mint mapping, skipping');
-      return;
-    }
-
+  getRefreshableKeysForMint(mint: string): string[] {
     const keys = Array.from(this.mintToKeys.get(mint) ?? []);
-    if (keys.length === 0) {
-      logger.debug({ mint }, 'No obligations mapped to mint, skipping');
-      return;
-    }
-
     const refreshable: string[] = [];
     for (const k of keys) {
       if (refreshable.length >= this.cfg.batchLimit) break;
       if (this.canRefresh(k)) refreshable.push(k);
     }
+    return refreshable;
+  }
 
+  handleMintUpdate(mint: string): void {
+    const refreshable = this.getRefreshableKeysForMint(mint);
     if (refreshable.length === 0) {
-      logger.debug({ mint, totalKeys: keys.length }, 'All obligations throttled for mint update');
+      logger.debug({ mint }, 'No refreshable obligations for mint update');
       return;
     }
-
-    logger.debug({ mint, refreshable: refreshable.length, total: keys.length }, 'Refreshing obligations for mint update');
-
-    const results = refreshSubset(refreshable, undefined, `mint-update ${mint}`);
-    for (const r of results) {
-      if (r.changed) {
-        logger.info(
-          {
-            key: r.key,
-            evBefore: Number(r.before?.ev ?? 0),
-            evAfter: Number(r.after?.ev ?? 0),
-            ttlBefore: Number(r.before?.ttlMin ?? Infinity),
-            ttlAfter: Number(r.after?.ttlMin ?? Infinity),
-            hazardBefore: Number(r.before?.hazard ?? 0),
-            hazardAfter: Number(r.after?.hazard ?? 0),
-          },
-          'Mint refresh changed'
-        );
-      } else {
-        logger.debug({ key: r.key, reason: r.reason }, 'Mint refresh no significant change');
-      }
-    }
+    this.onRefresh?.(refreshable, `mint-update ${mint}`);
   }
 
   /**
    * Refresh asset mapping (e.g., when queue is rebuilt).
    */
-  refreshMapping(): void {
-    const mapping = buildMintObligationMapping();
-    this.mintToKeys = mapping.mintToKeys;
-    this.keyToMints = mapping.keyToMints;
+  refreshMapping(plans?: FlashloanPlan[]): void {
+    if (!plans) {
+      const mapping = buildMintObligationMapping();
+      this.mintToKeys = mapping.mintToKeys;
+      this.keyToMints = mapping.keyToMints;
+      logger.info(
+        { uniqueMints: this.mintToKeys.size, totalObligations: this.keyToMints.size },
+        'Mint→obligation mapping refreshed'
+      );
+      return;
+    }
+
+    const mintToKeys: MintToKeys = new Map();
+    const keyToMints: KeyToMints = new Map();
+    for (const plan of plans) {
+      const key = String(plan.key ?? '');
+      if (!key) continue;
+      const assets = Array.isArray(plan.assets) ? plan.assets : [];
+      for (const mint of assets) {
+        if (!mintToKeys.has(mint)) mintToKeys.set(mint, new Set());
+        mintToKeys.get(mint)!.add(key);
+        if (!keyToMints.has(key)) keyToMints.set(key, new Set());
+        keyToMints.get(key)!.add(mint);
+      }
+    }
+
+    this.mintToKeys = mintToKeys;
+    this.keyToMints = keyToMints;
     logger.info(
       { uniqueMints: this.mintToKeys.size, totalObligations: this.keyToMints.size },
       'Mint→obligation mapping refreshed'

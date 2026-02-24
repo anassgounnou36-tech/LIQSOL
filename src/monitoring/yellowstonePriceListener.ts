@@ -8,6 +8,9 @@ export interface PriceUpdateEvent {
   oraclePubkey: string; // oracle account pubkey updated
   slot: number;
   mint?: string; // resolved externally from oracle→mint mapping
+  owner?: string;
+  dataBase64?: string;
+  writeVersion?: number;
 }
 
 export interface PriceListenerOptions {
@@ -96,7 +99,20 @@ export class YellowstonePriceListener extends EventEmitter {
             const pubkey = new PublicKey(pubkeyBytes);
             const slot = Number(data.account.slot ?? 0);
 
-            this.onMessage(pubkey.toString(), { slot });
+            let owner: string | undefined;
+            let dataBase64: string | undefined;
+            const ownerBytes = accountInfo.owner ? Buffer.from(accountInfo.owner) : undefined;
+            if (ownerBytes && ownerBytes.length > 0) {
+              owner = new PublicKey(ownerBytes).toString();
+            }
+            const dataBytes = accountInfo.data ? Buffer.from(accountInfo.data) : undefined;
+            if (dataBytes && dataBytes.length > 0) {
+              dataBase64 = dataBytes.toString('base64');
+            }
+            const writeVersionRaw = Number(data.account.writeVersion ?? accountInfo.writeVersion);
+            const writeVersion = Number.isFinite(writeVersionRaw) ? writeVersionRaw : undefined;
+
+            this.onMessage(pubkey.toString(), { slot, owner, dataBase64, writeVersion });
           } catch (err) {
             logger.error({ err }, 'Error processing oracle update');
           }
@@ -133,7 +149,7 @@ export class YellowstonePriceListener extends EventEmitter {
     }
   }
 
-  private onMessage(oraclePubkey: string, msg: { slot: number }) {
+  private onMessage(oraclePubkey: string, msg: { slot: number; owner?: string; dataBase64?: string; writeVersion?: number }) {
     if (!this.running) return;
     const slot = Number(msg.slot ?? 0);
     
@@ -149,7 +165,13 @@ export class YellowstonePriceListener extends EventEmitter {
 
     this.messagesReceived++;
     this.lastMessageAt = Date.now();
-    this.pending.push({ oraclePubkey, slot });
+    this.pending.push({
+      oraclePubkey,
+      slot,
+      owner: msg.owner,
+      dataBase64: msg.dataBase64,
+      writeVersion: msg.writeVersion,
+    });
     this.coalesce();
   }
 
@@ -216,6 +238,14 @@ export class YellowstonePriceListener extends EventEmitter {
       ev.prevPrice && ev.prevPrice > 0 && ev.price
         ? ((ev.price - ev.prevPrice) / ev.prevPrice) * 100
         : ev.pctChange ?? 0;
-    this.emit('price-update', { oraclePubkey: ev.oraclePubkey, slot: ev.slot, mint: ev.mint, pctChange: pct });
+    this.emit('price-update', {
+      oraclePubkey: ev.oraclePubkey,
+      slot: ev.slot,
+      mint: ev.mint,
+      owner: ev.owner,
+      dataBase64: ev.dataBase64,
+      writeVersion: ev.writeVersion,
+      pctChange: pct,
+    });
   }
 }

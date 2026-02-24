@@ -151,8 +151,20 @@ export async function buildPlanTransactions(opts: {
     swap: swapIxs.length > 0 ? { instructions: swapIxs } : undefined,
   });
 
-  const atomicIxs = [...finalCanonical.setupIxs, ...finalCanonical.instructions];
-  const atomicLabels = [...finalCanonical.setupLabels, ...finalCanonical.labels];
+  let atomicMainIxs = finalCanonical.instructions;
+  let atomicMainLabels = finalCanonical.labels;
+  if (finalCanonical.setupIxs.length > 0 && canonicalConfig.flashloan) {
+    const atomicCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical({
+      ...canonicalConfig,
+      swap: swapIxs.length > 0 ? { instructions: swapIxs } : undefined,
+      flashloanBorrowIxIndexOffset: finalCanonical.setupIxs.length,
+    });
+    atomicMainIxs = atomicCanonical.instructions;
+    atomicMainLabels = atomicCanonical.labels;
+  }
+
+  const atomicIxs = [...finalCanonical.setupIxs, ...atomicMainIxs];
+  const atomicLabels = [...finalCanonical.setupLabels, ...atomicMainLabels];
 
   return {
     setupIxs: finalCanonical.setupIxs,

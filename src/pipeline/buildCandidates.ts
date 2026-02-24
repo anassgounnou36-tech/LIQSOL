@@ -104,6 +104,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
     let collateralReservePubkey: string | undefined;
     let primaryBorrowMint: string | undefined;
     let primaryCollateralMint: string | undefined;
+    const assetSet = new Set<string>();
     
     if (entry && entry.decoded) {
       // Select repay reserve: filter by allowlist (if set), then prefer USDC, otherwise take first available borrow
@@ -149,6 +150,15 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
           primaryCollateralMint = selectedDeposit.entry.liquidityMint;
         }
       }
+
+      for (const deposit of deposits) {
+        const reserve = reserveCache.byReserve.get(deposit.reserve);
+        if (reserve?.liquidityMint) assetSet.add(reserve.liquidityMint);
+      }
+      for (const borrow of borrows) {
+        const reserve = reserveCache.byReserve.get(borrow.reserve);
+        if (reserve?.liquidityMint) assetSet.add(reserve.liquidityMint);
+      }
     }
     
     return {
@@ -178,6 +188,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
       collateralValueRecomputed: o.collateralValueRecomputed,
       borrowValueProtocol: o.borrowValueProtocol,
       collateralValueProtocol: o.collateralValueProtocol,
+      assets: assetSet.size > 0 ? Array.from(assetSet) : undefined,
     };
   });
 
