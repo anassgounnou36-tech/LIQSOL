@@ -18,6 +18,7 @@ import { KLEND_PROGRAM_ID as KLEND_PROGRAM_ID_FROM_DECODER, KAMINO_DISCRIMINATOR
 const FARMS_PROGRAM_ID = "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr";
 // System program ID (well-known constant)
 const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
+const DEFAULT_PRE_RESERVE_FULL_REFRESH_MAX_RESERVES = 6;
 
 // Re-export KLEND program ID for convenience
 export const KLEND_PROGRAM_ID = KLEND_PROGRAM_ID_FROM_DECODER;
@@ -581,7 +582,10 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // ========================================================================
   const mode = p.preReserveRefreshMode ?? 'all';
   const primarySet = new Set([repayReserve.address.toString(), collateralReserve.address.toString()]);
-  const maxFull = Number(process.env.PRE_RESERVE_FULL_REFRESH_MAX_RESERVES ?? 6);
+  const maxFullParsed = Number(process.env.PRE_RESERVE_FULL_REFRESH_MAX_RESERVES ?? DEFAULT_PRE_RESERVE_FULL_REFRESH_MAX_RESERVES);
+  const maxFull = Number.isFinite(maxFullParsed) && maxFullParsed > 0
+    ? maxFullParsed
+    : DEFAULT_PRE_RESERVE_FULL_REFRESH_MAX_RESERVES;
   const reservesToRefresh = mode === 'all'
     ? uniqueReserves
     : mode === 'primary'
@@ -589,9 +593,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       : uniqueReserves.length <= maxFull
         ? uniqueReserves
         : uniqueReserves.filter(r => primarySet.has(r));
-  console.log(
-    `[LiqBuilder] preReserveRefreshMode=${mode}, uniqueReserves=${uniqueReserves.length}, reservesToRefresh=${reservesToRefresh.length}`
-  );
+  console.log(`[LiqBuilder] preReserveRefreshMode=${mode}, uniqueReserves=${uniqueReserves.length}, reservesToRefresh=${reservesToRefresh.length}`);
   const preReserveIxs: TransactionInstruction[] = [];
   for (let i = 0; i < reservesToRefresh.length; i++) {
     const r = reservesToRefresh[i];

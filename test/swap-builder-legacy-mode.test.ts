@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import { buildJupiterSwapIxs } from '../src/execute/swapBuilder.js';
 
 describe('Swap builder legacy mode flag', () => {
@@ -9,6 +9,7 @@ describe('Swap builder legacy mode flag', () => {
 
   it('defaults asLegacyTransaction to false for quote and swap-instructions', async () => {
     const observed: { quoteUrl?: string; swapBody?: { asLegacyTransaction?: boolean } } = {};
+    const mockConnection = { getAddressLookupTable: async () => ({ context: { slot: 0 }, value: null }) } as unknown as Connection;
     const fetchFn: typeof fetch = async (input, init) => {
       const url = String(input);
       if (url.includes('/v6/quote')) {
@@ -25,7 +26,7 @@ describe('Swap builder legacy mode flag', () => {
       inAmountBaseUnits: 1n,
       slippageBps: 100,
       userPubkey: new PublicKey('11111111111111111111111111111111'),
-      connection: {} as never,
+      connection: mockConnection,
       fetchFn,
     });
 
@@ -36,6 +37,7 @@ describe('Swap builder legacy mode flag', () => {
   it('uses env override when JUPITER_AS_LEGACY_TRANSACTION=true', async () => {
     process.env.JUPITER_AS_LEGACY_TRANSACTION = 'true';
     const observed: { quoteUrl?: string; swapBody?: { asLegacyTransaction?: boolean } } = {};
+    const mockConnection = { getAddressLookupTable: async () => ({ context: { slot: 0 }, value: null }) } as unknown as Connection;
     const fetchFn: typeof fetch = async (input, init) => {
       const url = String(input);
       if (url.includes('/v6/quote')) {
@@ -52,7 +54,7 @@ describe('Swap builder legacy mode flag', () => {
       inAmountBaseUnits: 1n,
       slippageBps: 100,
       userPubkey: new PublicKey('11111111111111111111111111111111'),
-      connection: {} as never,
+      connection: mockConnection,
       fetchFn,
     });
 
