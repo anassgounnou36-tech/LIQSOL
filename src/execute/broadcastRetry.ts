@@ -298,3 +298,93 @@ export function formatAttemptResults(attempts: SendAttemptResult[]): string {
   
   return output;
 }
+
+export async function sendWithRebuildRetry(
+  connection: Connection,
+  signer: Keypair,
+  buildTx: (args: { blockhash: string; cuLimit: number; cuPrice: number }) => Promise<VersionedTransaction>,
+  config: BroadcastRetryConfig
+): Promise<SendAttemptResult[]> {
+  const attempts: SendAttemptResult[] = [];
+  let currentCuLimit = config.cuLimit ?? Number(process.env.EXEC_CU_LIMIT ?? 600_000);
+  let currentCuPrice = config.cuPrice ?? Number(process.env.EXEC_CU_PRICE ?? 0);
+
+  for (let attemptNum = 1; attemptNum <= config.maxAttempts; attemptNum++) {
+    const attemptStart = Date.now();
+    try {
+      const latestBh = await connection.getLatestBlockhash();
+      const tx = await buildTx({
+        blockhash: latestBh.blockhash,
+        cuLimit: currentCuLimit,
+        cuPrice: currentCuPrice,
+      });
+      tx.sign([signer]);
+
+      const signature = await connection.sendTransaction(tx, {
+        skipPreflight: false,
+        maxRetries: 0,
+      });
+
+      const confirmResult = await confirmSignatureByPolling(connection, signature, {
+        intervalMs: DEFAULT_POLL_INTERVAL_MS,
+        timeoutMs: DEFAULT_POLL_TIMEOUT_MS,
+        commitment: 'confirmed',
+      });
+
+      const totalMs = Date.now() - attemptStart;
+      if (confirmResult.success) {
+        attempts.push({
+          success: true,
+          signature,
+          slot: confirmResult.status?.slot,
+          timingMs: totalMs,
+          attemptNumber: attemptNum,
+        });
+        return attempts;
+      }
+
+      const error = confirmResult.timedOut
+        ? `Confirmation timeout after ${confirmResult.durationMs ?? DEFAULT_POLL_TIMEOUT_MS}ms`
+        : JSON.stringify(confirmResult.error ?? 'Unknown confirmation failure');
+      const failureType = classifyFailure(error);
+      attempts.push({
+        success: false,
+        signature,
+        error,
+        failureType,
+        timingMs: totalMs,
+        attemptNumber: attemptNum,
+      });
+
+      if (attemptNum < config.maxAttempts) {
+        if (failureType === 'compute-exceeded') {
+          const bumpFactor = config.cuLimitBumpFactor ?? 1.5;
+          currentCuLimit = Math.floor(currentCuLimit * bumpFactor);
+        } else if (failureType === 'priority-too-low') {
+          currentCuPrice = currentCuPrice + (config.cuPriceBumpMicrolamports ?? 50000);
+        }
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      const failureType = classifyFailure(error);
+      attempts.push({
+        success: false,
+        error,
+        failureType,
+        timingMs: Date.now() - attemptStart,
+        attemptNumber: attemptNum,
+      });
+
+      if (attemptNum < config.maxAttempts) {
+        if (failureType === 'compute-exceeded') {
+          const bumpFactor = config.cuLimitBumpFactor ?? 1.5;
+          currentCuLimit = Math.floor(currentCuLimit * bumpFactor);
+        } else if (failureType === 'priority-too-low') {
+          currentCuPrice = currentCuPrice + (config.cuPriceBumpMicrolamports ?? 50000);
+        }
+      }
+    }
+  }
+
+  return attempts;
+}

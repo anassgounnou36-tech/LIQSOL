@@ -1,11 +1,13 @@
-import { Connection, PublicKey, VersionedTransaction, TransactionMessage, Keypair } from '@solana/web3.js';
+import { Connection, PublicKey, VersionedTransaction, Keypair } from '@solana/web3.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
+import { buildPlanTransactions } from '../execute/planTxBuilder.js';
+import { buildVersionedTx } from '../execute/versionedTx.js';
 
 /**
  * Presubmit cache entry for a ready-to-send transaction
  */
 export type PresubmitEntry = {
-  tx: VersionedTransaction;
+  tx?: VersionedTransaction; // undefined when mode='partial' and needsSetupFirst=true
   builtAt: number; // timestamp in ms
   lastSimSlot?: number;
   expectedSeized?: bigint;
@@ -13,6 +15,9 @@ export type PresubmitEntry = {
   ev?: number;
   ttl?: number;
   blockhash: string;
+  lookupTablesCount: number;
+  mode: 'atomic' | 'main' | 'partial';
+  needsSetupFirst?: boolean;
 };
 
 /**
@@ -169,155 +174,38 @@ export class Presubmitter {
    * Build presubmit entry for a plan
    */
   private async buildEntry(plan: FlashloanPlan): Promise<PresubmitEntry> {
-    // Import executor helpers
-    const { buildKaminoFlashloanIxs } = await import('../flashloan/kaminoFlashloan.js');
-    const { buildKaminoLiquidationIxs } = await import('../kamino/liquidationBuilder.js');
-    const { buildJupiterSwapIxs, formatBaseUnitsToUiString } = await import('../execute/swapBuilder.js');
-    const { buildComputeBudgetIxs } = await import('../execution/computeBudget.js');
-    const { estimateSeizedCollateralDeltaBaseUnits } = await import('../execute/seizedDeltaEstimator.js');
-    const { resolveMintFlexible } = await import('../solana/mint.js');
-    
-    const ixs = [];
-    
-    // 1) ComputeBudget
-    const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
-    const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
-    const computeIxs = buildComputeBudgetIxs({ cuLimit, cuPriceMicroLamports: cuPrice });
-    ixs.push(...computeIxs);
-    
-    const borrowIxIndex = ixs.length;
-    
-    // 2) FlashBorrow
-    const mint = (plan.mint || 'USDC') as 'USDC' | 'SOL';
-    const amountUi = String(plan.amountUi ?? plan.amountUsd ?? '100');
-    const flashloan = await buildKaminoFlashloanIxs({
+    const built = await buildPlanTransactions({
       connection: this.config.connection,
-      marketPubkey: this.config.market,
-      programId: this.config.programId,
       signer: this.config.signer,
-      mint,
-      amountUi,
-      borrowIxIndex,
-    });
-    ixs.push(flashloan.flashBorrowIx);
-    
-    // 3) Liquidation (refresh + repay/seize) - Use canonical instruction arrays
-    let repayMintPreference: PublicKey | undefined;
-    if (plan.repayMint) {
-      try {
-        repayMintPreference = resolveMintFlexible(plan.repayMint);
-      } catch (err) {
-        console.error(
-          `[Presubmit] Failed to resolve repayMint for plan ${plan.key} (obligation: ${plan.obligationPubkey}):`,
-          err instanceof Error ? err.message : String(err)
-        );
-        throw err;
-      }
-    }
-    
-    const liquidationResult = await buildKaminoLiquidationIxs({
-      connection: this.config.connection,
-      marketPubkey: this.config.market,
+      market: this.config.market,
       programId: this.config.programId,
-      obligationPubkey: new PublicKey(plan.obligationPubkey),
-      liquidatorPubkey: this.config.signer.publicKey,
-      repayMintPreference,
-      repayAmountUi: plan.amountUi,
+      plan,
+      includeSwap: true,
+      useRealSwapSizing: true,
+      dry: false,
     });
-    
-    // Assemble canonical order: preReserveIxs → coreIxs → liquidationIxs → postFarmIxs
-    ixs.push(...liquidationResult.preReserveIxs);
-    ixs.push(...liquidationResult.coreIxs);
-    ixs.push(...liquidationResult.liquidationIxs);
-    ixs.push(...liquidationResult.postFarmIxs);
-    
-    const { repayMint, collateralMint } = liquidationResult;
-    
-    // Track expected seized and output amounts
-    let expectedSeized: bigint | undefined;
-    let expectedOut: bigint | undefined;
-    
-    // 4) Optional swap (if collateral != repay)
-    if (!collateralMint.equals(repayMint)) {
-      console.log(`[Presubmit] Swap needed: ${collateralMint.toBase58().slice(0, 8)} -> ${repayMint.toBase58().slice(0, 8)}`);
-      
-      // Build pre-sim tx for seized delta estimation
-      const preSimIxs = [...ixs];
-      const bh = await this.config.connection.getLatestBlockhash();
-      const msg = new TransactionMessage({
-        payerKey: this.config.signer.publicKey,
-        recentBlockhash: bh.blockhash,
-        instructions: preSimIxs,
-      });
-      const compiledMsg = msg.compileToLegacyMessage();
-      const preSimTx = new VersionedTransaction(compiledMsg);
-      preSimTx.sign([this.config.signer]);
-      
-      // Estimate seized collateral
-      try {
-        const seizedCollateralBaseUnits = await estimateSeizedCollateralDeltaBaseUnits({
-          connection: this.config.connection,
-          liquidator: this.config.signer.publicKey,
-          collateralMint,
-          simulateTx: preSimTx,
-        });
-        
-        expectedSeized = seizedCollateralBaseUnits;
-        
-        // Apply haircut
-        const haircutBps = Number(process.env.SWAP_IN_HAIRCUT_BPS ?? 100);
-        const haircutMultiplier = 10000n - BigInt(haircutBps);
-        const inAmountBaseUnits = (seizedCollateralBaseUnits * haircutMultiplier) / 10000n;
-        
-        // Log for debugging
-        const collateralDecimals = plan.collateralDecimals ?? 9;
-        const inAmountUi = formatBaseUnitsToUiString(inAmountBaseUnits, collateralDecimals);
-        console.log(`[Presubmit]   Seized: ${inAmountUi} (after ${haircutBps} bps haircut)`);
-        
-        // Build swap
-        const slippageBps = Number(process.env.SWAP_SLIPPAGE_BPS ?? 100);
-        const swapResult = await buildJupiterSwapIxs({
-          inputMint: collateralMint,
-          outputMint: repayMint,
-          inAmountBaseUnits,
-          slippageBps,
-          userPubkey: this.config.signer.publicKey,
-          connection: this.config.connection,
-        });
-        
-        expectedOut = swapResult.estimatedOutAmountBaseUnits;
-        
-        // Add swap instructions
-        ixs.push(...swapResult.setupIxs);
-        ixs.push(...swapResult.swapIxs);
-        ixs.push(...swapResult.cleanupIxs);
-        
-        console.log(`[Presubmit]   Swap: ${swapResult.setupIxs.length + swapResult.swapIxs.length + swapResult.cleanupIxs.length} instructions`);
-      } catch (err) {
-        console.error('[Presubmit] Failed to build swap:', err instanceof Error ? err.message : String(err));
-        throw new Error(
-          `Swap required but failed to build for ${plan.obligationPubkey}: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-    }
-    
-    // 5) FlashRepay
-    ixs.push(flashloan.flashRepayIx);
-    
-    // Build final transaction
+
+    const swapRequired = !built.collateralMint.equals(built.repayMint);
+    const swapSkippedBecauseSetup = built.setupIxs.length > 0 && swapRequired && built.swapIxs.length === 0;
+
     const bh = await this.config.connection.getLatestBlockhash();
-    const msg = new TransactionMessage({
-      payerKey: this.config.signer.publicKey,
-      recentBlockhash: bh.blockhash,
-      instructions: ixs,
-    });
-    const compiledMsg = msg.compileToLegacyMessage();
-    const tx = new VersionedTransaction(compiledMsg);
-    tx.sign([this.config.signer]);
-    
+    let tx: VersionedTransaction | undefined;
+    let mode: PresubmitEntry['mode'] = 'partial';
+
+    if (!swapSkippedBecauseSetup) {
+      mode = built.atomicIxs.length > built.mainIxs.length ? 'atomic' : 'main';
+      tx = await buildVersionedTx({
+        payer: this.config.signer.publicKey,
+        blockhash: bh.blockhash,
+        instructions: mode === 'atomic' ? built.atomicIxs : built.mainIxs,
+        lookupTables: mode === 'atomic' ? built.atomicLookupTables : built.swapLookupTables,
+        signer: this.config.signer,
+      });
+    }
+
     // Simulate to get slot
     let lastSimSlot: number | undefined;
-    try {
+    if (tx) {
       const sim = await this.config.connection.simulateTransaction(tx, {
         sigVerify: false,
         replaceRecentBlockhash: true,
@@ -329,19 +217,18 @@ export class Presubmitter {
       } else {
         console.warn(`[Presubmit] Simulation failed for ${plan.obligationPubkey}:`, sim.value.err);
       }
-    } catch (err) {
-      console.warn(`[Presubmit] Simulation error for ${plan.obligationPubkey}:`, err instanceof Error ? err.message : String(err));
     }
     
     return {
       tx,
       builtAt: Date.now(),
       lastSimSlot,
-      expectedSeized,
-      expectedOut,
       ev: plan.ev,
       ttl: plan.ttlMin ?? undefined,
       blockhash: bh.blockhash,
+      lookupTablesCount: built.atomicLookupTables.length,
+      mode,
+      needsSetupFirst: swapSkippedBecauseSetup || undefined,
     };
   }
   
