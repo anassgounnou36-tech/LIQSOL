@@ -36,8 +36,8 @@ export class YellowstoneAccountListener extends EventEmitter {
   private messagesReceived = 0;
   private lastMessageAt = 0;
   
-  // Dedupe eviction: track last processed slot per pubkey (no memory leak)
-  private lastSlotByPubkey = new Map<string, number>();
+  // Dedupe eviction: track last processed (slot, writeVersion) per pubkey (no memory leak)
+  private lastSeenByPubkey = new Map<string, { slot: number; writeVersion: number }>();
   
   private debounceTimer: NodeJS.Timeout | null = null;
   private pendingEvents: AccountUpdateEvent[] = [];
@@ -154,10 +154,15 @@ export class YellowstoneAccountListener extends EventEmitter {
     if (!this.running) return;
     const slot = Number(msg.slot ?? 0);
     
-    // Dedupe eviction: ignore stale/duplicate slots per pubkey
-    const last = this.lastSlotByPubkey.get(pubkey) ?? 0;
-    if (!(slot > last)) return;
-    this.lastSlotByPubkey.set(pubkey, slot);
+    // Dedupe eviction: ignore stale/duplicate updates by (slot, writeVersion)
+    const writeVersion = Number(msg.writeVersion ?? -1);
+    const last = this.lastSeenByPubkey.get(pubkey);
+    const isNewer =
+      !last ||
+      slot > last.slot ||
+      (slot === last.slot && writeVersion > last.writeVersion);
+    if (!isNewer) return;
+    this.lastSeenByPubkey.set(pubkey, { slot, writeVersion });
 
     // Reset reconnect backoff after first successful message
     if (this.messagesReceived === 0) {
@@ -239,7 +244,7 @@ export class YellowstoneAccountListener extends EventEmitter {
     this.emit('stopped');
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.pendingEvents = [];
-    this.lastSlotByPubkey.clear();
+    this.lastSeenByPubkey.clear();
     this.cleanupStream();
     this.client = null;
   }

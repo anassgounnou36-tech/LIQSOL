@@ -29,9 +29,8 @@ export class EventRefreshOrchestrator {
     this.mintToKeys = mapping.mintToKeys;
     this.keyToMints = mapping.keyToMints;
 
-    // Fail-fast to avoid silently doing nothing
     if (!this.mintToKeys || this.mintToKeys.size === 0) {
-      throw new Error('Mint→obligation mapping is empty. Ensure data/tx_queue.json or data/candidates.json exists.');
+      logger.warn('Mint→obligation mapping is empty. Realtime mint-triggered refresh will be inactive until mapping is populated.');
     }
 
     logger.info(
@@ -67,6 +66,7 @@ export class EventRefreshOrchestrator {
   }
 
   getRefreshableKeysForMint(mint: string): string[] {
+    if (this.mintToKeys.size === 0) return [];
     const keys = Array.from(this.mintToKeys.get(mint) ?? []);
     const refreshable: string[] = [];
     for (const k of keys) {

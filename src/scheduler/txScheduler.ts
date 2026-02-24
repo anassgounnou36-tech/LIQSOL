@@ -3,9 +3,19 @@ import path from 'node:path';
 import { FlashloanPlan, recomputePlanFields } from './txBuilder.js';
 import { evaluateForecasts, type ForecastEntry, parseTtlMinutes, type TtlManagerParams } from '../predict/forecastTTLManager.js';
 import { isPlanComplete, getMissingFields } from './planValidation.js';
-import { writeJsonAtomic } from '../shared/fs.js';
+import { writeJsonAtomic, writeJsonAtomicSync } from '../shared/fs.js';
 
 const QUEUE_PATH = path.join(process.cwd(), 'data', 'tx_queue.json');
+export const QUEUE_FILE_PATH = QUEUE_PATH;
+
+export function getQueueMtimeMs(): number {
+  if (!fs.existsSync(QUEUE_PATH)) return 0;
+  try {
+    return fs.statSync(QUEUE_PATH).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 export function loadQueue(): FlashloanPlan[] {
   if (!fs.existsSync(QUEUE_PATH)) return [];
@@ -18,7 +28,7 @@ export function loadQueue(): FlashloanPlan[] {
 }
 
 export function saveQueue(items: FlashloanPlan[]): void {
-  fs.writeFileSync(QUEUE_PATH, JSON.stringify(items, null, 2));
+  writeJsonAtomicSync(QUEUE_PATH, items);
 }
 
 /**
