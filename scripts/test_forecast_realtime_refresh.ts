@@ -20,10 +20,12 @@ import { loadQueue } from '../src/scheduler/txScheduler.js';
     minPricePctChange: 0.5, // 0.5% threshold for test
     minHealthDelta: 0.005,
     minRefreshIntervalMs: 500,
-  });
+  }, () => undefined);
 
   accountListener.on('account-update', ev => orchestrator.handleAccountUpdate(ev));
-  priceListener.on('price-update', ev => orchestrator.handlePriceUpdate(ev));
+  priceListener.on('price-update', ev => {
+    if (ev.mint) orchestrator.handleMintUpdate(ev.mint);
+  });
 
   // No need to await start() in test mode - we simulate events directly
   // await accountListener.start();

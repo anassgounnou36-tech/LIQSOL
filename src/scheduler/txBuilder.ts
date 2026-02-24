@@ -45,6 +45,7 @@ export interface FlashloanPlan {
   predictedLiquidationAtMs?: number | null; // absolute epoch timestamp when liquidation predicted
   prevEv?: number; // optional: previous EV for audit
   liquidationEligible?: boolean; // PR10+: whether obligation is currently liquidatable
+  assets?: string[];
 }
 
 export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'USDC'): FlashloanPlan {
@@ -89,10 +90,18 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
     createdAtMs: nowMs,
     predictedLiquidationAtMs,
     liquidationEligible: c.liquidationEligible ?? false,
+    assets: Array.isArray(c.assets) ? c.assets : undefined,
   };
 }
 
 export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): FlashloanPlan {
+  if (!candidateLike) {
+    return {
+      ...plan,
+      planVersion: plan.planVersion ?? 2,
+    };
+  }
+
   const mint = plan.mint as any;
   const amountUsd = Number(candidateLike.borrowValueUsd ?? plan.amountUsd);
   const amountUi = mint === 'USDC' ? amountUsd.toFixed(2) : plan.amountUi;
@@ -147,6 +156,6 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     repayReservePubkey: candidateLike.repayReservePubkey ?? plan.repayReservePubkey,
     collateralReservePubkey: candidateLike.collateralReservePubkey ?? plan.collateralReservePubkey,
     liquidationEligible: candidateLike.liquidationEligible ?? plan.liquidationEligible ?? false,
+    assets: candidateLike?.assets ?? plan.assets,
   };
 }
-

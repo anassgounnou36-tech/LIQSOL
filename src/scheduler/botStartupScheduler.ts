@@ -5,16 +5,17 @@ import { type TtlManagerParams } from '../predict/forecastTTLManager.js';
 import { runDryExecutor } from '../execute/executor.js';
 import { YellowstoneAccountListener } from '../monitoring/yellowstoneAccountListener.js';
 import { YellowstonePriceListener } from '../monitoring/yellowstonePriceListener.js';
-import { EventRefreshOrchestrator } from '../monitoring/eventRefreshOrchestrator.js';
+import { RealtimeForecastUpdater } from '../monitoring/realtimeForecastUpdater.js';
 import { PublicKey } from '@solana/web3.js';
 import { getConnection } from '../solana/connection.js';
-import { loadReserves, getMintsByOracle, type ReserveCache } from '../cache/reserveCache.js';
+import { loadReserves, type ReserveCache } from '../cache/reserveCache.js';
+import { loadOracles, type OracleCache } from '../cache/oracleCache.js';
 import { logger } from '../observability/logger.js';
 
 // Singleton guard to prevent double initialization
 let isInitialized = false;
-let orchestratorInstance: EventRefreshOrchestrator | null = null;
-let initPromise: Promise<EventRefreshOrchestrator> | null = null;
+let realtimeUpdaterInstance: RealtimeForecastUpdater | null = null;
+let initPromise: Promise<RealtimeForecastUpdater> | null = null;
 
 // Store listener instances for dynamic watchlist reload
 let accountListenerInstance: YellowstoneAccountListener | null = null;
@@ -36,25 +37,26 @@ function deriveObligationPubkeysFromQueue(): string[] {
   return q.map(p => String(p.key)).filter(Boolean);
 }
 
-async function deriveOraclePubkeysFromReserves(env: any): Promise<{ oraclePubkeys: string[]; reserveCache: ReserveCache }> {
+async function deriveOraclePubkeysFromReserves(env: any): Promise<{ oraclePubkeys: string[]; reserveCache: ReserveCache; oracleCache: OracleCache }> {
   const conn = getConnection();
   const market = new PublicKey(env.KAMINO_MARKET_PUBKEY);
   const reserves = await loadReserves(conn, market);
+  const oracleCache = await loadOracles(conn, reserves);
   const set = new Set<string>();
   for (const [, r] of reserves.byMint.entries()) {
     for (const pk of r.oraclePubkeys) {
       set.add(pk.toString());
     }
   }
-  return { oraclePubkeys: Array.from(set), reserveCache: reserves };
+  return { oraclePubkeys: Array.from(set), reserveCache: reserves, oracleCache };
 }
 
 // Initialize listeners and orchestrator for event-driven refresh
-async function initRealtime(): Promise<EventRefreshOrchestrator> {
+async function initRealtime(): Promise<RealtimeForecastUpdater> {
   // Check if already initialized
-  if (isInitialized && orchestratorInstance) {
+  if (isInitialized && realtimeUpdaterInstance) {
     logger.info('Real-time listeners already initialized (singleton guard), reusing existing instance');
-    return orchestratorInstance;
+    return realtimeUpdaterInstance;
   }
   
   // Check if initialization is in progress
@@ -72,24 +74,19 @@ async function initRealtime(): Promise<EventRefreshOrchestrator> {
     const obligationPubkeys = deriveObligationPubkeysFromQueue();
     logger.info({ count: obligationPubkeys.length }, 'Derived obligation pubkeys from queue');
 
-    const { oraclePubkeys, reserveCache } = await deriveOraclePubkeysFromReserves(env);
+    const { oraclePubkeys, reserveCache, oracleCache } = await deriveOraclePubkeysFromReserves(env);
     logger.info({ count: oraclePubkeys.length }, 'Derived oracle pubkeys from reserves');
 
-    // Build oracle→mint mapping for price listener
-    const oracleToMints = new Map<string, string[]>();
-    for (const oracle of oraclePubkeys) {
-      const mints = getMintsByOracle(reserveCache, oracle);
-      if (mints.length > 0) {
-        oracleToMints.set(oracle, mints);
-      }
-    }
-    logger.info({ uniqueOracles: oracleToMints.size }, 'Built oracle→mint mapping');
-
-    const orchestrator = new EventRefreshOrchestrator({
-      minHealthDelta: Number(process.env.MIN_HEALTH_DELTA ?? 0.01),
-      minRefreshIntervalMs: Number(process.env.EVENT_MIN_REFRESH_INTERVAL_MS ?? 3000),
-      batchLimit: Number(process.env.EVENT_REFRESH_BATCH_LIMIT ?? 50),
+    const conn = getConnection();
+    const updater = new RealtimeForecastUpdater({
+      connection: conn,
+      marketPubkey: new PublicKey(env.KAMINO_MARKET_PUBKEY),
+      programId: new PublicKey(env.KAMINO_KLEND_PROGRAM_ID),
+      reserveCache,
+      oracleCache,
     });
+    updater.refreshMappingFromQueue(loadQueue());
+    await updater.bootstrapQueueObligations(obligationPubkeys);
 
     const accountListener = new YellowstoneAccountListener({
       grpcUrl,
@@ -108,17 +105,11 @@ async function initRealtime(): Promise<EventRefreshOrchestrator> {
     });
 
     accountListener.on('ready', info => logger.info(info, 'Account listener ready'));
-    accountListener.on('account-update', ev => orchestrator.handleAccountUpdate(ev));
+    accountListener.on('account-update', ev => updater.handleObligationAccountUpdate(ev));
     accountListener.on('error', err => logger.error({ err }, 'Account listener error'));
 
     priceListener.on('ready', info => logger.info(info, 'Price listener ready'));
-    priceListener.on('price-update', ev => {
-      // Resolve mint from oracle pubkey using oracle→mint map
-      const mints = oracleToMints.get(ev.oraclePubkey) ?? [];
-      for (const mint of mints) {
-        orchestrator.handlePriceUpdate({ ...ev, mint });
-      }
-    });
+    priceListener.on('price-update', ev => updater.handleOracleAccountUpdate(ev));
     priceListener.on('error', err => logger.error({ err }, 'Price listener error'));
 
     await accountListener.start();
@@ -128,13 +119,13 @@ async function initRealtime(): Promise<EventRefreshOrchestrator> {
 
     // Set singleton guards
     isInitialized = true;
-    orchestratorInstance = orchestrator;
+    realtimeUpdaterInstance = updater;
     
     // Store listener instances for dynamic reload
     accountListenerInstance = accountListener;
     priceListenerInstance = priceListener;
 
-    return orchestrator;
+    return updater;
   })();
   
   try {
@@ -158,8 +149,10 @@ export async function reloadWatchlistFromQueue(): Promise<void> {
     logger.info({ count: obligationPubkeys.length }, 'Account subscriptions reloaded');
   }
   
-  if (orchestratorInstance) {
-    orchestratorInstance.refreshMapping();
+  if (realtimeUpdaterInstance) {
+    const queue = loadQueue();
+    realtimeUpdaterInstance.refreshMappingFromQueue(queue);
+    await realtimeUpdaterInstance.bootstrapQueueObligations(obligationPubkeys);
   }
 }
 
@@ -196,21 +189,25 @@ export async function startBotStartupScheduler(): Promise<void> {
   // Initialize event-driven refresh (listeners + orchestrator)
   await initRealtime();
   
+  async function runCycleGuarded(): Promise<void> {
+    if (cycleInProgress) {
+      logger.warn('Tick skipped: previous cycle still in progress');
+      return;
+    }
+    cycleInProgress = true;
+    try {
+      await cycleOnce();
+    } finally {
+      cycleInProgress = false;
+    }
+  }
+
   // Debounced tick scheduler - ensures only one cycle runs at a time
   function scheduleTick(debounceMs = 200) {
     if (tickDebounceTimer) return; // Already scheduled
     tickDebounceTimer = setTimeout(async () => {
       tickDebounceTimer = null;
-      if (cycleInProgress) {
-        logger.warn('Tick skipped: previous cycle still in progress');
-        return;
-      }
-      cycleInProgress = true;
-      try {
-        await cycleOnce();
-      } finally {
-        cycleInProgress = false;
-      }
+      await runCycleGuarded();
     }, debounceMs);
   }
   
@@ -362,7 +359,7 @@ export async function startBotStartupScheduler(): Promise<void> {
   }
 
   // Run initial cycle; rely on event-driven triggers afterwards
-  await cycleOnce();
+  await runCycleGuarded();
 
   // Keep a very slow heartbeat cycle for audit/logging (optional)
   const heartbeatMs = Number(process.env.SCHED_HEARTBEAT_INTERVAL_MS ?? 60000);

@@ -7,6 +7,9 @@ import type { Duplex } from 'stream';
 export interface AccountUpdateEvent {
   pubkey: string;
   slot: number;
+  owner?: string;
+  dataBase64?: string;
+  writeVersion?: number;
   before?: any;
   after?: any;
 }
@@ -97,7 +100,20 @@ export class YellowstoneAccountListener extends EventEmitter {
             const pubkey = new PublicKey(pubkeyBytes);
             const slot = Number(data.account.slot ?? 0);
 
-            this.onMessage(pubkey.toString(), { slot });
+            let owner: string | undefined;
+            let dataBase64: string | undefined;
+            const ownerBytes = accountInfo.owner ? Buffer.from(accountInfo.owner) : undefined;
+            if (ownerBytes && ownerBytes.length > 0) {
+              owner = new PublicKey(ownerBytes).toString();
+            }
+            const dataBytes = accountInfo.data ? Buffer.from(accountInfo.data) : undefined;
+            if (dataBytes && dataBytes.length > 0) {
+              dataBase64 = dataBytes.toString('base64');
+            }
+            const writeVersionRaw = Number(data.account.writeVersion ?? accountInfo.writeVersion);
+            const writeVersion = Number.isFinite(writeVersionRaw) ? writeVersionRaw : undefined;
+
+            this.onMessage(pubkey.toString(), { slot, owner, dataBase64, writeVersion });
           } catch (err) {
             logger.error({ err }, 'Error processing account update');
           }
@@ -134,7 +150,7 @@ export class YellowstoneAccountListener extends EventEmitter {
     }
   }
 
-  private onMessage(pubkey: string, msg: { slot: number; before?: any; after?: any }) {
+  private onMessage(pubkey: string, msg: { slot: number; owner?: string; dataBase64?: string; writeVersion?: number; before?: any; after?: any }) {
     if (!this.running) return;
     const slot = Number(msg.slot ?? 0);
     
@@ -151,7 +167,15 @@ export class YellowstoneAccountListener extends EventEmitter {
     this.messagesReceived++;
     this.lastMessageAt = Date.now();
 
-    const ev: AccountUpdateEvent = { pubkey, slot, before: msg.before, after: msg.after };
+    const ev: AccountUpdateEvent = {
+      pubkey,
+      slot,
+      owner: msg.owner,
+      dataBase64: msg.dataBase64,
+      writeVersion: msg.writeVersion,
+      before: msg.before,
+      after: msg.after,
+    };
     this.pendingEvents.push(ev);
     this.coalesce();
   }

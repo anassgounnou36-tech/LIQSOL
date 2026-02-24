@@ -50,6 +50,7 @@ export interface ScoredObligation {
   lastUpdateSlot?: string;
   slotLag?: number;
   hybridDisabledReason?: string;
+  assets?: string[];
   // optionally: underlying detail for validation
 }
 

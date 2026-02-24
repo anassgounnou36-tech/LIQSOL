@@ -7,7 +7,7 @@ import { normalizeWslPath } from '../utils/path.js';
 import { sendWithBoundedRetry, sendWithRebuildRetry, formatAttemptResults } from './broadcastRetry.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { isPlanComplete, getMissingFields } from '../scheduler/planValidation.js';
-import { validateCompiledInstructionWindow, decodeCompiledInstructionKinds } from '../kamino/canonicalLiquidationIxs.js';
+import { buildKaminoRefreshAndLiquidateIxsCanonical, validateCompiledInstructionWindow, decodeCompiledInstructionKinds } from '../kamino/canonicalLiquidationIxs.js';
 import { downgradeBlockedPlan, dropPlanFromQueue } from '../scheduler/txScheduler.js';
 import { isBlocked, markAtaCreated, markBlocked } from '../state/setupState.js';
 import { buildPlanTransactions } from './planTxBuilder.js';
@@ -643,6 +643,36 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         shouldFallbackToSetupOnly(atomicSim.value.err, atomicSim.value.logs ?? undefined)
       ) {
         console.log('[Executor] Atomic preflight indicates setup-first required for swap sizing, falling back to setup-only broadcast.');
+
+        const healthCheckCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical({
+          connection,
+          signer,
+          marketPubkey: market,
+          programId,
+          obligationPubkey: new PublicKey(target.obligationPubkey),
+          cuLimit: Number(process.env.EXEC_CU_LIMIT ?? 600_000),
+          cuPrice: Number(process.env.EXEC_CU_PRICE ?? 0),
+          repayMintPreference: metadata.repayMint,
+          repayAmountUi: target.amountUi,
+          expectedRepayReservePubkey: target.repayReservePubkey ? new PublicKey(target.repayReservePubkey) : undefined,
+          expectedCollateralReservePubkey: target.collateralReservePubkey ? new PublicKey(target.collateralReservePubkey) : undefined,
+        });
+        const healthCheckIxs = [...setupIxs, ...healthCheckCanonical.instructions];
+        const healthCheckBh = await connection.getLatestBlockhash();
+        const healthCheckTx = await buildVersionedTx({
+          payer: signer.publicKey,
+          blockhash: healthCheckBh.blockhash,
+          instructions: healthCheckIxs,
+          signer,
+        });
+        const healthCheckSim = await connection.simulateTransaction(healthCheckTx);
+        const healthCheckCode = extractCustomCode(healthCheckSim.value.err);
+        if (healthCheckCode === 6016) {
+          console.log('[Executor] Setup-only skipped: refresh-only preflight returned 6016 ObligationHealthy');
+          obligationHealthyCooldown.set(planKey, Date.now() + OBLIGATION_HEALTHY_COOLDOWN_MS);
+          return { status: 'obligation-healthy' };
+        }
+
         const setupBh = await connection.getLatestBlockhash();
         const setupMsg = new TransactionMessage({
           payerKey: signer.publicKey,

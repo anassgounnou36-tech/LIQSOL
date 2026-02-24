@@ -312,6 +312,71 @@ function applyStablecoinClamp(price: bigint, exponent: number, mint: string): bi
   return clampedPrice;
 }
 
+export function applyOracleAccountUpdate(args: {
+  oraclePubkey: string;
+  owner: PublicKey;
+  data: Buffer;
+  reserveCache: ReserveCache;
+  oracleCache: OracleCache;
+}): { updatedMints: string[]; oracleType: 'pyth' | 'switchboard' | 'scope' | 'unknown' } {
+  const { oraclePubkey, owner, data, reserveCache, oracleCache } = args;
+  const oracleType: 'pyth' | 'switchboard' | 'scope' | 'unknown' =
+    owner.equals(PYTH_PROGRAM_ID)
+      ? 'pyth'
+      : owner.equals(SWITCHBOARD_V2_PROGRAM_ID)
+      ? 'switchboard'
+      : owner.equals(SCOPE_PROGRAM_ID)
+      ? 'scope'
+      : 'unknown';
+
+  if (oracleType === 'unknown') {
+    return { updatedMints: [], oracleType };
+  }
+
+  const liquidityMints = getMintsByOracle(reserveCache, oraclePubkey);
+  const allMints = new Set<string>();
+  for (const mint of liquidityMints) {
+    allMints.add(mint);
+    const reserve = reserveCache.byMint.get(mint);
+    if (reserve?.collateralMint && reserve.collateralMint !== mint) {
+      allMints.add(reserve.collateralMint);
+    }
+  }
+
+  const updatedMints = new Set<string>();
+
+  if (oracleType === 'scope') {
+    for (const mint of allMints) {
+      const reserve = reserveCache.byMint.get(mint);
+      const chainMint = reserve?.liquidityMint ?? mint;
+      const chains = scopeMintChainMap.get(chainMint) ?? [0];
+      const decoded = decodeScopePrice(data, chains);
+      if (!decoded) continue;
+      const adjustedPrice = applyStablecoinClamp(decoded.price, decoded.exponent, mint);
+      oracleCache.set(mint, { ...decoded, price: adjustedPrice });
+      updatedMints.add(mint);
+    }
+    return { updatedMints: Array.from(updatedMints), oracleType };
+  }
+
+  const decoded =
+    oracleType === 'pyth'
+      ? decodePythPriceWithSdk(data)
+      : decodeSwitchboardPriceWithSdk(data);
+  if (!decoded) {
+    return { updatedMints: [], oracleType };
+  }
+
+  oracleCache.set(oraclePubkey, decoded);
+  for (const mint of allMints) {
+    const adjustedPrice = applyStablecoinClamp(decoded.price, decoded.exponent, mint);
+    oracleCache.set(mint, { ...decoded, price: adjustedPrice });
+    updatedMints.add(mint);
+  }
+
+  return { updatedMints: Array.from(updatedMints), oracleType };
+}
+
 /**
  * Performs oracle sanity checks after cache is loaded
  * Prevents false positives from bad oracle data (wrong SOL price, stale data, etc.)
