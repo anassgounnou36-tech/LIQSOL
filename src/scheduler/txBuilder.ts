@@ -98,8 +98,7 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
   if (!candidateLike) {
     return {
       ...plan,
-      planVersion: 2,
-      assets: plan.assets,
+      planVersion: plan.planVersion ?? 2,
     };
   }
 

@@ -52,7 +52,7 @@ export class RealtimeForecastUpdater {
     this.programId = opts.programId;
     this.reserveCache = opts.reserveCache;
     this.oracleCache = opts.oracleCache;
-    this.orchestrator = new EventRefreshOrchestrator(undefined, (keys, reason) => {
+    this.orchestrator = new EventRefreshOrchestrator({}, (keys, reason) => {
       this.enqueueRefresh(keys, reason);
     });
   }
