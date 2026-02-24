@@ -46,6 +46,7 @@ export interface CanonicalLiquidationConfig {
   repayAmountUi?: string;
   expectedRepayReservePubkey?: PublicKey;
   expectedCollateralReservePubkey?: PublicKey;
+  preReserveRefreshMode?: 'all' | 'primary' | 'auto';
   
   // Swap parameters (optional - if not provided, no swap will be used)
   swap?: {
@@ -150,6 +151,7 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
     repayAmountUi: config.repayAmountUi,
     expectedRepayReservePubkey: config.expectedRepayReservePubkey,
     expectedCollateralReservePubkey: config.expectedCollateralReservePubkey,
+    preReserveRefreshMode: config.preReserveRefreshMode,
   });
   
   // Extract setup instructions (should be sent separately)

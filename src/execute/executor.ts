@@ -278,7 +278,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
     const ttlGraceMs = Number(env.TTL_GRACE_MS ?? 60_000);
     const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
-    const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'true') === 'true';
+    const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'false') === 'true';
     const dryRunSetupCacheTtlMs = Math.max(0, Number(env.EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS ?? 300) * 1000);
     const presubmitEnabled = (env.PRESUBMIT_ENABLED ?? 'false') === 'true';
     const presubmitTopK = Number(env.PRESUBMIT_TOPK ?? 5);
@@ -656,6 +656,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           repayAmountUi: target.amountUi,
           expectedRepayReservePubkey: target.repayReservePubkey ? new PublicKey(target.repayReservePubkey) : undefined,
           expectedCollateralReservePubkey: target.collateralReservePubkey ? new PublicKey(target.collateralReservePubkey) : undefined,
+          preReserveRefreshMode: 'primary',
         });
         const healthCheckIxs = [...setupIxs, ...healthCheckCanonical.instructions];
         const healthCheckBh = await connection.getLatestBlockhash();

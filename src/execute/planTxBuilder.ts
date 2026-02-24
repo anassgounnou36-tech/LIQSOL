@@ -38,6 +38,7 @@ export async function buildPlanTransactions(opts: {
 }): Promise<BuiltPlanTx> {
   const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
   const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
+  const preReserveMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
 
   let repayMintPreference: PublicKey | undefined;
   let expectedRepayReservePubkey: PublicKey | undefined;
@@ -74,6 +75,7 @@ export async function buildPlanTransactions(opts: {
     repayAmountUi: opts.plan.amountUi,
     expectedRepayReservePubkey,
     expectedCollateralReservePubkey,
+    preReserveRefreshMode: preReserveMode,
   };
 
   const initialCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(canonicalConfig);
@@ -89,6 +91,7 @@ export async function buildPlanTransactions(opts: {
       const simCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical({
         ...canonicalConfig,
         flashloan: undefined,
+        preReserveRefreshMode: 'primary',
       });
 
       const bh = await opts.connection.getLatestBlockhash();
