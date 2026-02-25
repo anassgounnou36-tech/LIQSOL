@@ -99,6 +99,7 @@ export function formatBaseUnitsToUiString(amount: bigint, decimals: number): str
 export async function buildJupiterSwapIxs(opts: BuildJupiterSwapOpts): Promise<BuildJupiterSwapResult> {
   const fetchFn = opts.fetchFn ?? fetch;
   const slippageBps = opts.slippageBps;
+  const asLegacy = (process.env.JUPITER_AS_LEGACY_TRANSACTION ?? 'false') === 'true';
 
   console.log('[SwapBuilder] Building Jupiter swap (base-units API)');
   console.log(`[SwapBuilder]   Input: ${opts.inputMint.toBase58()}`);
@@ -113,6 +114,7 @@ export async function buildJupiterSwapIxs(opts: BuildJupiterSwapOpts): Promise<B
   quoteUrl.searchParams.set('amount', opts.inAmountBaseUnits.toString()); // bigint → string, NO float conversion
   quoteUrl.searchParams.set('slippageBps', String(slippageBps));
   quoteUrl.searchParams.set('onlyDirectRoutes', 'false');
+  quoteUrl.searchParams.set('asLegacyTransaction', String(asLegacy));
 
   let quoteResp;
   try {
@@ -158,7 +160,7 @@ export async function buildJupiterSwapIxs(opts: BuildJupiterSwapOpts): Promise<B
         userPublicKey: opts.userPubkey.toBase58(),
         wrapUnwrapSol: true,
         useTokenLedger: false,
-        asLegacyTransaction: true,
+        asLegacyTransaction: asLegacy,
       }),
     });
     
@@ -240,6 +242,7 @@ export async function buildJupiterSwapIxsLegacy(p: SwapParams): Promise<Transact
   // PR2: Use exact string→integer conversion (no float math)
   const amountBaseUnits = parseUiAmountToBaseUnits(p.amountUi, p.fromDecimals);
   const slippageBps = p.slippageBps ?? 50;
+  const asLegacy = (process.env.JUPITER_AS_LEGACY_TRANSACTION ?? 'false') === 'true';
 
   // 1) Quote
   let quote: JupiterQuoteResponse;
@@ -252,6 +255,7 @@ export async function buildJupiterSwapIxsLegacy(p: SwapParams): Promise<Transact
     quoteUrl.searchParams.set('amount', amountBaseUnits.toString());
     quoteUrl.searchParams.set('slippageBps', String(slippageBps));
     quoteUrl.searchParams.set('onlyDirectRoutes', 'false');
+    quoteUrl.searchParams.set('asLegacyTransaction', String(asLegacy));
     const quoteResp = await fetch(quoteUrl.toString());
     if (!quoteResp.ok) throw new Error(`Jupiter quote failed: ${quoteResp.statusText}`);
     quote = await quoteResp.json() as JupiterQuoteResponse;
@@ -276,7 +280,7 @@ export async function buildJupiterSwapIxsLegacy(p: SwapParams): Promise<Transact
         userPublicKey: p.userPublicKey.toBase58(),
         wrapUnwrapSol: true,
         useTokenLedger: false,
-        asLegacyTransaction: true,
+        asLegacyTransaction: asLegacy,
       }),
     });
     if (!swapResp.ok) throw new Error(`Jupiter swap-instructions failed: ${swapResp.statusText}`);

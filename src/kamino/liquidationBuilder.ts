@@ -18,6 +18,7 @@ import { KLEND_PROGRAM_ID as KLEND_PROGRAM_ID_FROM_DECODER, KAMINO_DISCRIMINATOR
 const FARMS_PROGRAM_ID = "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr";
 // System program ID (well-known constant)
 const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
+const DEFAULT_PRE_RESERVE_FULL_REFRESH_MAX_RESERVES = 6;
 
 // Re-export KLEND program ID for convenience
 export const KLEND_PROGRAM_ID = KLEND_PROGRAM_ID_FROM_DECODER;
@@ -53,6 +54,7 @@ export interface BuildKaminoLiquidationParams {
   // If provided, will validate that selected reserves match these pubkeys
   expectedRepayReservePubkey?: PublicKey;
   expectedCollateralReservePubkey?: PublicKey;
+  preReserveRefreshMode?: 'all' | 'primary' | 'auto';
 }
 
 /**
@@ -64,7 +66,7 @@ export interface BuildKaminoLiquidationParams {
  * ReserveStale Fix: Added preRefreshIxs for slot freshness before RefreshObligation
  * 
  * KLend Adjacency Fix: Restructured to match strict check_refresh validation:
- * - preReserveIxs: RefreshReserve for all obligation reserves (deposits→borrows)
+ * - preReserveIxs: RefreshReserve for selected obligation reserves (deposits→borrows)
  * - coreIxs: RefreshObligation + RefreshFarms (collateral and/or debt, 0-2 instructions)
  * - liquidationIxs: LiquidateObligationAndRedeemReserveCollateral
  * - postFarmIxs: Same RefreshFarms as coreIxs (mirrors PRE farms for adjacency)
@@ -74,7 +76,7 @@ export interface KaminoLiquidationResult {
   setupIxs: TransactionInstruction[]; // ATA create instructions (only for missing ATAs)
   setupAtaNames: string[]; // Names of ATAs in setupIxs for labeling (e.g., ['repay', 'collateral'])
   missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }>;
-  preReserveIxs: TransactionInstruction[]; // PRE: RefreshReserve for all obligation reserves (deposits→borrows)
+  preReserveIxs: TransactionInstruction[]; // PRE: RefreshReserve for selected obligation reserves (deposits→borrows)
   coreIxs: TransactionInstruction[]; // CORE: RefreshObligation + RefreshFarms (0-2 farm instructions)
   liquidationIxs: TransactionInstruction[]; // LIQUIDATE: LiquidateObligationAndRedeemReserveCollateral
   postFarmIxs: TransactionInstruction[]; // POST: RefreshFarms (mirrors coreIxs farms, immediately after liquidation)
@@ -576,11 +578,25 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   // ========================================================================
   // STEP 1: Build PRE-RESERVE refresh instructions (for RefreshObligation slot freshness)
-  // Order: all obligation reserves in canonical deposits→borrows order
+  // Order: selected obligation reserves in canonical deposits→borrows order
   // ========================================================================
+  const mode = p.preReserveRefreshMode ?? 'all';
+  const primarySet = new Set([repayReserve.address.toString(), collateralReserve.address.toString()]);
+  const maxFullParsed = Number(process.env.PRE_RESERVE_FULL_REFRESH_MAX_RESERVES ?? DEFAULT_PRE_RESERVE_FULL_REFRESH_MAX_RESERVES);
+  const maxFull = Number.isFinite(maxFullParsed) && maxFullParsed > 0
+    ? maxFullParsed
+    : DEFAULT_PRE_RESERVE_FULL_REFRESH_MAX_RESERVES;
+  const reservesToRefresh = mode === 'all'
+    ? uniqueReserves
+    : mode === 'primary'
+      ? uniqueReserves.filter(r => primarySet.has(r))
+      : uniqueReserves.length <= maxFull
+        ? uniqueReserves
+        : uniqueReserves.filter(r => primarySet.has(r));
+  console.log(`[LiqBuilder] preReserveRefreshMode=${mode}, uniqueReserves=${uniqueReserves.length}, reservesToRefresh=${reservesToRefresh.length}`);
   const preReserveIxs: TransactionInstruction[] = [];
-  for (let i = 0; i < uniqueReserves.length; i++) {
-    const r = uniqueReserves[i];
+  for (let i = 0; i < reservesToRefresh.length; i++) {
+    const r = reservesToRefresh[i];
     console.log(`[LiqBuilder] Building PRE-RESERVE RefreshReserve for reserve[${i}] ${r}`);
     preReserveIxs.push(buildRefreshReserveIx(r, `preRefreshReserve:${i}`));
   }
