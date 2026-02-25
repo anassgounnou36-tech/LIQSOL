@@ -604,8 +604,8 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     if (referrerRaw) {
       referrerPk = new PublicKey(referrerRaw.toString?.() ?? String(referrerRaw));
     }
-  } catch {
-    // no-op: defensive parse
+  } catch (e) {
+    console.warn('[LiqBuilder] Failed to parse obligation referrer:', e);
   }
 
   const hasReferrer = !!referrerPk && !referrerPk.equals(PublicKey.default);
@@ -630,7 +630,10 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
 
   const expectedRemainingAccounts = depositReserveKeys.length + borrowReserveKeys.length + (hasReferrer ? borrowReserveKeys.length : 0);
   if (remainingAccounts.length !== expectedRemainingAccounts) {
-    throw new Error(`[LiqBuilder] refreshObligation remaining accounts mismatch expected=${expectedRemainingAccounts} actual=${remainingAccounts.length}`);
+    throw new Error(
+      `[LiqBuilder] refreshObligation remaining accounts mismatch expected=${expectedRemainingAccounts} actual=${remainingAccounts.length} ` +
+      `deposits=${depositReserveKeys.length} borrows=${borrowReserveKeys.length} hasReferrer=${hasReferrer}`
+    );
   }
   
   console.log(`[LiqBuilder] Building RefreshObligation with ${remainingAccounts.length} remaining accounts`);

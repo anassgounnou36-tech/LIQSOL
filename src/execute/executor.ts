@@ -565,6 +565,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     }
 
     let selected = false;
+    const attemptedProfiles: string[] = [];
     for (let i = 0; i < buildProfiles.length; i++) {
       const profile = buildProfiles[i];
       const result = await buildFullTransaction(target, signer, market, programId, {
@@ -584,6 +585,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         signer,
       });
       const sizeCheck = isTxTooLarge(sizeCheckTx);
+      attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
       if (sizeCheck.tooLarge) {
         console.log(`[Executor] Profile ${i + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
         continue;
@@ -608,7 +610,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     }
 
     if (!selected) {
-      return { status: 'tx-too-large' };
+      return { status: 'tx-too-large', attemptedProfiles };
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

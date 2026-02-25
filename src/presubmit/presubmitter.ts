@@ -186,6 +186,8 @@ export class Presubmitter {
     let tx: VersionedTransaction | undefined;
     let mode: PresubmitEntry['mode'] = 'partial';
     let swapSkippedBecauseSetup = false;
+    let selectedBlockhash = '';
+    const attemptedProfiles: string[] = [];
 
     for (let i = 0; i < buildProfiles.length; i++) {
       const profile = buildProfiles[i];
@@ -217,24 +219,26 @@ export class Presubmitter {
           signer: this.config.signer,
         });
         const sizeCheck = isTxTooLarge(candidateTx);
+        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
         if (sizeCheck.tooLarge) {
           console.log(`[Presubmit] Profile ${i + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
           continue;
         }
+      } else {
+        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=partial`);
       }
 
       built = candidate;
       tx = candidateTx;
       mode = candidateMode;
       swapSkippedBecauseSetup = skippedBecauseSetup;
+      selectedBlockhash = bh.blockhash;
       break;
     }
 
     if (!built) {
-      throw new Error('tx-too-large');
+      throw new Error(`[Presubmit] All ${buildProfiles.length} profiles exceeded tx size limit: ${attemptedProfiles.join(' | ')}`);
     }
-
-    const bh = await this.config.connection.getLatestBlockhash();
 
     // Simulate to get slot
     let lastSimSlot: number | undefined;
@@ -258,7 +262,7 @@ export class Presubmitter {
       lastSimSlot,
       ev: plan.ev,
       ttl: plan.ttlMin ?? undefined,
-      blockhash: bh.blockhash,
+      blockhash: selectedBlockhash,
       lookupTablesCount: built.atomicLookupTables.length,
       mode,
       needsSetupFirst: swapSkippedBecauseSetup || undefined,
