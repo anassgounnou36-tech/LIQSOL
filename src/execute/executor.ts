@@ -14,6 +14,7 @@ import { buildPlanTransactions } from './planTxBuilder.js';
 import { buildVersionedTx } from './versionedTx.js';
 import { buildComputeBudgetIxs } from '../execution/computeBudget.js';
 import { Presubmitter } from '../presubmit/presubmitter.js';
+import { isTxTooLarge } from './txSize.js';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
@@ -185,7 +186,13 @@ async function buildFullTransaction(
   signer: Keypair,
   market: PublicKey,
   programId: PublicKey,
-  opts: { includeSwap?: boolean; useRealSwapSizing?: boolean; dry?: boolean } = {}
+  opts: {
+    includeSwap?: boolean;
+    useRealSwapSizing?: boolean;
+    dry?: boolean;
+    preReserveRefreshModeOverride?: 'all' | 'primary' | 'auto';
+    disableFarmsRefresh?: boolean;
+  } = {}
 ): Promise<{ 
   setupIxs: TransactionInstruction[]; 
   setupLabels: string[]; 
@@ -213,6 +220,8 @@ async function buildFullTransaction(
     includeSwap: opts.includeSwap ?? true,
     useRealSwapSizing: opts.useRealSwapSizing ?? true,
     dry: opts.dry ?? false,
+    preReserveRefreshModeOverride: opts.preReserveRefreshModeOverride,
+    disableFarmsRefresh: opts.disableFarmsRefresh,
   });
 
   return {
@@ -517,18 +526,29 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   
   // PR2: Build full transaction pipeline (now returns setupIxs + ixs + labels + metadata)
   // Wrap in try/catch to handle swap sizing failures gracefully without crashing the bot
-  let setupIxs: TransactionInstruction[];
-  let setupLabels: string[];
-  let missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }>;
-  let ixs: TransactionInstruction[];
-  let labels: string[];
-  let swapIxs: TransactionInstruction[];
-  let swapLookupTables: AddressLookupTableAccount[];
-  let atomicIxs: TransactionInstruction[];
-  let atomicLabels: string[];
-  let atomicLookupTables: AddressLookupTableAccount[];
-  let metadata: { hasFarmsRefresh: boolean; repayMint: PublicKey; collateralMint: PublicKey; withdrawCollateralMint: PublicKey };
+  let setupIxs: TransactionInstruction[] = [];
+  let setupLabels: string[] = [];
+  let missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }> = [];
+  let ixs: TransactionInstruction[] = [];
+  let labels: string[] = [];
+  let swapIxs: TransactionInstruction[] = [];
+  let swapLookupTables: AddressLookupTableAccount[] = [];
+  let atomicIxs: TransactionInstruction[] = [];
+  let atomicLabels: string[] = [];
+  let atomicLookupTables: AddressLookupTableAccount[] = [];
+  let metadata: { hasFarmsRefresh: boolean; repayMint: PublicKey; collateralMint: PublicKey; withdrawCollateralMint: PublicKey } = {
+    hasFarmsRefresh: false,
+    repayMint: PublicKey.default,
+    collateralMint: PublicKey.default,
+    withdrawCollateralMint: PublicKey.default,
+  };
   let presubmittedTx: VersionedTransaction | undefined;
+  const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
+  const buildProfiles: Array<{ disableFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto' }> = [
+    { disableFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
+    { disableFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode },
+    { disableFarmsRefresh: true, preReserveRefreshMode: 'primary' },
+  ];
   
   try {
     if (presubmitEnabled && presubmitterSingleton && target.obligationPubkey) {
@@ -536,25 +556,60 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       if (entry.tx && !entry.needsSetupFirst && entry.mode === 'atomic') {
         console.log(`[Executor] using presubmitted tx for ${target.obligationPubkey}`);
         presubmittedTx = entry.tx;
+        const presubmittedSize = isTxTooLarge(entry.tx);
+        if (presubmittedSize.tooLarge) {
+          console.log(`[Executor] Presubmitted tx too large (${presubmittedSize.raw} bytes), rebuilding with downshift profiles`);
+          presubmittedTx = undefined;
+        }
       }
     }
 
-    const result = await buildFullTransaction(target, signer, market, programId, {
-      includeSwap: true,
-      useRealSwapSizing,
-      dry,
-    });
-    setupIxs = result.setupIxs;
-    setupLabels = result.setupLabels;
-    missingAtas = result.missingAtas;
-    ixs = result.ixs;
-    labels = result.labels;
-    swapIxs = result.swapIxs;
-    swapLookupTables = result.swapLookupTables;
-    atomicIxs = result.atomicIxs;
-    atomicLabels = result.atomicLabels;
-    atomicLookupTables = result.atomicLookupTables;
-    metadata = result.metadata;
+    let selected = false;
+    for (let i = 0; i < buildProfiles.length; i++) {
+      const profile = buildProfiles[i];
+      const result = await buildFullTransaction(target, signer, market, programId, {
+        includeSwap: true,
+        useRealSwapSizing,
+        dry,
+        disableFarmsRefresh: profile.disableFarmsRefresh,
+        preReserveRefreshModeOverride: profile.preReserveRefreshMode,
+      });
+
+      const sizeBh = await connection.getLatestBlockhash();
+      const sizeCheckTx = await buildVersionedTx({
+        payer: signer.publicKey,
+        blockhash: sizeBh.blockhash,
+        instructions: result.setupIxs.length > 0 ? result.atomicIxs : result.ixs,
+        lookupTables: result.setupIxs.length > 0 ? result.atomicLookupTables : result.swapLookupTables,
+        signer,
+      });
+      const sizeCheck = isTxTooLarge(sizeCheckTx);
+      if (sizeCheck.tooLarge) {
+        console.log(`[Executor] Profile ${i + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
+        continue;
+      }
+
+      if (i > 0) {
+        presubmittedTx = undefined;
+      }
+      setupIxs = result.setupIxs;
+      setupLabels = result.setupLabels;
+      missingAtas = result.missingAtas;
+      ixs = result.ixs;
+      labels = result.labels;
+      swapIxs = result.swapIxs;
+      swapLookupTables = result.swapLookupTables;
+      atomicIxs = result.atomicIxs;
+      atomicLabels = result.atomicLabels;
+      atomicLookupTables = result.atomicLookupTables;
+      metadata = result.metadata;
+      selected = true;
+      break;
+    }
+
+    if (!selected) {
+      return { status: 'tx-too-large' };
+    }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     
