@@ -347,9 +347,11 @@ export function applyOracleAccountUpdate(args: {
 
   if (oracleType === 'scope') {
     for (const mint of allMints) {
-      const reserve = reserveCache.byMint.get(mint);
-      const chainMint = reserve?.liquidityMint ?? mint;
-      const chains = scopeMintChainMap.get(chainMint) ?? [0];
+      const chains = scopeMintChainMap.get(mint) ?? [];
+      if (chains.length === 0) {
+        logger.warn({ oracle: oraclePubkey, mint }, "[OracleCache] Missing Scope chain mapping for mint; skipping");
+        continue;
+      }
       const decoded = decodeScopePrice(data, chains);
       if (!decoded) continue;
       const adjustedPrice = applyStablecoinClamp(decoded.price, decoded.exponent, mint);
@@ -653,16 +655,16 @@ export async function loadOracles(
       
       // Decode price for each mint using its reserve-configured Scope price chain
       for (const mint of assignedMints) {
-        // Use only the reserve-configured Scope price chain (array of indices for chain product)
-        const configChains = scopeMintChainMap.get(mint) || [];
-        // Default to [0] if no chain configured (single-element chain)
-        const finalChains = configChains.length > 0 ? configChains : [0];
-        
-        const priceData = decodeScopePrice(data, finalChains);
-        
+        const chains = scopeMintChainMap.get(mint) ?? [];
+        if (chains.length === 0) {
+          logger.warn({ oracle: pubkeyStr, mint }, "[OracleCache] Missing Scope chain mapping for mint; skipping");
+          continue;
+        }
+
+        const priceData = decodeScopePrice(data, chains);
         if (!priceData) {
           logger.warn(
-            { oracle: pubkeyStr, mint, chains: finalChains },
+            { oracle: pubkeyStr, mint, chains },
             "Failed to decode Scope price for mint"
           );
           continue;
@@ -685,10 +687,10 @@ export async function loadOracles(
           {
             oracle: pubkeyStr,
             mint,
-            chains: finalChains,
+            chains,
             price: adjustedPriceData.price.toString(),
           },
-          "Mapped Scope oracle price to mint via chain pricing"
+          "Mapped Scope oracle price to mint via configured chain pricing"
         );
       }
       

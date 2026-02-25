@@ -532,6 +532,11 @@ export async function loadReserves(
         },
         "Mapped Scope collateral mint to price chain array"
       );
+    } else if (decoded.scopePriceChain !== null && decoded.scopePriceChain.length === 0) {
+      logger.warn(
+        { reserve: pubkey.toString(), liquidityMint: decoded.liquidityMint },
+        "Reserve appears to use Scope but has empty scopePriceChain"
+      );
     }
 
     // Create cache entry
