@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import type { VersionedTransaction } from '@solana/web3.js';
 
 async function buildMockCompiledTx(
   sequence: Array<
@@ -7,7 +8,7 @@ async function buildMockCompiledTx(
     'refreshObligationFarmsForReserve' |
     'liquidateObligationAndRedeemReserveCollateral'
   >
-) {
+): Promise<VersionedTransaction> {
   const { PublicKey } = await import('@solana/web3.js');
   const { KNOWN_PROGRAM_IDS, KAMINO_DISCRIMINATORS } = await import('../src/execute/decodeKaminoKindFromCompiled.js');
 
@@ -27,7 +28,7 @@ async function buildMockCompiledTx(
         data: Buffer.from(discriminatorByKind[kind], 'hex'),
       })),
     },
-  };
+  } as unknown as VersionedTransaction;
 }
 
 /**
@@ -166,7 +167,7 @@ describe('Canonical Liquidation Order', () => {
       'liquidateObligationAndRedeemReserveCollateral',
     ]);
 
-    const result = validateCompiledInstructionWindow(tx as never, true, false);
+    const result = validateCompiledInstructionWindow(tx, true, false);
     expect(result.valid).toBe(true);
     expect(result.diagnostics).toContain('PRE farms count: 2');
   });
@@ -184,7 +185,7 @@ describe('Canonical Liquidation Order', () => {
       'refreshObligationFarmsForReserve',
     ]);
 
-    const result = validateCompiledInstructionWindow(tx as never, true, true);
+    const result = validateCompiledInstructionWindow(tx, true, true);
     expect(result.valid).toBe(false);
     expect(result.diagnostics).toContain('Expected post farms count to equal pre farms count (2)');
   });
@@ -199,7 +200,7 @@ describe('Canonical Liquidation Order', () => {
       'liquidateObligationAndRedeemReserveCollateral',
     ]);
 
-    const result = validateCompiledInstructionWindow(tx as never, true, false);
+    const result = validateCompiledInstructionWindow(tx, true, false);
     expect(result.valid).toBe(false);
     expect(result.diagnostics).toContain('Missing refreshObligation before liquidation (allowing optional farms between refreshObligation and liquidation)');
   });

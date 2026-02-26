@@ -334,6 +334,13 @@ export function validateCompiledInstructionWindow(
     cursor -= 1;
   }
 
+  if (preFarmCount > 2) {
+    return {
+      valid: false,
+      diagnostics: `Too many pre farms refresh instructions before liquidation: expected at most 2, found ${preFarmCount}`,
+    };
+  }
+
   // PRE farms are required if hasFarmsRefresh is true
   if (hasFarmsRefresh && preFarmCount === 0) {
     let diagnostics = 'Missing pre farms refresh before liquidation\n\n';
@@ -353,7 +360,7 @@ export function validateCompiledInstructionWindow(
   if (!hasFarmsRefresh && preFarmCount > 0) {
     return {
       valid: false,
-      diagnostics: `unexpected pre farms refresh present: hasFarmsRefresh=false but found ${preFarmCount} pre farm refresh instruction(s)`,
+      diagnostics: `Unexpected pre farms refresh present: hasFarmsRefresh=false but found ${preFarmCount} pre farm refresh instruction(s)`,
     };
   }
 
