@@ -1,4 +1,4 @@
-import { Connection, PublicKey, TransactionInstruction, AddressLookupTableAccount, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { Connection, PublicKey, TransactionInstruction, AddressLookupTableAccount, SYSVAR_INSTRUCTIONS_PUBKEY, type AccountMeta } from "@solana/web3.js";
 import { KaminoMarket, KaminoObligation, refreshReserve, refreshObligation, liquidateObligationAndRedeemReserveCollateral, refreshObligationFarmsForReserve, obligationFarmStatePda } from "@kamino-finance/klend-sdk";
 import { createSolanaRpc, address } from "@solana/kit";
 import { AccountRole } from "@solana/instructions";
@@ -119,6 +119,29 @@ function convertSdkAccount(a: SdkAccount, ctx: string = 'sdkAccount') {
     isSigner: role === AccountRole.READONLY_SIGNER || role === AccountRole.WRITABLE_SIGNER,
     isWritable: role === AccountRole.WRITABLE || role === AccountRole.WRITABLE_SIGNER,
   };
+}
+
+export function buildRefreshFarmsKeys(args: {
+  crank: PublicKey;
+  obligation: PublicKey;
+  lendingMarketAuthority: PublicKey;
+  reserve: PublicKey;
+  reserveFarmState: PublicKey;
+  obligationFarmUserState: PublicKey;
+  lendingMarket: PublicKey;
+}): AccountMeta[] {
+  return [
+    { pubkey: args.crank, isSigner: true, isWritable: false },
+    { pubkey: args.obligation, isSigner: false, isWritable: false },
+    { pubkey: args.lendingMarketAuthority, isSigner: false, isWritable: false },
+    { pubkey: args.reserve, isSigner: false, isWritable: false },
+    { pubkey: args.reserveFarmState, isSigner: false, isWritable: true },
+    { pubkey: args.obligationFarmUserState, isSigner: false, isWritable: true },
+    { pubkey: args.lendingMarket, isSigner: false, isWritable: false },
+    { pubkey: new PublicKey(FARMS_PROGRAM_ID), isSigner: false, isWritable: false },
+    { pubkey: new PublicKey(addressSafe(SYSVAR_RENT_ADDRESS, 'refreshFarms.rent')), isSigner: false, isWritable: false },
+    { pubkey: new PublicKey(SYSTEM_PROGRAM_ID), isSigner: false, isWritable: false },
+  ];
 }
 
 function parsePublicKeyish(v: unknown): PublicKey | null {
@@ -766,10 +789,19 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     );
     
     const farmIx = new TransactionInstruction({
-      keys: (refreshFarmsIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'refreshFarms:collateral')),
-      programId: new PublicKey(addressSafe(refreshFarmsIx.programAddress, 'refreshFarms.programAddress')),
+      keys: buildRefreshFarmsKeys({
+        crank: p.liquidatorPubkey,
+        obligation: p.obligationPubkey,
+        lendingMarketAuthority: new PublicKey(addressSafe(lendingMarketAuthority, 'refreshFarms:collateral:lendingMarketAuthority')),
+        reserve: new PublicKey(addressSafe(collateralReserve.address, 'refreshFarms:collateral:reserve')),
+        reserveFarmState: new PublicKey(addressSafe(collateralFarmState, 'refreshFarms:collateral:reserveFarmState')),
+        obligationFarmUserState: new PublicKey(addressSafe(obligationFarmUserState, 'refreshFarms:collateral:obligationFarmUserState')),
+        lendingMarket: p.marketPubkey,
+      }),
+      programId: p.programId,
       data: Buffer.from(refreshFarmsIx.data || []),
     });
+    console.log(`[LiqBuilder] refreshFarms(mode=0) keys[1]=${farmIx.keys[1].pubkey.toBase58()} keys[3]=${farmIx.keys[3].pubkey.toBase58()} keys[4]=${farmIx.keys[4].pubkey.toBase58()}`);
     
     preFarmIxs.push(farmIx);
     // POST farms should be IDENTICAL to PRE farms (same instruction data and accounts)
@@ -819,10 +851,19 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     );
     
     const farmIx = new TransactionInstruction({
-      keys: (refreshFarmsIx.accounts || []).map((a: SdkAccount) => convertSdkAccount(a, 'refreshFarms:debt')),
-      programId: new PublicKey(addressSafe(refreshFarmsIx.programAddress, 'refreshFarms.programAddress')),
+      keys: buildRefreshFarmsKeys({
+        crank: p.liquidatorPubkey,
+        obligation: p.obligationPubkey,
+        lendingMarketAuthority: new PublicKey(addressSafe(lendingMarketAuthority, 'refreshFarms:debt:lendingMarketAuthority')),
+        reserve: new PublicKey(addressSafe(repayReserve.address, 'refreshFarms:debt:reserve')),
+        reserveFarmState: new PublicKey(addressSafe(debtFarmState, 'refreshFarms:debt:reserveFarmState')),
+        obligationFarmUserState: new PublicKey(addressSafe(obligationFarmUserState, 'refreshFarms:debt:obligationFarmUserState')),
+        lendingMarket: p.marketPubkey,
+      }),
+      programId: p.programId,
       data: Buffer.from(refreshFarmsIx.data || []),
     });
+    console.log(`[LiqBuilder] refreshFarms(mode=1) keys[1]=${farmIx.keys[1].pubkey.toBase58()} keys[3]=${farmIx.keys[3].pubkey.toBase58()} keys[4]=${farmIx.keys[4].pubkey.toBase58()}`);
     
     preFarmIxs.push(farmIx);
     // POST farms should be IDENTICAL to PRE farms (same instruction data and accounts)
