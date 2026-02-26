@@ -92,6 +92,12 @@ export async function buildPlanTransactions(opts: {
   let swapLookupTables: AddressLookupTableAccount[] = [];
 
   if (opts.includeSwap && !collateralMint.equals(repayMint)) {
+    const CUSTOM_6006 = 6006;
+    const isRefreshObligation6006 = (err: unknown): boolean => {
+      const msg = err instanceof Error ? err.message : String(err);
+      return msg.includes(`"Custom":${CUSTOM_6006}`) || msg.includes(`Custom(${CUSTOM_6006})`);
+    };
+
     if (initialCanonical.setupIxs.length > 0) {
       console.log('[Executor] ⚠️  Swap sizing skipped: Setup required (ATAs missing)');
     } else if (opts.useRealSwapSizing) {
@@ -120,11 +126,6 @@ export async function buildPlanTransactions(opts: {
             simulateTx: simTx,
             instructionLabels: simCanonical.labels,
           });
-        };
-
-        const isRefreshObligation6006 = (err: unknown): boolean => {
-          const msg = err instanceof Error ? err.message : String(err);
-          return msg.includes('"Custom":6006') || msg.includes('Custom(6006)');
         };
 
         let seizedCollateralBaseUnits: bigint;
@@ -164,7 +165,7 @@ export async function buildPlanTransactions(opts: {
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        if (refreshObligationMode === 'nonDefault' && (errMsg.includes('"Custom":6006') || errMsg.includes('Custom(6006)'))) {
+        if (refreshObligationMode === 'nonDefault' && isRefreshObligation6006(err)) {
           throw new Error('refreshObligation-invalid-accounts');
         }
         if (errMsg === 'OBLIGATION_HEALTHY') {

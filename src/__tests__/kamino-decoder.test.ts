@@ -313,11 +313,9 @@ describe("Kamino Decoder Tests", () => {
       expect(BigInt(decoded.borrows[0].borrowedAmount)).toBeGreaterThan(0n);
     });
 
-    it("should throw when decoding malformed obligation slot fixture", () => {
-      const fixturePath = join(__dirname, "../../test/fixtures/obligation_usdc_debt.json");
-      const fixture = JSON.parse(readFileSync(fixturePath, "utf-8"));
-      const data = Buffer.from(fixture.data_base64, "base64");
-      expect(() => decodeObligationSlotsAll(data)).toThrow();
+    it("should throw on invalid obligation data for decodeObligationSlotsAll", () => {
+      const invalidData = Buffer.alloc(100);
+      expect(() => decodeObligationSlotsAll(invalidData)).toThrow();
     });
   });
 });
