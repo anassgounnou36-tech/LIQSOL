@@ -35,10 +35,12 @@ export async function buildPlanTransactions(opts: {
   includeSwap: boolean;
   useRealSwapSizing: boolean;
   dry: boolean;
+  preReserveRefreshModeOverride?: 'all' | 'primary' | 'auto';
+  disableFarmsRefresh?: boolean;
 }): Promise<BuiltPlanTx> {
   const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
   const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
-  const preReserveMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
+  const preReserveMode = opts.preReserveRefreshModeOverride ?? (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
 
   let repayMintPreference: PublicKey | undefined;
   let expectedRepayReservePubkey: PublicKey | undefined;
@@ -76,6 +78,7 @@ export async function buildPlanTransactions(opts: {
     expectedRepayReservePubkey,
     expectedCollateralReservePubkey,
     preReserveRefreshMode: preReserveMode,
+    disableFarmsRefresh: opts.disableFarmsRefresh,
   };
 
   const initialCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(canonicalConfig);

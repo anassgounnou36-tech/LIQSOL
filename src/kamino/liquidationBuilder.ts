@@ -55,6 +55,7 @@ export interface BuildKaminoLiquidationParams {
   expectedRepayReservePubkey?: PublicKey;
   expectedCollateralReservePubkey?: PublicKey;
   preReserveRefreshMode?: 'all' | 'primary' | 'auto';
+  disableFarmsRefresh?: boolean;
 }
 
 /**
@@ -350,35 +351,18 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     }
   }
   
-  // PART A: Gather all obligation reserves in CANONICAL ORDER (deposits first, then borrows)
-  // Extract all reserve pubkeys from obligation state for refreshObligation remaining accounts
-  // FIX: Preserve canonical obligation order (deposits → borrows) and dedupe without reordering
-  const orderedReserves: string[] = [];
-  const seenReserves = new Set<string>();
-  
-  // Add deposit reserves FIRST (in order) - Kamino expects deposits before borrows
-  for (const deposit of deposits) {
-    const reservePubkey = deposit.depositReserve.toString();
-    if (reservePubkey !== PublicKey.default.toString() && !seenReserves.has(reservePubkey)) {
-      orderedReserves.push(reservePubkey);
-      seenReserves.add(reservePubkey);
+  const depositReserveKeys = deposits.map((d: any) => d.depositReserve.toString());
+  const borrowReserveKeys = borrows.map((b: any) => b.borrowReserve.toString());
+  const refreshObligationReserves = depositReserveKeys.concat(borrowReserveKeys);
+  const uniqueReserves: string[] = [];
+  const seen = new Set<string>();
+  for (const r of refreshObligationReserves) {
+    if (!seen.has(r)) {
+      uniqueReserves.push(r);
+      seen.add(r);
     }
   }
-  
-  // Then add borrow reserves (in order) - skip duplicates already added from deposits
-  for (const borrow of borrows) {
-    const reservePubkey = borrow.borrowReserve.toString();
-    if (reservePubkey !== PublicKey.default.toString() && !seenReserves.has(reservePubkey)) {
-      orderedReserves.push(reservePubkey);
-      seenReserves.add(reservePubkey);
-    }
-  }
-  
-  // Use ordered reserves (preserves canonical order for refreshObligation)
-  const uniqueReserves = orderedReserves;
-  
-  console.log(`[LiqBuilder] Gathered ${uniqueReserves.length} unique reserves in canonical order (deposits→borrows)`);
-  console.log(`[LiqBuilder]   Deposits: ${deposits.length}, Borrows: ${borrows.length}`);
+  console.log(`[LiqBuilder] deposits=${depositReserveKeys.length} borrows=${borrowReserveKeys.length} refreshObligationReserves=${refreshObligationReserves.length} uniqueReserves=${uniqueReserves.length}`);
   const dbg = process.env.DEBUG_REFRESH_OBLIGATION === '1';
   if (dbg) {
     console.log('\n[LiqBuilder][DEBUG_REFRESH_OBLIGATION] Obligation slot dump');
@@ -401,8 +385,8 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       console.log(`  [${i}] reserve=${reserve} borrowedAmountSf=${amtSf}`);
     });
 
-    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] refresh remaining reserves (deduped deposits→borrows):');
-    uniqueReserves.forEach((r, i) => console.log(`  [${i}] ${r}`));
+    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] refresh remaining reserves (deposits→borrows, non-deduped):');
+    refreshObligationReserves.forEach((r, i) => console.log(`  [${i}] ${r}`));
     console.log('');
   }
   
@@ -609,12 +593,50 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // STEP 2A: RefreshObligation with ALL reserves as remaining accounts
   // Convert reserve pubkeys to AccountMeta format for SDK
   // According to Kamino SDK, reserves passed as remaining accounts should be read-only (role 0)
-  const remainingAccounts = uniqueReserves.map(r => ({
+  const remainingAccounts = refreshObligationReserves.map(r => ({
     address: address(r),
-    role: 0 as const, // READONLY
+    role: AccountRole.READONLY,
   }));
+
+  const referrerRaw = (obligation.state as any).referrer;
+  let referrerPk: PublicKey | null = null;
+  try {
+    if (referrerRaw) {
+      referrerPk = new PublicKey(referrerRaw.toString?.() ?? String(referrerRaw));
+    }
+  } catch (e) {
+    console.warn('[LiqBuilder] Failed to parse obligation referrer:', e);
+  }
+
+  const hasReferrer = !!referrerPk && !referrerPk.equals(PublicKey.default);
+  if (hasReferrer && referrerPk) {
+    for (const borrowReserve of borrowReserveKeys) {
+      const reservePk = new PublicKey(borrowReserve);
+      const [pda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("referrer_acc"),
+          referrerPk.toBuffer(),
+          reservePk.toBuffer(),
+        ],
+        p.programId,
+      );
+      remainingAccounts.push({
+        address: address(pda.toBase58()),
+        role: AccountRole.WRITABLE,
+      });
+    }
+    console.log(`[LiqBuilder] obligation has referrer=${referrerPk.toBase58()} -> appended ${borrowReserveKeys.length} referrer token states`);
+  }
+
+  const expectedRemainingAccounts = depositReserveKeys.length + borrowReserveKeys.length + (hasReferrer ? borrowReserveKeys.length : 0);
+  if (remainingAccounts.length !== expectedRemainingAccounts) {
+    throw new Error(
+      `[LiqBuilder] refreshObligation remaining accounts mismatch expected=${expectedRemainingAccounts} actual=${remainingAccounts.length} ` +
+      `deposits=${depositReserveKeys.length} borrows=${borrowReserveKeys.length} hasReferrer=${hasReferrer}`
+    );
+  }
   
-  console.log(`[LiqBuilder] Building RefreshObligation with ${remainingAccounts.length} reserves as remaining accounts`);
+  console.log(`[LiqBuilder] Building RefreshObligation with ${remainingAccounts.length} remaining accounts`);
   
   const obligationRefreshIx = refreshObligation({
     lendingMarket: address(p.marketPubkey.toBase58()),
@@ -632,10 +654,10 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const preFarmIxs: TransactionInstruction[] = [];
   const postFarmIxs: TransactionInstruction[] = [];
   const farmModes: number[] = [];
-  
-  // Check collateral reserve farm (mode 0)
-  const collateralFarmState = collateralReserve.state.farmCollateral;
-  if (collateralFarmState !== DEFAULT_PUBKEY) {
+  if (!p.disableFarmsRefresh) {
+    // Check collateral reserve farm (mode 0)
+    const collateralFarmState = collateralReserve.state.farmCollateral;
+    if (collateralFarmState !== DEFAULT_PUBKEY) {
     console.log(`[LiqBuilder] Building RefreshFarms for collateral reserve (mode=0)`);
     
     const obligationFarmUserState = await obligationFarmStatePda(
@@ -683,11 +705,11 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       data: farmIx.data,
     }));
     farmModes.push(0);
-  }
-  
-  // Check debt/repay reserve farm (mode 1)
-  const debtFarmState = repayReserve.state.farmDebt;
-  if (debtFarmState !== DEFAULT_PUBKEY) {
+    }
+    
+    // Check debt/repay reserve farm (mode 1)
+    const debtFarmState = repayReserve.state.farmDebt;
+    if (debtFarmState !== DEFAULT_PUBKEY) {
     console.log(`[LiqBuilder] Building RefreshFarms for debt reserve (mode=1)`);
     
     const obligationFarmUserState = await obligationFarmStatePda(
@@ -735,6 +757,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       data: farmIx.data,
     }));
     farmModes.push(1);
+    }
   }
   
   // Add PRE farm instructions to core (immediately after RefreshObligation)

@@ -2,6 +2,7 @@ import { Connection, PublicKey, VersionedTransaction, Keypair } from '@solana/we
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { buildPlanTransactions } from '../execute/planTxBuilder.js';
 import { buildVersionedTx } from '../execute/versionedTx.js';
+import { isTxTooLarge } from '../execute/txSize.js';
 
 /**
  * Presubmit cache entry for a ready-to-send transaction
@@ -174,33 +175,69 @@ export class Presubmitter {
    * Build presubmit entry for a plan
    */
   private async buildEntry(plan: FlashloanPlan): Promise<PresubmitEntry> {
-    const built = await buildPlanTransactions({
-      connection: this.config.connection,
-      signer: this.config.signer,
-      market: this.config.market,
-      programId: this.config.programId,
-      plan,
-      includeSwap: true,
-      useRealSwapSizing: true,
-      dry: false,
-    });
+    const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
+    const buildProfiles: Array<{ disableFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto' }> = [
+      { disableFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
+      { disableFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode },
+      { disableFarmsRefresh: true, preReserveRefreshMode: 'primary' },
+    ];
 
-    const swapRequired = !built.collateralMint.equals(built.repayMint);
-    const swapSkippedBecauseSetup = built.setupIxs.length > 0 && swapRequired && built.swapIxs.length === 0;
-
-    const bh = await this.config.connection.getLatestBlockhash();
+    let built: Awaited<ReturnType<typeof buildPlanTransactions>> | undefined;
     let tx: VersionedTransaction | undefined;
     let mode: PresubmitEntry['mode'] = 'partial';
+    let swapSkippedBecauseSetup = false;
+    let selectedBlockhash = '';
+    const attemptedProfiles: string[] = [];
 
-    if (!swapSkippedBecauseSetup) {
-      mode = built.atomicIxs.length > built.mainIxs.length ? 'atomic' : 'main';
-      tx = await buildVersionedTx({
-        payer: this.config.signer.publicKey,
-        blockhash: bh.blockhash,
-        instructions: mode === 'atomic' ? built.atomicIxs : built.mainIxs,
-        lookupTables: mode === 'atomic' ? built.atomicLookupTables : built.swapLookupTables,
+    for (let i = 0; i < buildProfiles.length; i++) {
+      const profile = buildProfiles[i];
+      const candidate = await buildPlanTransactions({
+        connection: this.config.connection,
         signer: this.config.signer,
+        market: this.config.market,
+        programId: this.config.programId,
+        plan,
+        includeSwap: true,
+        useRealSwapSizing: true,
+        dry: false,
+        disableFarmsRefresh: profile.disableFarmsRefresh,
+        preReserveRefreshModeOverride: profile.preReserveRefreshMode,
       });
+
+      const swapRequired = !candidate.collateralMint.equals(candidate.repayMint);
+      const skippedBecauseSetup = candidate.setupIxs.length > 0 && swapRequired && candidate.swapIxs.length === 0;
+      const bh = await this.config.connection.getLatestBlockhash();
+      let candidateTx: VersionedTransaction | undefined;
+      let candidateMode: PresubmitEntry['mode'] = 'partial';
+      if (!skippedBecauseSetup) {
+        candidateMode = candidate.atomicIxs.length > candidate.mainIxs.length ? 'atomic' : 'main';
+        candidateTx = await buildVersionedTx({
+          payer: this.config.signer.publicKey,
+          blockhash: bh.blockhash,
+          instructions: candidateMode === 'atomic' ? candidate.atomicIxs : candidate.mainIxs,
+          lookupTables: candidateMode === 'atomic' ? candidate.atomicLookupTables : candidate.swapLookupTables,
+          signer: this.config.signer,
+        });
+        const sizeCheck = isTxTooLarge(candidateTx);
+        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
+        if (sizeCheck.tooLarge) {
+          console.log(`[Presubmit] Profile ${i + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
+          continue;
+        }
+      } else {
+        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=partial`);
+      }
+
+      built = candidate;
+      tx = candidateTx;
+      mode = candidateMode;
+      swapSkippedBecauseSetup = skippedBecauseSetup;
+      selectedBlockhash = bh.blockhash;
+      break;
+    }
+
+    if (!built) {
+      throw new Error(`[Presubmit] All ${buildProfiles.length} profiles exceeded tx size limit: ${attemptedProfiles.join(' | ')}`);
     }
 
     // Simulate to get slot
@@ -225,7 +262,7 @@ export class Presubmitter {
       lastSimSlot,
       ev: plan.ev,
       ttl: plan.ttlMin ?? undefined,
-      blockhash: bh.blockhash,
+      blockhash: selectedBlockhash,
       lookupTablesCount: built.atomicLookupTables.length,
       mode,
       needsSetupFirst: swapSkippedBecauseSetup || undefined,
