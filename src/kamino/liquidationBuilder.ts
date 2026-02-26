@@ -10,7 +10,7 @@ import { parseUiAmountToBaseUnits } from "../execute/amount.js";
 import { resolveTokenProgramId } from "../solana/tokenProgram.js";
 import { buildCreateAtaIdempotentIx } from "../solana/ata.js";
 import { addressSafe } from "../solana/addressSafe.js";
-import { toBigInt } from "../utils/bn.js";
+import { toBigInt, gtZero } from "../utils/bn.js";
 import { SYSVAR_RENT_ADDRESS } from "@solana/sysvars";
 import { KLEND_PROGRAM_ID as KLEND_PROGRAM_ID_FROM_DECODER, KAMINO_DISCRIMINATORS } from "../execute/decodeKaminoKindFromCompiled.js";
 
@@ -207,7 +207,14 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   let repayReserve;
   let repayMint: PublicKey | null = null;
   
-  const borrows = obligation.state.borrows.filter((b: any) => b.borrowReserve.toString() !== PublicKey.default.toString()); // SDK obligation state doesn't export specific types
+  const depositsAll = obligation.state.deposits.filter((d: any) =>
+    d.depositReserve.toString() !== PublicKey.default.toString()
+  ); // SDK obligation state doesn't export specific types
+  const borrowsAll = obligation.state.borrows.filter((b: any) =>
+    b.borrowReserve.toString() !== PublicKey.default.toString()
+  ); // SDK obligation state doesn't export specific types
+  const deposits = depositsAll.filter((d: any) => gtZero(d.depositedAmount)); // ACTIVE = nonzero amount
+  const borrows = borrowsAll.filter((b: any) => gtZero(b.borrowedAmountSf)); // ACTIVE = nonzero amount
   
   if (borrows.length === 0) {
     throw new Error(`Obligation ${p.obligationPubkey.toBase58()} has no active borrows`);
@@ -287,8 +294,6 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   // Strategy: Select deposit with highest USD value (or first non-zero)
   let collateralReserve;
   let collateralMint: PublicKey | null = null;
-  
-  const deposits = obligation.state.deposits.filter((d: any) => d.depositReserve.toString() !== PublicKey.default.toString()); // SDK obligation state doesn't export specific types
   
   if (deposits.length === 0) {
     throw new Error(`Obligation ${p.obligationPubkey.toBase58()} has no active deposits`);
@@ -403,6 +408,8 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   console.log(`[LiqBuilder] deposits=${depositReserveKeys.length} borrows=${borrowReserveKeys.length} refreshObligationReserves=${refreshObligationReserves.length} uniqueReserves=${uniqueReserves.length}`);
   const dbg = process.env.DEBUG_REFRESH_OBLIGATION === '1';
   if (dbg) {
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] depositsAll(non-default)=${depositsAll.length} depositsActive(nonzero)=${deposits.length}`);
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] borrowsAll(non-default)=${borrowsAll.length} borrowsActive(nonzero)=${borrows.length}`);
     console.log('\n[LiqBuilder][DEBUG_REFRESH_OBLIGATION] Obligation slot dump');
     console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] obligation=${p.obligationPubkey.toBase58()}`);
     console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] market=${p.marketPubkey.toBase58()}`);
