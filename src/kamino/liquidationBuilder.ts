@@ -57,6 +57,7 @@ export interface BuildKaminoLiquidationParams {
   expectedCollateralReservePubkey?: PublicKey;
   preReserveRefreshMode?: 'all' | 'primary' | 'auto';
   disableFarmsRefresh?: boolean;
+  disablePostFarmsRefresh?: boolean;
   refreshObligationMode?: 'active' | 'nonDefault';
 }
 
@@ -90,6 +91,7 @@ export interface KaminoLiquidationResult {
   // Metadata for instruction labeling
   ataCount: number; // Number of ATA create instructions in setupIxs
   farmRefreshCount: number; // Number of farm refresh instructions in coreIxs (0-2)
+  postFarmRefreshCount: number; // Number of farm refresh instructions in postFarmIxs (0-2)
   farmRequiredModes: number[]; // Farm modes required by reserve state: 0=collateral, 1=debt
   farmModes: number[]; // Farm modes included: 0=collateral, 1=debt (for labeling)
 }
@@ -771,11 +773,13 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     
     preFarmIxs.push(farmIx);
     // POST farms should be IDENTICAL to PRE farms (same instruction data and accounts)
-    postFarmIxs.push(new TransactionInstruction({
-      keys: farmIx.keys,
-      programId: farmIx.programId,
-      data: farmIx.data,
-    }));
+    if (!p.disablePostFarmsRefresh) {
+      postFarmIxs.push(new TransactionInstruction({
+        keys: farmIx.keys,
+        programId: farmIx.programId,
+        data: farmIx.data,
+      }));
+    }
     farmModes.push(0);
     }
     
@@ -822,11 +826,13 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     
     preFarmIxs.push(farmIx);
     // POST farms should be IDENTICAL to PRE farms (same instruction data and accounts)
-    postFarmIxs.push(new TransactionInstruction({
-      keys: farmIx.keys,
-      programId: farmIx.programId,
-      data: farmIx.data,
-    }));
+    if (!p.disablePostFarmsRefresh) {
+      postFarmIxs.push(new TransactionInstruction({
+        keys: farmIx.keys,
+        programId: farmIx.programId,
+        data: farmIx.data,
+      }));
+    }
     farmModes.push(1);
     }
   }
@@ -835,7 +841,11 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   coreIxs.push(...preFarmIxs);
   
   console.log(`[LiqBuilder] Built ${preFarmIxs.length} RefreshFarms instructions (modes: ${farmModes.join(', ')})`);
-  console.log(`[LiqBuilder] POST farms will mirror PRE farms (${postFarmIxs.length} instructions)`);
+  if (p.disablePostFarmsRefresh) {
+    console.log('[LiqBuilder] POST farms disabled by config; NOT mirroring PRE farms');
+  } else {
+    console.log(`[LiqBuilder] POST farms will mirror PRE farms (${postFarmIxs.length} instructions)`);
+  }
 
   // 4) Derive repay amount
   // If repayAmountUi provided, convert to base units with exact string→integer conversion
@@ -983,6 +993,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     // Metadata for instruction labeling
     ataCount: setupIxs.length,
     farmRefreshCount: preFarmIxs.length,
+    postFarmRefreshCount: postFarmIxs.length,
     farmRequiredModes, // Farm modes required by reserve state: 0=collateral, 1=debt
     farmModes, // Farm modes included: 0=collateral, 1=debt
     // lookupTables: undefined, // Can be added later if needed

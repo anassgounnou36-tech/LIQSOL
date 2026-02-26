@@ -192,6 +192,7 @@ async function buildFullTransaction(
     dry?: boolean;
     preReserveRefreshModeOverride?: 'all' | 'primary' | 'auto';
     disableFarmsRefresh?: boolean;
+    disablePostFarmsRefresh?: boolean;
   } = {}
 ): Promise<{ 
   setupIxs: TransactionInstruction[]; 
@@ -207,11 +208,12 @@ async function buildFullTransaction(
   metadata: {
     repayMint: PublicKey;
     collateralMint: PublicKey;
-    withdrawCollateralMint: PublicKey;
-    hasFarmsRefresh: boolean;
-    farmRequiredModes: number[];
-  };
-}> {
+      withdrawCollateralMint: PublicKey;
+      hasFarmsRefresh: boolean;
+      hasPostFarmsRefresh: boolean;
+      farmRequiredModes: number[];
+    };
+  }> {
   const built = await buildPlanTransactions({
     connection: getConnection(),
     signer,
@@ -223,6 +225,7 @@ async function buildFullTransaction(
     dry: opts.dry ?? false,
     preReserveRefreshModeOverride: opts.preReserveRefreshModeOverride,
     disableFarmsRefresh: opts.disableFarmsRefresh,
+    disablePostFarmsRefresh: opts.disablePostFarmsRefresh,
   });
 
   return {
@@ -241,6 +244,7 @@ async function buildFullTransaction(
       collateralMint: built.collateralMint,
       withdrawCollateralMint: built.withdrawCollateralMint,
       hasFarmsRefresh: built.hasFarmsRefresh,
+      hasPostFarmsRefresh: built.hasPostFarmsRefresh,
       farmRequiredModes: built.farmRequiredModes,
     },
   };
@@ -538,8 +542,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   let atomicIxs: TransactionInstruction[] = [];
   let atomicLabels: string[] = [];
   let atomicLookupTables: AddressLookupTableAccount[] = [];
-  let metadata: { hasFarmsRefresh: boolean; farmRequiredModes: number[]; repayMint: PublicKey; collateralMint: PublicKey; withdrawCollateralMint: PublicKey } = {
+  let metadata: { hasFarmsRefresh: boolean; hasPostFarmsRefresh: boolean; farmRequiredModes: number[]; repayMint: PublicKey; collateralMint: PublicKey; withdrawCollateralMint: PublicKey } = {
     hasFarmsRefresh: false,
+    hasPostFarmsRefresh: false,
     farmRequiredModes: [],
     repayMint: PublicKey.default,
     collateralMint: PublicKey.default,
@@ -547,8 +552,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   };
   let presubmittedTx: VersionedTransaction | undefined;
   const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
-  const buildProfiles: Array<{ disableFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto' }> = [
-    { disableFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
+  const buildProfiles: Array<{ disableFarmsRefresh: boolean; disablePostFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto' }> = [
+    { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
   ];
   
   try {
@@ -575,6 +580,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         useRealSwapSizing,
         dry,
         disableFarmsRefresh: profile.disableFarmsRefresh,
+        disablePostFarmsRefresh: profile.disablePostFarmsRefresh,
         preReserveRefreshModeOverride: profile.preReserveRefreshMode,
       });
 
@@ -587,17 +593,21 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         signer,
       });
       const sizeCheck = isTxTooLarge(sizeCheckTx);
-      attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
+      attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},disablePostFarmsRefresh=${profile.disablePostFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
       if (sizeCheck.tooLarge) {
-        console.log(`[Executor] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
+        console.log(`[Executor] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} disablePostFarmsRefresh=${profile.disablePostFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
         if (profileIndex === 0) {
           const farmsRequired = result.metadata.farmRequiredModes.length > 0;
           if (farmsRequired) {
-            buildProfiles.push({ disableFarmsRefresh: false, preReserveRefreshMode: 'primary' });
+            buildProfiles.push(
+              { disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode },
+              { disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: 'primary' },
+              { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' },
+            );
           } else {
             buildProfiles.push(
-              { disableFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode },
-              { disableFarmsRefresh: true, preReserveRefreshMode: 'primary' },
+              { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
+              { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' },
             );
           }
         }
@@ -860,10 +870,17 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   // Validate the compiled transaction against expected canonical sequence
   // This catches any divergence between label-based validation and actual compiled message
   console.log('\n[Executor] Validating compiled instruction window...');
+  const decodedKinds = decodeCompiledInstructionKinds(tx);
   const validationHasFarms = presubmittedTx
-    ? decodeCompiledInstructionKinds(tx).some((kind) => kind.kind === 'refreshObligationFarmsForReserve')
+    ? decodedKinds.some((kind) => kind.kind === 'refreshObligationFarmsForReserve')
     : metadata.hasFarmsRefresh;
-  const validation = validateCompiledInstructionWindow(tx, validationHasFarms);
+  const requirePostFarmsRefresh = presubmittedTx
+    ? (() => {
+        const liquidateIdx = decodedKinds.findIndex((kind) => kind.kind === 'liquidateObligationAndRedeemReserveCollateral');
+        return liquidateIdx >= 0 && liquidateIdx + 1 < decodedKinds.length && decodedKinds[liquidateIdx + 1].kind === 'refreshObligationFarmsForReserve';
+      })()
+    : metadata.hasPostFarmsRefresh;
+  const validation = validateCompiledInstructionWindow(tx, validationHasFarms, requirePostFarmsRefresh);
   
   if (!validation.valid) {
     console.error('[Executor] ⚠️  COMPILED VALIDATION MISMATCH:');
@@ -877,7 +894,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   console.log(validation.diagnostics);
   
   // Also decode and log the full compiled instruction kinds for diagnostics
-  const compiledKinds = decodeCompiledInstructionKinds(tx);
+  const compiledKinds = decodedKinds;
   console.log('\n[Executor] ═══ COMPILED INSTRUCTION KINDS ═══');
   compiledKinds.forEach((kind, idx) => {
     const labelMatch = labels[idx] ? ` (label: ${labels[idx]})` : '';

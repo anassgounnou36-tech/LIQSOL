@@ -48,6 +48,7 @@ export interface CanonicalLiquidationConfig {
   expectedCollateralReservePubkey?: PublicKey;
   preReserveRefreshMode?: 'all' | 'primary' | 'auto';
   disableFarmsRefresh?: boolean;
+  disablePostFarmsRefresh?: boolean;
   refreshObligationMode?: 'active' | 'nonDefault';
   
   // Swap parameters (optional - if not provided, no swap will be used)
@@ -74,6 +75,7 @@ export interface CanonicalLiquidationResult {
   collateralMint: PublicKey;
   withdrawCollateralMint: PublicKey;
   hasFarmsRefresh: boolean;
+  hasPostFarmsRefresh: boolean;
   farmRequiredModes: number[];
 }
 
@@ -156,6 +158,7 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
     expectedCollateralReservePubkey: config.expectedCollateralReservePubkey,
     preReserveRefreshMode: config.preReserveRefreshMode,
     disableFarmsRefresh: config.disableFarmsRefresh,
+    disablePostFarmsRefresh: config.disablePostFarmsRefresh,
     refreshObligationMode: config.refreshObligationMode,
   });
   
@@ -183,10 +186,12 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
   labels.push('liquidate');
   
   // 8. POST-FARM instructions (immediately after liquidation, mirrors PRE farms)
-  instructions.push(...liquidationResult.postFarmIxs);
-  for (const mode of liquidationResult.farmModes) {
-    const modeLabel = mode === 0 ? 'collateral' : 'debt';
-    labels.push(`postRefreshFarms:${modeLabel}`);
+  if (liquidationResult.postFarmIxs.length > 0) {
+    instructions.push(...liquidationResult.postFarmIxs);
+    for (const mode of liquidationResult.farmModes) {
+      const modeLabel = mode === 0 ? 'collateral' : 'debt';
+      labels.push(`postRefreshFarms:${modeLabel}`);
+    }
   }
   
   // 9. Swap instructions (optional, after POST farms)
@@ -213,6 +218,7 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
     collateralMint: liquidationResult.collateralMint,
     withdrawCollateralMint: liquidationResult.withdrawCollateralMint,
     hasFarmsRefresh: liquidationResult.farmRefreshCount > 0,
+    hasPostFarmsRefresh: liquidationResult.postFarmIxs.length > 0,
     farmRequiredModes: liquidationResult.farmRequiredModes,
   };
 }
@@ -289,7 +295,8 @@ export function decodeCompiledInstructionKinds(tx: VersionedTransaction): Instru
  */
 export function validateCompiledInstructionWindow(
   tx: VersionedTransaction,
-  hasFarmsRefresh: boolean
+  hasFarmsRefresh: boolean,
+  requirePostFarmsRefresh: boolean
 ): { valid: boolean; diagnostics: string } {
   const kinds = decodeCompiledInstructionKinds(tx);
   
@@ -320,7 +327,8 @@ export function validateCompiledInstructionWindow(
   
   let cursor = liquidateIdx - 1;
 
-  if (hasFarmsRefresh) {
+  // PRE farms must remain adjacent when farms are enabled; POST farms are optional by config.
+  if (hasFarmsRefresh && requirePostFarmsRefresh) {
     if (cursor < 0 || kinds[cursor].kind !== 'refreshObligationFarmsForReserve') {
       let diagnostics = 'Missing or invalid farms refresh immediately before liquidation\n\n';
       diagnostics += 'Expected: refreshObligationFarmsForReserve\n';
@@ -448,7 +456,7 @@ export function validateCompiledInstructionWindow(
   }
   diagnostics += '\nLIQUIDATE:\n';
   diagnostics += `  [${liquidateIdx}] ${kinds[liquidateIdx].kind}\n`;
-  if (hasFarmsRefresh && liquidateIdx + 1 < kinds.length) {
+  if (hasFarmsRefresh && requirePostFarmsRefresh && liquidateIdx + 1 < kinds.length) {
     diagnostics += '\nPOST (immediately after liquidation):\n';
     diagnostics += `  [${liquidateIdx + 1}] ${kinds[liquidateIdx + 1].kind}\n`;
   }
@@ -481,6 +489,7 @@ export async function buildAndValidateCanonicalLiquidationTx(
     collateralMint: PublicKey;
     withdrawCollateralMint: PublicKey;
     hasFarmsRefresh: boolean;
+    hasPostFarmsRefresh: boolean;
   };
 }> {
   // Build canonical instructions
@@ -514,7 +523,8 @@ export async function buildAndValidateCanonicalLiquidationTx(
   // Validate compiled instruction window
   const validation = validateCompiledInstructionWindow(
     tx,
-    canonical.hasFarmsRefresh
+    canonical.hasFarmsRefresh,
+    canonical.hasPostFarmsRefresh
   );
   
   return {
@@ -528,6 +538,7 @@ export async function buildAndValidateCanonicalLiquidationTx(
       collateralMint: canonical.collateralMint,
       withdrawCollateralMint: canonical.withdrawCollateralMint,
       hasFarmsRefresh: canonical.hasFarmsRefresh,
+      hasPostFarmsRefresh: canonical.hasPostFarmsRefresh,
     },
   };
 }

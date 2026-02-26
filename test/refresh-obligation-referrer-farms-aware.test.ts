@@ -34,8 +34,11 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
     const planBuilder = read('src/execute/planTxBuilder.ts');
 
     expect(liquidationBuilder).toContain('farmRequiredModes: number[]');
+    expect(liquidationBuilder).toContain('postFarmRefreshCount: number');
     expect(canonical).toContain('farmRequiredModes: liquidationResult.farmRequiredModes');
+    expect(canonical).toContain('hasPostFarmsRefresh: liquidationResult.postFarmIxs.length > 0');
     expect(planBuilder).toContain('farmRequiredModes');
+    expect(planBuilder).toContain('hasPostFarmsRefresh: finalCanonical.hasPostFarmsRefresh');
   });
 
   it('dumps program logs for seized-delta simulation failures', () => {
@@ -49,10 +52,23 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
 
     expect(executor).toContain('const farmsRequired = result.metadata.farmRequiredModes.length > 0;');
     expect(executor).toContain('if (farmsRequired) {');
-    expect(executor).toContain("{ disableFarmsRefresh: false, preReserveRefreshMode: 'primary' }");
+    expect(executor).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode }");
+    expect(executor).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: 'primary' }");
+    expect(executor).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' }");
 
     expect(presubmitter).toContain('const farmsRequired = candidate.farmRequiredModes.length > 0;');
     expect(presubmitter).toContain('if (farmsRequired) {');
     expect(presubmitter).toContain("{ disableFarmsRefresh: false, preReserveRefreshMode: 'primary' }");
+  });
+
+  it('supports optional post farms in compiled validation', () => {
+    const canonical = read('src/kamino/canonicalLiquidationIxs.ts');
+    const executor = read('src/execute/executor.ts');
+
+    expect(canonical).toContain('requirePostFarmsRefresh: boolean');
+    expect(canonical).toContain('if (hasFarmsRefresh) {');
+    expect(canonical).toContain('if (hasFarmsRefresh && requirePostFarmsRefresh) {');
+    expect(executor).toContain('validateCompiledInstructionWindow(tx, validationHasFarms, requirePostFarmsRefresh)');
+    expect(executor).toContain("decodedKinds[liquidateIdx + 1].kind === 'refreshObligationFarmsForReserve'");
   });
 });
