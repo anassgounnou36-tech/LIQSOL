@@ -18,6 +18,16 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
     expect(source).toContain('Buffer.from("referrer_acc")');
   });
 
+  it('builds refresh-obligation reserve lists from active nonzero slots', () => {
+    const source = read('src/kamino/liquidationBuilder.ts');
+    expect(source).toContain('const depositsAll = obligation.state.deposits.filter');
+    expect(source).toContain('const borrowsAll = obligation.state.borrows.filter');
+    expect(source).toContain('const deposits = depositsAll.filter((d: any) => gtZero(d.depositedAmount));');
+    expect(source).toContain('const borrows = borrowsAll.filter((b: any) => gtZero(b.borrowedAmountSf));');
+    expect(source).toContain('depositsAll(non-default)');
+    expect(source).toContain('borrowsAll(non-default)');
+  });
+
   it('threads farmRequiredModes metadata through canonical and plan builders', () => {
     const liquidationBuilder = read('src/kamino/liquidationBuilder.ts');
     const canonical = read('src/kamino/canonicalLiquidationIxs.ts');
