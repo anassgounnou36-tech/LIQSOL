@@ -66,8 +66,8 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
     const executor = read('src/execute/executor.ts');
 
     expect(canonical).toContain('requirePostFarmsRefresh: boolean');
-    expect(canonical).toContain('if (hasFarmsRefresh) {');
-    expect(canonical).toContain('if (hasFarmsRefresh && requirePostFarmsRefresh) {');
+    expect(canonical).toContain('if (requirePostFarmsRefresh) {');
+    expect(canonical).toContain('if (postFarmCount !== preFarmCount) {');
     expect(executor).toContain('validateCompiledInstructionWindow(tx, validationHasFarms, requirePostFarmsRefresh)');
     expect(executor).toContain("decodedKinds[liquidateIdx + 1].kind === 'refreshObligationFarmsForReserve'");
   });
