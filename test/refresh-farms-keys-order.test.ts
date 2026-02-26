@@ -25,9 +25,13 @@ describe('buildRefreshFarmsKeys', () => {
     expect(keys).toHaveLength(10);
     expect(keys[0]).toMatchObject({ pubkey: crank, isSigner: true, isWritable: false });
     expect(keys[1]).toMatchObject({ pubkey: obligation, isSigner: false, isWritable: false });
+    expect(keys[2]).toMatchObject({ pubkey: lendingMarketAuthority, isSigner: false, isWritable: false });
     expect(keys[3]).toMatchObject({ pubkey: reserve, isSigner: false, isWritable: false });
     expect(keys[4]).toMatchObject({ pubkey: reserveFarmState, isSigner: false, isWritable: true });
     expect(keys[5]).toMatchObject({ pubkey: obligationFarmUserState, isSigner: false, isWritable: true });
     expect(keys[6]).toMatchObject({ pubkey: lendingMarket, isSigner: false, isWritable: false });
+    expect(keys[7]).toMatchObject({ pubkey: new PublicKey('FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr'), isSigner: false, isWritable: false });
+    expect(keys[8]).toMatchObject({ pubkey: new PublicKey('SysvarRent111111111111111111111111111111111'), isSigner: false, isWritable: false });
+    expect(keys[9]).toMatchObject({ pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false });
   });
 });
