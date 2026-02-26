@@ -283,8 +283,8 @@ export function decodeCompiledInstructionKinds(tx: VersionedTransaction): Instru
  * - refreshFarmsForObligationForReserve (same farm set and order as PRE, if exist)
  * 
  * Key validation points:
- * 1. Last instruction before liquidation must be farms refresh (or obligation if no farms)
- * 2. First instruction after liquidation must be farms refresh (or nothing/swap if no farms)
+ * 1. Instructions before liquidation must end with refreshObligation and optional contiguous farms (0-2)
+ * 2. POST farms are validated only when requirePostFarmsRefresh=true
  * 3. Contiguous refreshReserve run before refreshObligation must be valid (min 2)
  * 
  * Uses semantic matching by programId + discriminator for reliable v0 transaction validation.
@@ -327,26 +327,38 @@ export function validateCompiledInstructionWindow(
   
   let cursor = liquidateIdx - 1;
 
-  // PRE farms must remain adjacent when farms are enabled; POST farms are optional by config.
-  if (hasFarmsRefresh && requirePostFarmsRefresh) {
-    if (cursor < 0 || kinds[cursor].kind !== 'refreshObligationFarmsForReserve') {
-      let diagnostics = 'Missing or invalid farms refresh immediately before liquidation\n\n';
-      diagnostics += 'Expected: refreshObligationFarmsForReserve\n';
-      diagnostics += `Actual: ${cursor >= 0 ? kinds[cursor].kind : 'none'}\n`;
-      diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
-      const windowStart = Math.max(0, liquidateIdx - 6);
-      const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
-      for (let i = windowStart; i < windowEnd; i++) {
-        const marker = i === liquidateIdx ? ' ← LIQUIDATE' : '';
-        diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
-      }
-      return { valid: false, diagnostics };
-    }
+  // Count how many PRE farm instructions are immediately before liquidation
+  let preFarmCount = 0;
+  while (cursor >= 0 && kinds[cursor].kind === 'refreshObligationFarmsForReserve') {
+    preFarmCount += 1;
     cursor -= 1;
   }
 
+  // PRE farms are required if hasFarmsRefresh is true
+  if (hasFarmsRefresh && preFarmCount === 0) {
+    let diagnostics = 'Missing pre farms refresh before liquidation\n\n';
+    diagnostics += 'Expected at least one: refreshObligationFarmsForReserve\n';
+    diagnostics += `Actual: ${cursor >= 0 ? kinds[cursor].kind : 'none'}\n`;
+    diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
+    const windowStart = Math.max(0, liquidateIdx - 6);
+    const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
+    for (let i = windowStart; i < windowEnd; i++) {
+      const marker = i === liquidateIdx ? ' ← LIQUIDATE' : '';
+      diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
+    }
+    return { valid: false, diagnostics };
+  }
+
+  // If caller says no farms but we see farms, treat as divergence
+  if (!hasFarmsRefresh && preFarmCount > 0) {
+    return {
+      valid: false,
+      diagnostics: `unexpected pre farms refresh present: hasFarmsRefresh=false but found ${preFarmCount} pre farm refresh instruction(s)`,
+    };
+  }
+
   if (cursor < 0 || kinds[cursor].kind !== 'refreshObligation') {
-    let diagnostics = 'Missing or invalid refreshObligation before liquidation\n\n';
+    let diagnostics = 'Missing refreshObligation before liquidation (allowing optional farms between refreshObligation and liquidation)\n\n';
     diagnostics += 'Expected: refreshObligation\n';
     diagnostics += `Actual: ${cursor >= 0 ? kinds[cursor].kind : 'none'}\n`;
     diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
@@ -395,10 +407,11 @@ export function validateCompiledInstructionWindow(
   const expectedPreSequence = [
     ...Array(nPreReserves).fill('refreshReserve'),
     'refreshObligation',
-    ...(hasFarmsRefresh ? ['refreshObligationFarmsForReserve'] : []),
+    ...Array(preFarmCount).fill('refreshObligationFarmsForReserve'),
   ];
 
-  const preMatches = expectedPreSequence.every((expected, idx) => actualPreSequence[idx] === expected);
+  const preMatches = expectedPreSequence.length === actualPreSequence.length &&
+    expectedPreSequence.every((expected, idx) => actualPreSequence[idx] === expected);
   if (!preMatches) {
     let diagnostics = 'Compiled PRE instruction window does not match expected sequence\n\n';
     diagnostics += `Expected PRE sequence with ${nPreReserves} reserve refresh(es) immediately before liquidation:\n`;
@@ -420,29 +433,30 @@ export function validateCompiledInstructionWindow(
     return { valid: false, diagnostics };
   }
   
-  // Validate POST sequence (farms refresh immediately after liquidation, if farms exist)
-  if (hasFarmsRefresh) {
-    const postIdx = liquidateIdx + 1;
-    if (postIdx >= kinds.length) {
-      return {
-        valid: false,
-        diagnostics: 'POST farms refresh expected but no instruction found after liquidation',
-      };
+  let postFarmCount = 0;
+
+  if (requirePostFarmsRefresh) {
+    if (!hasFarmsRefresh) {
+      return { valid: false, diagnostics: 'Post farms requested but hasFarmsRefresh=false' };
     }
-    
-    const postKind = kinds[postIdx].kind;
-    if (postKind !== 'refreshObligationFarmsForReserve') {
-      let diagnostics = 'POST instruction after liquidation does not match expected farms refresh\n\n';
-      diagnostics += `Expected: refreshObligationFarmsForReserve\n`;
-      diagnostics += `Actual: ${postKind}\n`;
+
+    let postIdx = liquidateIdx + 1;
+    while (postIdx < kinds.length && kinds[postIdx].kind === 'refreshObligationFarmsForReserve') {
+      postFarmCount += 1;
+      postIdx += 1;
+    }
+
+    if (postFarmCount !== preFarmCount) {
+      let diagnostics = 'POST farms refresh count does not mirror PRE farms refresh count\n\n';
+      diagnostics += `Expected post farms count to equal pre farms count (${preFarmCount})\n`;
+      diagnostics += `Actual post farms count: ${postFarmCount}\n`;
       diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
       const windowStart = Math.max(0, liquidateIdx - 6);
       const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
       for (let i = windowStart; i < windowEnd; i++) {
-        const marker = i === liquidateIdx ? ' ← LIQUIDATE' : i === postIdx ? ' ← EXPECTED POST FARMS' : '';
+        const marker = i === liquidateIdx ? ' ← LIQUIDATE' : '';
         diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
       }
-      
       return { valid: false, diagnostics };
     }
   }
@@ -450,15 +464,22 @@ export function validateCompiledInstructionWindow(
   // Validation passed
   let diagnostics = '✓ Compiled instruction window validation passed\n\n';
   diagnostics += `Validated canonical sequence around liquidation (${nPreReserves} PRE reserve refreshes):\n\n`;
+  diagnostics += `PRE farms count: ${preFarmCount}\n`;
+  if (requirePostFarmsRefresh) {
+    diagnostics += `POST farms count: ${postFarmCount}\n`;
+  }
+  diagnostics += '\n';
   diagnostics += 'PRE (immediately before liquidation):\n';
   for (let i = preStartIdx; i < liquidateIdx; i++) {
     diagnostics += `  [${i}] ${kinds[i].kind}\n`;
   }
   diagnostics += '\nLIQUIDATE:\n';
   diagnostics += `  [${liquidateIdx}] ${kinds[liquidateIdx].kind}\n`;
-  if (hasFarmsRefresh && requirePostFarmsRefresh && liquidateIdx + 1 < kinds.length) {
+  if (requirePostFarmsRefresh && postFarmCount > 0) {
     diagnostics += '\nPOST (immediately after liquidation):\n';
-    diagnostics += `  [${liquidateIdx + 1}] ${kinds[liquidateIdx + 1].kind}\n`;
+    for (let i = liquidateIdx + 1; i < liquidateIdx + 1 + postFarmCount; i++) {
+      diagnostics += `  [${i}] ${kinds[i].kind}\n`;
+    }
   }
   
   return { valid: true, diagnostics };

@@ -1,5 +1,35 @@
 import { describe, it, expect } from 'vitest';
 
+async function buildMockCompiledTx(
+  sequence: Array<
+    'refreshReserve' |
+    'refreshObligation' |
+    'refreshObligationFarmsForReserve' |
+    'liquidateObligationAndRedeemReserveCollateral'
+  >
+) {
+  const { PublicKey } = await import('@solana/web3.js');
+  const { KNOWN_PROGRAM_IDS, KAMINO_DISCRIMINATORS } = await import('../src/execute/decodeKaminoKindFromCompiled.js');
+
+  const discriminatorByKind = {
+    refreshReserve: KAMINO_DISCRIMINATORS.refreshReserve,
+    refreshObligation: KAMINO_DISCRIMINATORS.refreshObligation,
+    refreshObligationFarmsForReserve: KAMINO_DISCRIMINATORS.refreshObligationFarmsForReserve,
+    liquidateObligationAndRedeemReserveCollateral: KAMINO_DISCRIMINATORS.liquidateObligationAndRedeemReserveCollateral,
+  } as const;
+
+  return {
+    message: {
+      staticAccountKeys: [new PublicKey(KNOWN_PROGRAM_IDS.KAMINO_KLEND)],
+      compiledInstructions: sequence.map((kind) => ({
+        programIdIndex: 0,
+        accountKeyIndexes: [],
+        data: Buffer.from(discriminatorByKind[kind], 'hex'),
+      })),
+    },
+  };
+}
+
 /**
  * Unit test to verify canonical liquidation instruction order
  * This test verifies the structure matches KLend's strict check_refresh adjacency rules
@@ -122,5 +152,55 @@ describe('Canonical Liquidation Order', () => {
     expect(fixedErrors['Custom(6051)'].name).toBe('IncorrectInstructionInPosition');
     expect(fixedErrors['Custom(6009)'].fix).toContain('PRE reserve refresh');
     expect(fixedErrors['Custom(6051)'].fix).toContain('POST farms refresh');
+  });
+
+  it('allows 2 PRE farms before liquidation when POST farms are disabled', async () => {
+    const { validateCompiledInstructionWindow } = await import('../src/kamino/canonicalLiquidationIxs.js');
+
+    const tx = await buildMockCompiledTx([
+      'refreshReserve',
+      'refreshReserve',
+      'refreshObligation',
+      'refreshObligationFarmsForReserve',
+      'refreshObligationFarmsForReserve',
+      'liquidateObligationAndRedeemReserveCollateral',
+    ]);
+
+    const result = validateCompiledInstructionWindow(tx as never, true, false);
+    expect(result.valid).toBe(true);
+    expect(result.diagnostics).toContain('PRE farms count: 2');
+  });
+
+  it('requires POST farms count to mirror PRE farms when POST validation is enabled', async () => {
+    const { validateCompiledInstructionWindow } = await import('../src/kamino/canonicalLiquidationIxs.js');
+
+    const tx = await buildMockCompiledTx([
+      'refreshReserve',
+      'refreshReserve',
+      'refreshObligation',
+      'refreshObligationFarmsForReserve',
+      'refreshObligationFarmsForReserve',
+      'liquidateObligationAndRedeemReserveCollateral',
+      'refreshObligationFarmsForReserve',
+    ]);
+
+    const result = validateCompiledInstructionWindow(tx as never, true, true);
+    expect(result.valid).toBe(false);
+    expect(result.diagnostics).toContain('Expected post farms count to equal pre farms count (2)');
+  });
+
+  it('uses updated refreshObligation error message', async () => {
+    const { validateCompiledInstructionWindow } = await import('../src/kamino/canonicalLiquidationIxs.js');
+
+    const tx = await buildMockCompiledTx([
+      'refreshReserve',
+      'refreshReserve',
+      'refreshObligationFarmsForReserve',
+      'liquidateObligationAndRedeemReserveCollateral',
+    ]);
+
+    const result = validateCompiledInstructionWindow(tx as never, true, false);
+    expect(result.valid).toBe(false);
+    expect(result.diagnostics).toContain('Missing refreshObligation before liquidation (allowing optional farms between refreshObligation and liquidation)');
   });
 });
