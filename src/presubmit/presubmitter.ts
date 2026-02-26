@@ -178,8 +178,6 @@ export class Presubmitter {
     const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
     const buildProfiles: Array<{ disableFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto' }> = [
       { disableFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
-      { disableFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode },
-      { disableFarmsRefresh: true, preReserveRefreshMode: 'primary' },
     ];
 
     let built: Awaited<ReturnType<typeof buildPlanTransactions>> | undefined;
@@ -189,8 +187,9 @@ export class Presubmitter {
     let selectedBlockhash = '';
     const attemptedProfiles: string[] = [];
 
-    for (let i = 0; i < buildProfiles.length; i++) {
-      const profile = buildProfiles[i];
+    let profileIndex = 0;
+    while (profileIndex < buildProfiles.length) {
+      const profile = buildProfiles[profileIndex];
       const candidate = await buildPlanTransactions({
         connection: this.config.connection,
         signer: this.config.signer,
@@ -221,7 +220,19 @@ export class Presubmitter {
         const sizeCheck = isTxTooLarge(candidateTx);
         attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
         if (sizeCheck.tooLarge) {
-          console.log(`[Presubmit] Profile ${i + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
+          console.log(`[Presubmit] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
+          if (profileIndex === 0) {
+            const farmsRequired = candidate.farmRequiredModes.length > 0;
+            if (farmsRequired) {
+              buildProfiles.push({ disableFarmsRefresh: false, preReserveRefreshMode: 'primary' });
+            } else {
+              buildProfiles.push(
+                { disableFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode },
+                { disableFarmsRefresh: true, preReserveRefreshMode: 'primary' },
+              );
+            }
+          }
+          profileIndex++;
           continue;
         }
       } else {

@@ -13,6 +13,7 @@ export type BuiltPlanTx = {
   mainIxs: TransactionInstruction[];
   mainLabels: string[];
   hasFarmsRefresh: boolean;
+  farmRequiredModes: number[];
 
   swapIxs: TransactionInstruction[];
   swapLookupTables: AddressLookupTableAccount[];
@@ -82,7 +83,7 @@ export async function buildPlanTransactions(opts: {
   };
 
   const initialCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(canonicalConfig);
-  const { repayMint, collateralMint, withdrawCollateralMint, hasFarmsRefresh } = initialCanonical;
+  const { repayMint, collateralMint, withdrawCollateralMint, hasFarmsRefresh, farmRequiredModes } = initialCanonical;
 
   let swapIxs: TransactionInstruction[] = [];
   let swapLookupTables: AddressLookupTableAccount[] = [];
@@ -179,6 +180,7 @@ export async function buildPlanTransactions(opts: {
     mainIxs: finalCanonical.instructions,
     mainLabels: finalCanonical.labels,
     hasFarmsRefresh,
+    farmRequiredModes,
     swapIxs,
     swapLookupTables,
     atomicIxs,

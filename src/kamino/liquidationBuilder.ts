@@ -88,6 +88,7 @@ export interface KaminoLiquidationResult {
   // Metadata for instruction labeling
   ataCount: number; // Number of ATA create instructions in setupIxs
   farmRefreshCount: number; // Number of farm refresh instructions in coreIxs (0-2)
+  farmRequiredModes: number[]; // Farm modes required by reserve state: 0=collateral, 1=debt
   farmModes: number[]; // Farm modes included: 0=collateral, 1=debt (for labeling)
 }
 
@@ -114,6 +115,43 @@ function convertSdkAccount(a: SdkAccount, ctx: string = 'sdkAccount') {
     isSigner: role === AccountRole.READONLY_SIGNER || role === AccountRole.WRITABLE_SIGNER,
     isWritable: role === AccountRole.WRITABLE || role === AccountRole.WRITABLE_SIGNER,
   };
+}
+
+function parsePublicKeyish(v: unknown): PublicKey | null {
+  if (!v) return null;
+
+  if (v instanceof PublicKey) return v;
+
+  const maybeToBase58 = (v as { toBase58?: unknown })?.toBase58;
+  if (typeof maybeToBase58 === 'function') {
+    try { return new PublicKey((maybeToBase58 as () => string).call(v)); } catch {}
+  }
+
+  if (v instanceof Uint8Array && v.length === 32) return new PublicKey(v);
+  if (Buffer.isBuffer(v) && v.length === 32) return new PublicKey(v);
+  if (Array.isArray(v) && v.length === 32 && v.every(x => typeof x === 'number')) {
+    return new PublicKey(Uint8Array.from(v));
+  }
+
+  const inner = (v as { data?: unknown; bytes?: unknown; value?: unknown })?.data
+    ?? (v as { data?: unknown; bytes?: unknown; value?: unknown })?.bytes
+    ?? (v as { data?: unknown; bytes?: unknown; value?: unknown })?.value;
+  if (inner instanceof Uint8Array && inner.length === 32) return new PublicKey(inner);
+  if (Buffer.isBuffer(inner) && inner.length === 32) return new PublicKey(inner);
+  if (Array.isArray(inner) && inner.length === 32 && inner.every((x: unknown) => typeof x === 'number')) {
+    return new PublicKey(Uint8Array.from(inner));
+  }
+
+  if (typeof v === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v)) {
+    try { return new PublicKey(v); } catch {}
+  }
+
+  const s = (v as { toString?: () => string })?.toString?.();
+  if (typeof s === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s)) {
+    try { return new PublicKey(s); } catch {}
+  }
+
+  return null;
 }
 
 /**
@@ -599,23 +637,25 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }));
 
   const referrerRaw = (obligation.state as any).referrer;
-  let referrerPk: PublicKey | null = null;
-  try {
-    if (referrerRaw) {
-      referrerPk = new PublicKey(referrerRaw.toString?.() ?? String(referrerRaw));
-    }
-  } catch (e) {
-    console.warn('[LiqBuilder] Failed to parse obligation referrer:', e);
-  }
+  const referrerPk = parsePublicKeyish(referrerRaw);
 
   const hasReferrer = !!referrerPk && !referrerPk.equals(PublicKey.default);
-  if (hasReferrer && referrerPk) {
+
+  if (dbg) {
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] referrerRawType=${typeof referrerRaw}`);
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] referrerParsed=${referrerPk ? referrerPk.toBase58() : 'null'}`);
+    if (referrerRaw && (referrerRaw as { length?: number })?.length === 32) {
+      console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] referrerRawLen=32 (likely bytes)`);
+    }
+  }
+
+  if (hasReferrer) {
     for (const borrowReserve of borrowReserveKeys) {
       const reservePk = new PublicKey(borrowReserve);
       const [pda] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("referrer_acc"),
-          referrerPk.toBuffer(),
+          referrerPk!.toBuffer(),
           reservePk.toBuffer(),
         ],
         p.programId,
@@ -625,7 +665,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
         role: AccountRole.WRITABLE,
       });
     }
-    console.log(`[LiqBuilder] obligation has referrer=${referrerPk.toBase58()} -> appended ${borrowReserveKeys.length} referrer token states`);
+    console.log(`[LiqBuilder] obligation has referrer=${referrerPk!.toBase58()} -> appended ${borrowReserveKeys.length} referrer token states`);
   }
 
   const expectedRemainingAccounts = depositReserveKeys.length + borrowReserveKeys.length + (hasReferrer ? borrowReserveKeys.length : 0);
@@ -654,9 +694,13 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   const preFarmIxs: TransactionInstruction[] = [];
   const postFarmIxs: TransactionInstruction[] = [];
   const farmModes: number[] = [];
+  const farmRequiredModes: number[] = [];
+  const collateralFarmState = collateralReserve.state.farmCollateral;
+  if (collateralFarmState !== DEFAULT_PUBKEY) farmRequiredModes.push(0);
+  const debtFarmState = repayReserve.state.farmDebt;
+  if (debtFarmState !== DEFAULT_PUBKEY) farmRequiredModes.push(1);
   if (!p.disableFarmsRefresh) {
     // Check collateral reserve farm (mode 0)
-    const collateralFarmState = collateralReserve.state.farmCollateral;
     if (collateralFarmState !== DEFAULT_PUBKEY) {
     console.log(`[LiqBuilder] Building RefreshFarms for collateral reserve (mode=0)`);
     
@@ -708,7 +752,6 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     }
     
     // Check debt/repay reserve farm (mode 1)
-    const debtFarmState = repayReserve.state.farmDebt;
     if (debtFarmState !== DEFAULT_PUBKEY) {
     console.log(`[LiqBuilder] Building RefreshFarms for debt reserve (mode=1)`);
     
@@ -912,6 +955,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     // Metadata for instruction labeling
     ataCount: setupIxs.length,
     farmRefreshCount: preFarmIxs.length,
+    farmRequiredModes, // Farm modes required by reserve state: 0=collateral, 1=debt
     farmModes, // Farm modes included: 0=collateral, 1=debt
     // lookupTables: undefined, // Can be added later if needed
   };

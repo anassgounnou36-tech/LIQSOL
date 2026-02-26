@@ -209,6 +209,7 @@ async function buildFullTransaction(
     collateralMint: PublicKey;
     withdrawCollateralMint: PublicKey;
     hasFarmsRefresh: boolean;
+    farmRequiredModes: number[];
   };
 }> {
   const built = await buildPlanTransactions({
@@ -240,6 +241,7 @@ async function buildFullTransaction(
       collateralMint: built.collateralMint,
       withdrawCollateralMint: built.withdrawCollateralMint,
       hasFarmsRefresh: built.hasFarmsRefresh,
+      farmRequiredModes: built.farmRequiredModes,
     },
   };
 }
@@ -536,8 +538,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   let atomicIxs: TransactionInstruction[] = [];
   let atomicLabels: string[] = [];
   let atomicLookupTables: AddressLookupTableAccount[] = [];
-  let metadata: { hasFarmsRefresh: boolean; repayMint: PublicKey; collateralMint: PublicKey; withdrawCollateralMint: PublicKey } = {
+  let metadata: { hasFarmsRefresh: boolean; farmRequiredModes: number[]; repayMint: PublicKey; collateralMint: PublicKey; withdrawCollateralMint: PublicKey } = {
     hasFarmsRefresh: false,
+    farmRequiredModes: [],
     repayMint: PublicKey.default,
     collateralMint: PublicKey.default,
     withdrawCollateralMint: PublicKey.default,
@@ -546,8 +549,6 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
   const buildProfiles: Array<{ disableFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto' }> = [
     { disableFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
-    { disableFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode },
-    { disableFarmsRefresh: true, preReserveRefreshMode: 'primary' },
   ];
   
   try {
@@ -566,8 +567,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
     let selected = false;
     const attemptedProfiles: string[] = [];
-    for (let i = 0; i < buildProfiles.length; i++) {
-      const profile = buildProfiles[i];
+    let profileIndex = 0;
+    while (profileIndex < buildProfiles.length) {
+      const profile = buildProfiles[profileIndex];
       const result = await buildFullTransaction(target, signer, market, programId, {
         includeSwap: true,
         useRealSwapSizing,
@@ -587,11 +589,23 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       const sizeCheck = isTxTooLarge(sizeCheckTx);
       attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
       if (sizeCheck.tooLarge) {
-        console.log(`[Executor] Profile ${i + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
+        console.log(`[Executor] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
+        if (profileIndex === 0) {
+          const farmsRequired = result.metadata.farmRequiredModes.length > 0;
+          if (farmsRequired) {
+            buildProfiles.push({ disableFarmsRefresh: false, preReserveRefreshMode: 'primary' });
+          } else {
+            buildProfiles.push(
+              { disableFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode },
+              { disableFarmsRefresh: true, preReserveRefreshMode: 'primary' },
+            );
+          }
+        }
+        profileIndex++;
         continue;
       }
 
-      if (i > 0) {
+      if (profileIndex > 0) {
         presubmittedTx = undefined;
       }
       setupIxs = result.setupIxs;
