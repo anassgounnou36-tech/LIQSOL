@@ -327,6 +327,7 @@ export function validateCompiledInstructionWindow(
   
   let cursor = liquidateIdx - 1;
 
+  // PRE farms must remain adjacent when farms are enabled; POST farms are optional by config.
   if (hasFarmsRefresh && requirePostFarmsRefresh) {
     if (cursor < 0 || kinds[cursor].kind !== 'refreshObligationFarmsForReserve') {
       let diagnostics = 'Missing or invalid farms refresh immediately before liquidation\n\n';
