@@ -77,9 +77,9 @@ describe('Canonical Liquidation Order', () => {
     const canonicalOrder = [
       'computeBudget',
       'flashBorrow (optional)',
+      'PRE: RefreshFarms (0-2, if exist)',
       'PRE: RefreshReserve(N, all obligation reserves)',
       'CORE: RefreshObligation',
-      'CORE: RefreshFarms (0-2, if exist)',
       'LIQUIDATE',
       'POST: RefreshFarms (mirrors PRE)',
       'swap (optional)',
@@ -88,9 +88,9 @@ describe('Canonical Liquidation Order', () => {
     
     expect(canonicalOrder).toHaveLength(9);
     expect(canonicalOrder[0]).toBe('computeBudget');
-    expect(canonicalOrder[2]).toBe('PRE: RefreshReserve(N, all obligation reserves)');
-    expect(canonicalOrder[3]).toBe('CORE: RefreshObligation');
-    expect(canonicalOrder[4]).toBe('CORE: RefreshFarms (0-2, if exist)');
+    expect(canonicalOrder[2]).toBe('PRE: RefreshFarms (0-2, if exist)');
+    expect(canonicalOrder[3]).toBe('PRE: RefreshReserve(N, all obligation reserves)');
+    expect(canonicalOrder[4]).toBe('CORE: RefreshObligation');
     expect(canonicalOrder[5]).toBe('LIQUIDATE');
     expect(canonicalOrder[6]).toBe('POST: RefreshFarms (mirrors PRE)');
   });
@@ -99,11 +99,11 @@ describe('Canonical Liquidation Order', () => {
     // Document the strict adjacency rules from KLend's check_refresh
     const adjacencyRules = {
       before_liquidation: {
-        last_instruction: 'RefreshFarms (or RefreshObligation if no farms)',
+        last_instruction: 'RefreshObligation',
         sequence: [
+          'RefreshFarms (0-2, if exist)',
           'RefreshReserve(N contiguous, min 2)',
           'RefreshObligation',
-          'RefreshFarms (0-2, if exist)',
         ],
       },
       after_liquidation: {
@@ -145,25 +145,25 @@ describe('Canonical Liquidation Order', () => {
       },
       'Custom(6051)': {
         name: 'IncorrectInstructionInPosition',
-        fix: 'POST farms refresh immediately after liquidation satisfies check_refresh adjacency',
+        fix: 'PRE farms refresh before reserve/obligation refreshes satisfies check_refresh adjacency',
       },
     };
     
     expect(fixedErrors['Custom(6009)'].name).toBe('ReserveStale');
     expect(fixedErrors['Custom(6051)'].name).toBe('IncorrectInstructionInPosition');
     expect(fixedErrors['Custom(6009)'].fix).toContain('PRE reserve refresh');
-    expect(fixedErrors['Custom(6051)'].fix).toContain('POST farms refresh');
+    expect(fixedErrors['Custom(6051)'].fix).toContain('PRE farms refresh');
   });
 
   it('allows 2 PRE farms before liquidation when POST farms are disabled', async () => {
     const { validateCompiledInstructionWindow } = await import('../src/kamino/canonicalLiquidationIxs.js');
 
     const tx = await buildMockCompiledTx([
+      'refreshObligationFarmsForReserve',
+      'refreshObligationFarmsForReserve',
       'refreshReserve',
       'refreshReserve',
       'refreshObligation',
-      'refreshObligationFarmsForReserve',
-      'refreshObligationFarmsForReserve',
       'liquidateObligationAndRedeemReserveCollateral',
     ]);
 
@@ -176,11 +176,11 @@ describe('Canonical Liquidation Order', () => {
     const { validateCompiledInstructionWindow } = await import('../src/kamino/canonicalLiquidationIxs.js');
 
     const tx = await buildMockCompiledTx([
+      'refreshObligationFarmsForReserve',
+      'refreshObligationFarmsForReserve',
       'refreshReserve',
       'refreshReserve',
       'refreshObligation',
-      'refreshObligationFarmsForReserve',
-      'refreshObligationFarmsForReserve',
       'liquidateObligationAndRedeemReserveCollateral',
       'refreshObligationFarmsForReserve',
     ]);
@@ -194,14 +194,14 @@ describe('Canonical Liquidation Order', () => {
     const { validateCompiledInstructionWindow } = await import('../src/kamino/canonicalLiquidationIxs.js');
 
     const tx = await buildMockCompiledTx([
-      'refreshReserve',
-      'refreshReserve',
       'refreshObligationFarmsForReserve',
+      'refreshReserve',
+      'refreshReserve',
       'liquidateObligationAndRedeemReserveCollateral',
     ]);
 
     const result = validateCompiledInstructionWindow(tx, true, false);
     expect(result.valid).toBe(false);
-    expect(result.diagnostics).toContain('Missing refreshObligation before liquidation (allowing optional farms between refreshObligation and liquidation)');
+    expect(result.diagnostics).toContain('Missing refreshObligation immediately before liquidation');
   });
 });
