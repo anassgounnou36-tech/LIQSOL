@@ -61,6 +61,15 @@ const reserveLiquidityMintCache = new Map<string, string>();
  */
 const reserveCollateralMintCache = new Map<string, string>();
 
+export type ObligationSlotDump = {
+  depositsAll: Array<{ slot: number; reserve: string; depositedAmount: string }>;
+  borrowsAll: Array<{ slot: number; reserve: string; borrowedAmountSf: string }>;
+  depositReservesNonDefault: string[];
+  borrowReservesNonDefault: string[];
+  depositReservesActive: string[];
+  borrowReservesActive: string[];
+};
+
 /**
  * Sets both liquidity and collateral mints for a given reserve in the caches.
  * Used to populate mint fields when decoding Obligation accounts.
@@ -159,3 +168,61 @@ export function decodeObligation(
   };
 }
 
+export function decodeObligationSlotsAll(
+  accountData: Uint8Array | Buffer
+): ObligationSlotDump {
+  const dataBuffer = Buffer.from(accountData);
+  if (!hasDiscriminator(dataBuffer, "Obligation")) {
+    throw new Error(
+      `Invalid account data: expected Obligation discriminator. ` +
+      `Available account types: ${idlJson.accounts.map((a: { name: string }) => a.name).join(", ")}`
+    );
+  }
+
+  const decoded = accountsCoder.decode("Obligation", dataBuffer);
+  const defaultReserve = PublicKey.default.toString();
+
+  const depositsAll = (
+    decoded.deposits as Array<{
+      depositReserve: { toString: () => string };
+      depositedAmount: unknown;
+    }>
+  ).map((d, slot) => ({
+    slot,
+    reserve: d.depositReserve.toString(),
+    depositedAmount: toBigInt(d.depositedAmount).toString(),
+  }));
+
+  const borrowsAll = (
+    decoded.borrows as Array<{
+      borrowReserve: { toString: () => string };
+      borrowedAmountSf: unknown;
+    }>
+  ).map((b, slot) => ({
+    slot,
+    reserve: b.borrowReserve.toString(),
+    borrowedAmountSf: toBigInt(b.borrowedAmountSf).toString(),
+  }));
+
+  const depositReservesNonDefault = depositsAll
+    .filter((d) => d.reserve !== defaultReserve)
+    .map((d) => d.reserve);
+  const borrowReservesNonDefault = borrowsAll
+    .filter((b) => b.reserve !== defaultReserve)
+    .map((b) => b.reserve);
+  const depositReservesActive = depositsAll
+    .filter((d) => d.reserve !== defaultReserve && gtZero(d.depositedAmount))
+    .map((d) => d.reserve);
+  const borrowReservesActive = borrowsAll
+    .filter((b) => b.reserve !== defaultReserve && gtZero(b.borrowedAmountSf))
+    .map((b) => b.reserve);
+
+  return {
+    depositsAll,
+    borrowsAll,
+    depositReservesNonDefault,
+    borrowReservesNonDefault,
+    depositReservesActive,
+    borrowReservesActive,
+  };
+}

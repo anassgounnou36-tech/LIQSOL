@@ -38,10 +38,12 @@ export async function buildPlanTransactions(opts: {
   dry: boolean;
   preReserveRefreshModeOverride?: 'all' | 'primary' | 'auto';
   disableFarmsRefresh?: boolean;
+  refreshObligationMode?: 'active' | 'nonDefault';
 }): Promise<BuiltPlanTx> {
   const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
   const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
   const preReserveMode = opts.preReserveRefreshModeOverride ?? (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
+  let refreshObligationMode: 'active' | 'nonDefault' = opts.refreshObligationMode ?? 'active';
 
   let repayMintPreference: PublicKey | undefined;
   let expectedRepayReservePubkey: PublicKey | undefined;
@@ -80,6 +82,7 @@ export async function buildPlanTransactions(opts: {
     expectedCollateralReservePubkey,
     preReserveRefreshMode: preReserveMode,
     disableFarmsRefresh: opts.disableFarmsRefresh,
+    refreshObligationMode,
   };
 
   const initialCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical(canonicalConfig);
@@ -89,32 +92,54 @@ export async function buildPlanTransactions(opts: {
   let swapLookupTables: AddressLookupTableAccount[] = [];
 
   if (opts.includeSwap && !collateralMint.equals(repayMint)) {
+    const CUSTOM_6006 = 6006;
+    const isRefreshObligation6006 = (err: unknown): boolean => {
+      const msg = err instanceof Error ? err.message : String(err);
+      return msg.includes(`"Custom":${CUSTOM_6006}`) || msg.includes(`Custom(${CUSTOM_6006})`);
+    };
+
     if (initialCanonical.setupIxs.length > 0) {
       console.log('[Executor] ⚠️  Swap sizing skipped: Setup required (ATAs missing)');
     } else if (opts.useRealSwapSizing) {
-      const simCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical({
-        ...canonicalConfig,
-        flashloan: undefined,
-        preReserveRefreshMode: 'primary',
-      });
-
-      const bh = await opts.connection.getLatestBlockhash();
-      const simMsg = new TransactionMessage({
-        payerKey: opts.signer.publicKey,
-        recentBlockhash: bh.blockhash,
-        instructions: simCanonical.instructions,
-      });
-      const simTx = new VersionedTransaction(simMsg.compileToLegacyMessage());
-      simTx.sign([opts.signer]);
-
       try {
-        const seizedCollateralBaseUnits = await estimateSeizedCollateralDeltaBaseUnits({
-          connection: opts.connection,
-          liquidator: opts.signer.publicKey,
-          collateralMint: withdrawCollateralMint,
-          simulateTx: simTx,
-          instructionLabels: simCanonical.labels,
-        });
+        const estimateSeizedWithMode = async (mode: 'active' | 'nonDefault') => {
+          const simCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical({
+            ...canonicalConfig,
+            flashloan: undefined,
+            preReserveRefreshMode: 'primary',
+            refreshObligationMode: mode,
+          });
+
+          const bh = await opts.connection.getLatestBlockhash();
+          const simMsg = new TransactionMessage({
+            payerKey: opts.signer.publicKey,
+            recentBlockhash: bh.blockhash,
+            instructions: simCanonical.instructions,
+          });
+          const simTx = new VersionedTransaction(simMsg.compileToLegacyMessage());
+          simTx.sign([opts.signer]);
+
+          return estimateSeizedCollateralDeltaBaseUnits({
+            connection: opts.connection,
+            liquidator: opts.signer.publicKey,
+            collateralMint: withdrawCollateralMint,
+            simulateTx: simTx,
+            instructionLabels: simCanonical.labels,
+          });
+        };
+
+        let seizedCollateralBaseUnits: bigint;
+        try {
+          seizedCollateralBaseUnits = await estimateSeizedWithMode(refreshObligationMode);
+        } catch (err) {
+          if (refreshObligationMode === 'active' && isRefreshObligation6006(err)) {
+            console.warn('[Executor] refreshObligation Custom(6006) with ACTIVE slots; retrying once with NON-DEFAULT slots');
+            refreshObligationMode = 'nonDefault';
+            seizedCollateralBaseUnits = await estimateSeizedWithMode('nonDefault');
+          } else {
+            throw err;
+          }
+        }
 
         const haircutBps = Number(process.env.SWAP_IN_HAIRCUT_BPS ?? 100);
         const haircutMultiplier = 10000n - BigInt(haircutBps);
@@ -140,6 +165,9 @@ export async function buildPlanTransactions(opts: {
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
+        if (refreshObligationMode === 'nonDefault' && isRefreshObligation6006(err)) {
+          throw new Error('refreshObligation-invalid-accounts');
+        }
         if (errMsg === 'OBLIGATION_HEALTHY') {
           throw new Error('OBLIGATION_HEALTHY');
         }
@@ -155,6 +183,7 @@ export async function buildPlanTransactions(opts: {
 
   const finalCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical({
     ...canonicalConfig,
+    refreshObligationMode,
     swap: swapIxs.length > 0 ? { instructions: swapIxs } : undefined,
   });
 
@@ -163,6 +192,7 @@ export async function buildPlanTransactions(opts: {
   if (finalCanonical.setupIxs.length > 0 && canonicalConfig.flashloan) {
     const atomicCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical({
       ...canonicalConfig,
+      refreshObligationMode,
       swap: swapIxs.length > 0 ? { instructions: swapIxs } : undefined,
       flashloanBorrowIxIndexOffset: finalCanonical.setupIxs.length,
     });
