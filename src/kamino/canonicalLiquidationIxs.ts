@@ -48,6 +48,7 @@ export interface CanonicalLiquidationConfig {
   expectedCollateralReservePubkey?: PublicKey;
   preReserveRefreshMode?: 'all' | 'primary' | 'auto';
   disableFarmsRefresh?: boolean;
+  refreshObligationMode?: 'active' | 'nonDefault';
   
   // Swap parameters (optional - if not provided, no swap will be used)
   swap?: {
@@ -155,6 +156,7 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
     expectedCollateralReservePubkey: config.expectedCollateralReservePubkey,
     preReserveRefreshMode: config.preReserveRefreshMode,
     disableFarmsRefresh: config.disableFarmsRefresh,
+    refreshObligationMode: config.refreshObligationMode,
   });
   
   // Extract setup instructions (should be sent separately)

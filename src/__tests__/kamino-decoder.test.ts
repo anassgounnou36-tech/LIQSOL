@@ -6,6 +6,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { Buffer } from "buffer";
 import { decodeReserve, decodeObligation } from "../kamino/decoder.js";
+import { decodeObligationSlotsAll } from "../kamino/decode/obligationDecoder.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -161,6 +162,10 @@ describe("Kamino Decoder Tests", () => {
       expect(typeof decodeObligation).toBe("function");
     });
 
+    it("should export decodeObligationSlotsAll function", () => {
+      expect(typeof decodeObligationSlotsAll).toBe("function");
+    });
+
     it("should throw on invalid Reserve data", () => {
       const invalidData = Buffer.alloc(100);
       const pubkey = new PublicKey("11111111111111111111111111111111");
@@ -306,6 +311,13 @@ describe("Kamino Decoder Tests", () => {
       expect(typeof decoded.borrows[0].reserve).toBe("string");
       expect(typeof decoded.borrows[0].borrowedAmount).toBe("string");
       expect(BigInt(decoded.borrows[0].borrowedAmount)).toBeGreaterThan(0n);
+    });
+
+    it("should throw when decoding malformed obligation slot fixture", () => {
+      const fixturePath = join(__dirname, "../../test/fixtures/obligation_usdc_debt.json");
+      const fixture = JSON.parse(readFileSync(fixturePath, "utf-8"));
+      const data = Buffer.from(fixture.data_base64, "base64");
+      expect(() => decodeObligationSlotsAll(data)).toThrow();
     });
   });
 });

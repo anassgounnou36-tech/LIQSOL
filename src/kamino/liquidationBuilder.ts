@@ -13,6 +13,7 @@ import { addressSafe } from "../solana/addressSafe.js";
 import { toBigInt, gtZero } from "../utils/bn.js";
 import { SYSVAR_RENT_ADDRESS } from "@solana/sysvars";
 import { KLEND_PROGRAM_ID as KLEND_PROGRAM_ID_FROM_DECODER, KAMINO_DISCRIMINATORS } from "../execute/decodeKaminoKindFromCompiled.js";
+import { decodeObligationSlotsAll } from "./decode/obligationDecoder.js";
 
 // Kamino Farms program ID (mainnet)
 const FARMS_PROGRAM_ID = "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr";
@@ -56,6 +57,7 @@ export interface BuildKaminoLiquidationParams {
   expectedCollateralReservePubkey?: PublicKey;
   preReserveRefreshMode?: 'all' | 'primary' | 'auto';
   disableFarmsRefresh?: boolean;
+  refreshObligationMode?: 'active' | 'nonDefault';
 }
 
 /**
@@ -201,6 +203,23 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   if (!obligation) {
     throw new Error(`Failed to load obligation: ${p.obligationPubkey.toBase58()}`);
   }
+
+  const obligationAccount = await p.connection.getAccountInfo(p.obligationPubkey);
+  if (!obligationAccount?.data) {
+    throw new Error(`Failed to fetch obligation account data: ${p.obligationPubkey.toBase58()}`);
+  }
+  const slotDump = decodeObligationSlotsAll(obligationAccount.data);
+  const activeReserves = slotDump.depositReservesActive.concat(slotDump.borrowReservesActive);
+  const nonDefaultReserves = slotDump.depositReservesNonDefault.concat(slotDump.borrowReservesNonDefault);
+  let chosenRefreshMode: 'active' | 'nonDefault' = p.refreshObligationMode ?? 'active';
+  let refreshObligationReserves = chosenRefreshMode === 'active' ? activeReserves : nonDefaultReserves;
+  if (refreshObligationReserves.length === 0) {
+    refreshObligationReserves = nonDefaultReserves;
+    chosenRefreshMode = 'nonDefault';
+  }
+  const refreshObligationBorrowReserves = chosenRefreshMode === 'active'
+    ? slotDump.borrowReservesActive
+    : slotDump.borrowReservesNonDefault;
   
   // 2) Select repay reserve from obligation borrows
   // PR: Strategy - prioritize expected reserve pubkey (deterministic), fallback to preference or highest USD
@@ -396,10 +415,10 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   
   const depositReserveKeys = deposits.map((d: any) => d.depositReserve.toString());
   const borrowReserveKeys = borrows.map((b: any) => b.borrowReserve.toString());
-  const refreshObligationReserves = depositReserveKeys.concat(borrowReserveKeys);
+  const sdkRefreshObligationReserves = depositReserveKeys.concat(borrowReserveKeys);
   const uniqueReserves: string[] = [];
   const seen = new Set<string>();
-  for (const r of refreshObligationReserves) {
+  for (const r of sdkRefreshObligationReserves) {
     if (!seen.has(r)) {
       uniqueReserves.push(r);
       seen.add(r);
@@ -408,30 +427,32 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   console.log(`[LiqBuilder] deposits=${depositReserveKeys.length} borrows=${borrowReserveKeys.length} refreshObligationReserves=${refreshObligationReserves.length} uniqueReserves=${uniqueReserves.length}`);
   const dbg = process.env.DEBUG_REFRESH_OBLIGATION === '1';
   if (dbg) {
-    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] depositsAll(non-default)=${depositsAll.length} depositsActive(nonzero)=${deposits.length}`);
-    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] borrowsAll(non-default)=${borrowsAll.length} borrowsActive(nonzero)=${borrows.length}`);
+    const sdkNonDefaultReserves = depositsAll.map((d: any) => d.depositReserve.toString()).concat(borrowsAll.map((b: any) => b.borrowReserve.toString()));
+    const arraysEqual = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] depositsAll(non-default)=${slotDump.depositReservesNonDefault.length} depositsActive(nonzero)=${slotDump.depositReservesActive.length}`);
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] borrowsAll(non-default)=${slotDump.borrowReservesNonDefault.length} borrowsActive(nonzero)=${slotDump.borrowReservesActive.length}`);
     console.log('\n[LiqBuilder][DEBUG_REFRESH_OBLIGATION] Obligation slot dump');
     console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] obligation=${p.obligationPubkey.toBase58()}`);
     console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] market=${p.marketPubkey.toBase58()}`);
     console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] repayExpected=${p.expectedRepayReservePubkey?.toBase58() ?? 'none'}`);
     console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] collateralExpected=${p.expectedCollateralReservePubkey?.toBase58() ?? 'none'}`);
 
-    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] deposits (slot order):');
-    deposits.forEach((d: any, i: number) => {
-      const reserve = d.depositReserve?.toString?.() ?? String(d.depositReserve);
-      const amt = d.depositedAmount?.toString?.() ?? String(d.depositedAmount ?? 'unknown');
-      console.log(`  [${i}] reserve=${reserve} depositedAmount=${amt}`);
-    });
-
-    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] borrows (slot order):');
-    borrows.forEach((b: any, i: number) => {
-      const reserve = b.borrowReserve?.toString?.() ?? String(b.borrowReserve);
-      const amtSf = b.borrowedAmountSf?.toString?.() ?? String(b.borrowedAmountSf ?? 'unknown');
-      console.log(`  [${i}] reserve=${reserve} borrowedAmountSf=${amtSf}`);
-    });
-
+    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] RAW depositsAll (slot order):');
+    slotDump.depositsAll.forEach((d) => console.log(`  [${d.slot}] reserve=${d.reserve} depositedAmount=${d.depositedAmount}`));
+    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] RAW borrowsAll (slot order):');
+    slotDump.borrowsAll.forEach((b) => console.log(`  [${b.slot}] reserve=${b.reserve} borrowedAmountSf=${b.borrowedAmountSf}`));
+    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] RAW activeReserves (deposits→borrows, non-deduped):');
+    activeReserves.forEach((r, i) => console.log(`  [${i}] ${r}`));
+    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] RAW nonDefaultReserves (deposits→borrows, non-deduped):');
+    nonDefaultReserves.forEach((r, i) => console.log(`  [${i}] ${r}`));
+    console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] SDK nonDefaultReserves (deposits→borrows, non-deduped):');
+    sdkNonDefaultReserves.forEach((r, i) => console.log(`  [${i}] ${r}`));
+    console.log(`[LiqBuilder][DEBUG_REFRESH_OBLIGATION] chosenRefreshMode=${chosenRefreshMode}`);
     console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] refresh remaining reserves (deposits→borrows, non-deduped):');
     refreshObligationReserves.forEach((r, i) => console.log(`  [${i}] ${r}`));
+    if (!arraysEqual(sdkNonDefaultReserves, nonDefaultReserves)) {
+      console.log('[LiqBuilder][DEBUG_REFRESH_OBLIGATION] WARNING: SDK vs RAW ordering differs; using RAW');
+    }
     console.log('');
   }
   
@@ -657,7 +678,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
   }
 
   if (hasReferrer) {
-    for (const borrowReserve of borrowReserveKeys) {
+    for (const borrowReserve of refreshObligationBorrowReserves) {
       const reservePk = new PublicKey(borrowReserve);
       const [pda] = PublicKey.findProgramAddressSync(
         [
@@ -672,10 +693,10 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
         role: AccountRole.WRITABLE,
       });
     }
-    console.log(`[LiqBuilder] obligation has referrer=${referrerPk!.toBase58()} -> appended ${borrowReserveKeys.length} referrer token states`);
+    console.log(`[LiqBuilder] obligation has referrer=${referrerPk!.toBase58()} -> appended ${refreshObligationBorrowReserves.length} referrer token states`);
   }
 
-  const expectedRemainingAccounts = depositReserveKeys.length + borrowReserveKeys.length + (hasReferrer ? borrowReserveKeys.length : 0);
+  const expectedRemainingAccounts = refreshObligationReserves.length + (hasReferrer ? refreshObligationBorrowReserves.length : 0);
   if (remainingAccounts.length !== expectedRemainingAccounts) {
     throw new Error(
       `[LiqBuilder] refreshObligation remaining accounts mismatch expected=${expectedRemainingAccounts} actual=${remainingAccounts.length} ` +
