@@ -15,6 +15,8 @@ import {
   type InstructionKind,
 } from "./decodeKaminoKindFromCompiled.js";
 
+const EXPECTED_PRE_REFRESH_RESERVE_COUNT = 2;
+
 /**
  * Decode all compiled instructions from a v0 transaction.
  * 
@@ -134,10 +136,11 @@ export function validateLiquidationWindow(
     };
   }
   
-  if (liquidateIdx < 3) {
+  const minPreWindowLength = EXPECTED_PRE_REFRESH_RESERVE_COUNT + 1; // reserves + refreshObligation
+  if (liquidateIdx < minPreWindowLength) {
     return {
       valid: false,
-      diagnostics: `Not enough instructions before liquidation. Expected at least 3, found ${liquidateIdx}`,
+      diagnostics: `Not enough instructions before liquidation. Expected at least ${minPreWindowLength}, found ${liquidateIdx}`,
       liquidationIndex: liquidateIdx,
     };
   }
@@ -151,16 +154,21 @@ export function validateLiquidationWindow(
     };
   }
 
-  const reserveKinds = kinds.slice(obligationIdx - 2, obligationIdx).map(k => k.kind);
-  if (reserveKinds[0] !== 'refreshReserve' || reserveKinds[1] !== 'refreshReserve') {
+  const reserveKinds = kinds
+    .slice(obligationIdx - EXPECTED_PRE_REFRESH_RESERVE_COUNT, obligationIdx)
+    .map(k => k.kind);
+  if (
+    reserveKinds.length !== EXPECTED_PRE_REFRESH_RESERVE_COUNT ||
+    reserveKinds.some(kind => kind !== 'refreshReserve')
+  ) {
     return {
       valid: false,
-      diagnostics: `Expected two refreshReserve instructions immediately before refreshObligation, found ${reserveKinds.join(', ')}`,
+      diagnostics: `Expected ${EXPECTED_PRE_REFRESH_RESERVE_COUNT} refreshReserve instructions immediately before refreshObligation, found ${reserveKinds.join(', ')}`,
       liquidationIndex: liquidateIdx,
     };
   }
 
-  let cursor = obligationIdx - 3;
+  let cursor = obligationIdx - 1 - EXPECTED_PRE_REFRESH_RESERVE_COUNT;
   let preFarmCount = 0;
   while (cursor >= 0 && kinds[cursor].kind === 'refreshObligationFarmsForReserve') {
     preFarmCount += 1;
@@ -193,8 +201,7 @@ export function validateLiquidationWindow(
 
   const expectedPreSequence: InstructionKind[] = [
     ...Array(preFarmCount).fill('refreshObligationFarmsForReserve'),
-    'refreshReserve',
-    'refreshReserve',
+    ...Array(EXPECTED_PRE_REFRESH_RESERVE_COUNT).fill('refreshReserve'),
     'refreshObligation',
   ];
   const preStartIdx = liquidateIdx - expectedPreSequence.length;

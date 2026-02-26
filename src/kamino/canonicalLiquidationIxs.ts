@@ -287,7 +287,7 @@ export function decodeCompiledInstructionKinds(tx: VersionedTransaction): Instru
  * - refreshFarmsForObligationForReserve (same farm set and order as PRE, if exist)
  * 
  * Key validation points:
- * 1. Instructions before liquidation must end with refreshObligation preceded by contiguous reserve refreshes and optional leading farms (0-2)
+ * 1. Instructions before liquidation must end with refreshObligation preceded by contiguous reserve refreshes and leading farms (0-2, required when hasFarmsRefresh=true)
  * 2. POST farms are validated only when requirePostFarmsRefresh=true
  * 3. Contiguous refreshReserve run before refreshObligation must be valid (min 2)
  * 
