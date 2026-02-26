@@ -70,8 +70,9 @@ export interface BuildKaminoLiquidationParams {
  * ReserveStale Fix: Added preRefreshIxs for slot freshness before RefreshObligation
  * 
  * KLend Adjacency Fix: Restructured to match strict check_refresh validation:
+ * - preFarmIxs: RefreshFarms for selected farm modes (collateral and/or debt, 0-2 instructions)
  * - preReserveIxs: RefreshReserve for selected obligation reserves (deposits→borrows)
- * - coreIxs: RefreshObligation + RefreshFarms (collateral and/or debt, 0-2 instructions)
+ * - coreIxs: RefreshObligation
  * - liquidationIxs: LiquidateObligationAndRedeemReserveCollateral
  * - postFarmIxs: Same RefreshFarms as coreIxs (mirrors PRE farms for adjacency)
  * - Removed postRefreshIxs (reserve refreshes) entirely - they break adjacency
@@ -80,8 +81,9 @@ export interface KaminoLiquidationResult {
   setupIxs: TransactionInstruction[]; // ATA create instructions (only for missing ATAs)
   setupAtaNames: string[]; // Names of ATAs in setupIxs for labeling (e.g., ['repay', 'collateral'])
   missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }>;
+  preFarmIxs: TransactionInstruction[]; // PRE: RefreshFarms (0-2 instructions)
   preReserveIxs: TransactionInstruction[]; // PRE: RefreshReserve for selected obligation reserves (deposits→borrows)
-  coreIxs: TransactionInstruction[]; // CORE: RefreshObligation + RefreshFarms (0-2 farm instructions)
+  coreIxs: TransactionInstruction[]; // CORE: RefreshObligation
   liquidationIxs: TransactionInstruction[]; // LIQUIDATE: LiquidateObligationAndRedeemReserveCollateral
   postFarmIxs: TransactionInstruction[]; // POST: RefreshFarms (mirrors coreIxs farms, immediately after liquidation)
   lookupTables?: AddressLookupTableAccount[];
@@ -90,7 +92,7 @@ export interface KaminoLiquidationResult {
   withdrawCollateralMint: PublicKey; // Actual collateral mint used for redemption (user_destination_collateral)
   // Metadata for instruction labeling
   ataCount: number; // Number of ATA create instructions in setupIxs
-  farmRefreshCount: number; // Number of farm refresh instructions in coreIxs (0-2)
+  farmRefreshCount: number; // Number of farm refresh instructions in preFarmIxs (0-2)
   postFarmRefreshCount: number; // Number of farm refresh instructions in postFarmIxs (0-2)
   farmRequiredModes: number[]; // Farm modes required by reserve state: 0=collateral, 1=debt
   farmModes: number[]; // Farm modes included: 0=collateral, 1=debt (for labeling)
@@ -878,9 +880,6 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     }
   }
   
-  // Add PRE farm instructions to core (immediately after RefreshObligation)
-  coreIxs.push(...preFarmIxs);
-  
   console.log(`[LiqBuilder] Built ${preFarmIxs.length} RefreshFarms instructions (modes: ${farmModes.join(', ')})`);
   if (p.disablePostFarmsRefresh) {
     console.log('[LiqBuilder] POST farms disabled by config; NOT mirroring PRE farms');
@@ -1024,8 +1023,9 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     setupIxs,
     setupAtaNames,
     missingAtas,
+    preFarmIxs, // PRE farms refreshes (must appear first in KLend instruction sub-sequence)
     preReserveIxs, // Reserve refreshes for slot freshness (all obligation reserves)
-    coreIxs, // RefreshObligation + RefreshFarms (0-2 farm instructions)
+    coreIxs, // RefreshObligation
     liquidationIxs, // LiquidateObligationAndRedeemReserveCollateral
     postFarmIxs, // RefreshFarms (mirrors PRE farms, immediately after liquidation)
     repayMint,

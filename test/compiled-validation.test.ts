@@ -1,4 +1,35 @@
 import { describe, it, expect } from 'vitest';
+import type { VersionedTransaction } from '@solana/web3.js';
+
+async function buildMockCompiledTx(
+  sequence: Array<
+    'refreshReserve' |
+    'refreshObligation' |
+    'refreshObligationFarmsForReserve' |
+    'liquidateObligationAndRedeemReserveCollateral'
+  >
+): Promise<VersionedTransaction> {
+  const { PublicKey } = await import('@solana/web3.js');
+  const { KNOWN_PROGRAM_IDS, KAMINO_DISCRIMINATORS } = await import('../src/execute/decodeKaminoKindFromCompiled.js');
+
+  const discriminatorByKind = {
+    refreshReserve: KAMINO_DISCRIMINATORS.refreshReserve,
+    refreshObligation: KAMINO_DISCRIMINATORS.refreshObligation,
+    refreshObligationFarmsForReserve: KAMINO_DISCRIMINATORS.refreshObligationFarmsForReserve,
+    liquidateObligationAndRedeemReserveCollateral: KAMINO_DISCRIMINATORS.liquidateObligationAndRedeemReserveCollateral,
+  } as const;
+
+  return {
+    message: {
+      staticAccountKeys: [new PublicKey(KNOWN_PROGRAM_IDS.KAMINO_KLEND)],
+      compiledInstructions: sequence.map((kind) => ({
+        programIdIndex: 0,
+        accountKeyIndexes: [],
+        data: Buffer.from(discriminatorByKind[kind], 'hex'),
+      })),
+    },
+  } as unknown as VersionedTransaction;
+}
 
 /**
  * Unit test to verify semantic compiled instruction validation
@@ -110,5 +141,35 @@ describe('Compiled Instruction Validation', () => {
     
     // Note: We can't easily test the actual structure without a real transaction,
     // but the TypeScript compiler ensures the return type matches ValidationResult
+  });
+
+  it('accepts farms-first PRE window order for compiled validation', async () => {
+    const { validateLiquidationWindow } = await import('../src/execute/validation.js');
+    const tx = await buildMockCompiledTx([
+      'refreshObligationFarmsForReserve',
+      'refreshReserve',
+      'refreshReserve',
+      'refreshObligation',
+      'liquidateObligationAndRedeemReserveCollateral',
+      'refreshObligationFarmsForReserve',
+    ]);
+
+    const result = validateLiquidationWindow(tx, true);
+    expect(result.valid).toBe(true);
+  });
+
+  it('rejects legacy PRE order where farms are after refreshObligation', async () => {
+    const { validateLiquidationWindow } = await import('../src/execute/validation.js');
+    const tx = await buildMockCompiledTx([
+      'refreshReserve',
+      'refreshReserve',
+      'refreshObligation',
+      'refreshObligationFarmsForReserve',
+      'liquidateObligationAndRedeemReserveCollateral',
+      'refreshObligationFarmsForReserve',
+    ]);
+
+    const result = validateLiquidationWindow(tx, true);
+    expect(result.valid).toBe(false);
   });
 });
