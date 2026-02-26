@@ -133,9 +133,9 @@ export function buildRefreshFarmsKeys(args: {
   lendingMarket: PublicKey;
 }): AccountMeta[] {
   return [
-    { pubkey: args.crank, isSigner: true, isWritable: false },
+    { pubkey: args.crank, isSigner: true, isWritable: true },
     { pubkey: args.obligation, isSigner: false, isWritable: false },
-    { pubkey: args.lendingMarketAuthority, isSigner: false, isWritable: false },
+    { pubkey: args.lendingMarketAuthority, isSigner: false, isWritable: true },
     { pubkey: args.reserve, isSigner: false, isWritable: false },
     { pubkey: args.reserveFarmState, isSigner: false, isWritable: true },
     { pubkey: args.obligationFarmUserState, isSigner: false, isWritable: true },
