@@ -13,6 +13,7 @@ export type BuiltPlanTx = {
   mainIxs: TransactionInstruction[];
   mainLabels: string[];
   hasFarmsRefresh: boolean;
+  hasPostFarmsRefresh: boolean;
   farmRequiredModes: number[];
 
   swapIxs: TransactionInstruction[];
@@ -38,6 +39,7 @@ export async function buildPlanTransactions(opts: {
   dry: boolean;
   preReserveRefreshModeOverride?: 'all' | 'primary' | 'auto';
   disableFarmsRefresh?: boolean;
+  disablePostFarmsRefresh?: boolean;
   refreshObligationMode?: 'active' | 'nonDefault';
 }): Promise<BuiltPlanTx> {
   const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
@@ -82,6 +84,7 @@ export async function buildPlanTransactions(opts: {
     expectedCollateralReservePubkey,
     preReserveRefreshMode: preReserveMode,
     disableFarmsRefresh: opts.disableFarmsRefresh,
+    disablePostFarmsRefresh: opts.disablePostFarmsRefresh,
     refreshObligationMode,
   };
 
@@ -210,6 +213,7 @@ export async function buildPlanTransactions(opts: {
     mainIxs: finalCanonical.instructions,
     mainLabels: finalCanonical.labels,
     hasFarmsRefresh,
+    hasPostFarmsRefresh: finalCanonical.hasPostFarmsRefresh,
     farmRequiredModes,
     swapIxs,
     swapLookupTables,
