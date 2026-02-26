@@ -73,6 +73,7 @@ export interface CanonicalLiquidationResult {
   collateralMint: PublicKey;
   withdrawCollateralMint: PublicKey;
   hasFarmsRefresh: boolean;
+  farmRequiredModes: number[];
 }
 
 /**
@@ -210,6 +211,7 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
     collateralMint: liquidationResult.collateralMint,
     withdrawCollateralMint: liquidationResult.withdrawCollateralMint,
     hasFarmsRefresh: liquidationResult.farmRefreshCount > 0,
+    farmRequiredModes: liquidationResult.farmRequiredModes,
   };
 }
 

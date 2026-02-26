@@ -124,6 +124,11 @@ export async function estimateSeizedCollateralDeltaBaseUnits(
 
   if (sim.value.err) {
     console.error('[SeizedDelta] Simulation error:', JSON.stringify(sim.value.err, null, 2));
+    if (sim.value.logs && sim.value.logs.length > 0) {
+      console.error('\n[SeizedDelta] ═══ PROGRAM LOGS ═══');
+      for (const line of sim.value.logs) console.error(line);
+      console.error('[SeizedDelta] ═══════════════════\n');
+    }
     
     // Check for 6016 ObligationHealthy (soft failure)
     const err = sim.value.err;
