@@ -613,8 +613,6 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           const farmsRequired = result.metadata.farmRequiredModes.length > 0;
           if (farmsRequired) {
             buildProfiles.push(
-              { disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode },
-              { disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: 'primary' },
               { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' },
             );
           } else {
@@ -887,9 +885,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   const validationHasFarms = presubmittedTx
     ? decodedKinds.some((kind) => kind.kind === 'refreshObligationFarmsForReserve')
     : metadata.hasFarmsRefresh;
-  const farmsValidationRequired = presubmittedTx
-    ? validationHasFarms
-    : metadata.farmRequiredModes.length > 0;
+  const farmsRequiredByReserveState = metadata.farmRequiredModes.length > 0;
+  const farmsValidationRequired = farmsRequiredByReserveState || (presubmittedTx ? validationHasFarms : false);
   const liquidateIdx = decodedKinds.findIndex((kind) => kind.kind === 'liquidateObligationAndRedeemReserveCollateral');
   if (farmsValidationRequired) {
     const preFarmKind = liquidateIdx > 0 ? decodedKinds[liquidateIdx - 1]?.kind : 'none';
@@ -905,11 +902,11 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       return { status: 'compiled-validation-failed' };
     }
   }
-  const requirePostFarmsRefresh = presubmittedTx
+  const requirePostFarmsRefresh = farmsRequiredByReserveState || (presubmittedTx
     ? (() => {
         return liquidateIdx >= 0 && liquidateIdx + 1 < decodedKinds.length && decodedKinds[liquidateIdx + 1].kind === 'refreshObligationFarmsForReserve';
       })()
-    : metadata.hasPostFarmsRefresh;
+    : metadata.hasPostFarmsRefresh);
   const validation = validateCompiledInstructionWindow(tx, validationHasFarms, requirePostFarmsRefresh);
   
   if (!validation.valid) {

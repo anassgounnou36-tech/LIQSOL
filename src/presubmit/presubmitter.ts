@@ -176,8 +176,8 @@ export class Presubmitter {
    */
   private async buildEntry(plan: FlashloanPlan): Promise<PresubmitEntry> {
     const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
-    const buildProfiles: Array<{ disableFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto' }> = [
-      { disableFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
+    const buildProfiles: Array<{ disableFarmsRefresh: boolean; disablePostFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto' }> = [
+      { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
     ];
 
     let built: Awaited<ReturnType<typeof buildPlanTransactions>> | undefined;
@@ -200,6 +200,7 @@ export class Presubmitter {
         useRealSwapSizing: true,
         dry: false,
         disableFarmsRefresh: profile.disableFarmsRefresh,
+        disablePostFarmsRefresh: profile.disablePostFarmsRefresh,
         preReserveRefreshModeOverride: profile.preReserveRefreshMode,
       });
 
@@ -218,17 +219,17 @@ export class Presubmitter {
           signer: this.config.signer,
         });
         const sizeCheck = isTxTooLarge(candidateTx);
-        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
+        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},disablePostFarmsRefresh=${profile.disablePostFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
         if (sizeCheck.tooLarge) {
-          console.log(`[Presubmit] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
+          console.log(`[Presubmit] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} disablePostFarmsRefresh=${profile.disablePostFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
           if (profileIndex === 0) {
             const farmsRequired = candidate.farmRequiredModes.length > 0;
             if (farmsRequired) {
-              buildProfiles.push({ disableFarmsRefresh: false, preReserveRefreshMode: 'primary' });
+              buildProfiles.push({ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' });
             } else {
               buildProfiles.push(
-                { disableFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode },
-                { disableFarmsRefresh: true, preReserveRefreshMode: 'primary' },
+                { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
+                { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' },
               );
             }
           }
@@ -236,7 +237,7 @@ export class Presubmitter {
           continue;
         }
       } else {
-        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=partial`);
+        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},disablePostFarmsRefresh=${profile.disablePostFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=partial`);
       }
 
       built = candidate;
