@@ -887,11 +887,11 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   const validationHasFarms = presubmittedTx
     ? decodedKinds.some((kind) => kind.kind === 'refreshObligationFarmsForReserve')
     : metadata.hasFarmsRefresh;
-  const farmsRequired = presubmittedTx
+  const farmsValidationRequired = presubmittedTx
     ? validationHasFarms
     : metadata.farmRequiredModes.length > 0;
   const liquidateIdx = decodedKinds.findIndex((kind) => kind.kind === 'liquidateObligationAndRedeemReserveCollateral');
-  if (farmsRequired) {
+  if (farmsValidationRequired) {
     const preFarmKind = liquidateIdx > 0 ? decodedKinds[liquidateIdx - 1]?.kind : 'none';
     if (liquidateIdx < 1 || preFarmKind !== 'refreshObligationFarmsForReserve') {
       console.error('[Executor] ❌ builder produced invalid check_refresh window');
