@@ -886,9 +886,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     ? decodedKinds.some((kind) => kind.kind === 'refreshObligationFarmsForReserve')
     : metadata.hasFarmsRefresh;
   const farmsRequiredByReserveState = metadata.farmRequiredModes.length > 0;
-  const farmsValidationRequired = farmsRequiredByReserveState || (presubmittedTx ? validationHasFarms : false);
+  const requiresPreFarmsValidation = farmsRequiredByReserveState || (presubmittedTx ? validationHasFarms : false);
   const liquidateIdx = decodedKinds.findIndex((kind) => kind.kind === 'liquidateObligationAndRedeemReserveCollateral');
-  if (farmsValidationRequired) {
+  if (requiresPreFarmsValidation) {
     const preFarmKind = liquidateIdx > 0 ? decodedKinds[liquidateIdx - 1]?.kind : 'none';
     if (liquidateIdx < 1 || preFarmKind !== 'refreshObligationFarmsForReserve') {
       console.error('[Executor] ❌ builder produced invalid check_refresh window');
@@ -902,11 +902,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       return { status: 'compiled-validation-failed' };
     }
   }
-  const requirePostFarmsRefresh = farmsRequiredByReserveState || (presubmittedTx
-    ? (() => {
-        return liquidateIdx >= 0 && liquidateIdx + 1 < decodedKinds.length && decodedKinds[liquidateIdx + 1].kind === 'refreshObligationFarmsForReserve';
-      })()
-    : metadata.hasPostFarmsRefresh);
+  const hasPostFarmAfterLiquidation = liquidateIdx >= 0 && liquidateIdx + 1 < decodedKinds.length && decodedKinds[liquidateIdx + 1].kind === 'refreshObligationFarmsForReserve';
+  const requirePostFarmsRefresh = farmsRequiredByReserveState || (presubmittedTx ? hasPostFarmAfterLiquidation : metadata.hasPostFarmsRefresh);
   const validation = validateCompiledInstructionWindow(tx, validationHasFarms, requirePostFarmsRefresh);
   
   if (!validation.valid) {
