@@ -69,6 +69,7 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
     expect(canonical).toContain('if (requirePostFarmsRefresh) {');
     expect(canonical).toContain('if (postFarmCount !== preFarmCount) {');
     expect(executor).toContain('validateCompiledInstructionWindow(tx, validationHasFarms, requirePostFarmsRefresh)');
+    expect(executor).toContain('builder produced invalid check_refresh window');
     expect(executor).toContain("decodedKinds[liquidateIdx + 1].kind === 'refreshObligationFarmsForReserve'");
   });
 });

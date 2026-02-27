@@ -89,6 +89,19 @@ function withUpdatedComputeBudget(
   };
 }
 
+function formatWindowEndingAtLiquidation(tx: VersionedTransaction, liquidateIdx: number, kinds: Array<{ kind: string }>): string {
+  const start = Math.max(0, liquidateIdx - 4);
+  const lines: string[] = [];
+  for (let i = start; i <= liquidateIdx; i++) {
+    const compiled = tx.message.compiledInstructions[i];
+    const accountPubkeys = (compiled?.accountKeyIndexes ?? [])
+      .map((keyIdx) => tx.message.staticAccountKeys[keyIdx]?.toBase58() ?? `missingKeyIndex(${keyIdx})`)
+      .join(', ');
+    lines.push(`  [${i}] ${kinds[i]?.kind ?? 'unknown'} | accounts=[${accountPubkeys}]${i === liquidateIdx ? ' ← LIQUIDATE' : ''}`);
+  }
+  return lines.join('\n');
+}
+
 interface Plan {
   planVersion?: number;
   key: string;
@@ -874,9 +887,26 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   const validationHasFarms = presubmittedTx
     ? decodedKinds.some((kind) => kind.kind === 'refreshObligationFarmsForReserve')
     : metadata.hasFarmsRefresh;
+  const farmsRequired = presubmittedTx
+    ? validationHasFarms
+    : metadata.farmRequiredModes.length > 0;
+  const liquidateIdx = decodedKinds.findIndex((kind) => kind.kind === 'liquidateObligationAndRedeemReserveCollateral');
+  if (farmsRequired) {
+    const preFarmKind = liquidateIdx > 0 ? decodedKinds[liquidateIdx - 1]?.kind : 'none';
+    if (liquidateIdx < 1 || preFarmKind !== 'refreshObligationFarmsForReserve') {
+      console.error('[Executor] ❌ builder produced invalid check_refresh window');
+      console.error(`[Executor] expected kind at idx ${liquidateIdx - 1} = refreshObligationFarmsForReserve, got ${preFarmKind ?? 'none'}`);
+      console.error('[Executor] Last 5 instructions ending at liquidation:');
+      if (liquidateIdx >= 0) {
+        console.error(formatWindowEndingAtLiquidation(tx, liquidateIdx, decodedKinds));
+      } else {
+        console.error('  liquidation instruction not found');
+      }
+      return { status: 'compiled-validation-failed' };
+    }
+  }
   const requirePostFarmsRefresh = presubmittedTx
     ? (() => {
-        const liquidateIdx = decodedKinds.findIndex((kind) => kind.kind === 'liquidateObligationAndRedeemReserveCollateral');
         return liquidateIdx >= 0 && liquidateIdx + 1 < decodedKinds.length && decodedKinds[liquidateIdx + 1].kind === 'refreshObligationFarmsForReserve';
       })()
     : metadata.hasPostFarmsRefresh;

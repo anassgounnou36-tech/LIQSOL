@@ -331,36 +331,34 @@ export function validateCompiledInstructionWindow(
   
   let cursor = liquidateIdx - 1;
   let preFarmCount = 0;
-  while (cursor >= 0 && kinds[cursor].kind === 'refreshObligationFarmsForReserve') {
-    preFarmCount += 1;
-    cursor -= 1;
-  }
+  const preFarmIdx = liquidateIdx - 1;
+  const obligationBeforeFarmIdx = liquidateIdx - 2;
+  const preFarmKind = preFarmIdx >= 0 ? kinds[preFarmIdx].kind : 'none';
 
-  if (preFarmCount > 2) {
-    return {
-      valid: false,
-      diagnostics: `Too many pre farms refresh instructions before liquidation: expected at most 2, found ${preFarmCount}`,
-    };
-  }
-
-  if (hasFarmsRefresh && preFarmCount === 0) {
-    let diagnostics = 'Missing pre farms refresh immediately before liquidation\n\n';
-    diagnostics += 'Expected at least one: refreshObligationFarmsForReserve\n';
-    diagnostics += `Actual: ${cursor >= 0 ? kinds[cursor].kind : 'none'}\n`;
-    diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
-    const windowStart = Math.max(0, liquidateIdx - 6);
-    const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
-    for (let i = windowStart; i < windowEnd; i++) {
-      const marker = i === liquidateIdx ? ' ← LIQUIDATE' : '';
-      diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
+  if (hasFarmsRefresh) {
+    if (preFarmKind !== 'refreshObligationFarmsForReserve') {
+      let diagnostics = `expected kind at idx ${preFarmIdx} = refreshObligationFarmsForReserve, got ${preFarmKind}\n`;
+      diagnostics += '\nFull instruction window (9-instruction window around liquidation):\n';
+      const windowStart = Math.max(0, liquidateIdx - 6);
+      const windowEnd = Math.min(kinds.length, liquidateIdx + 3);
+      for (let i = windowStart; i < windowEnd; i++) {
+        const marker = i === liquidateIdx ? ' ← LIQUIDATE' : '';
+        diagnostics += `  [${i}] ${kinds[i].kind} (${kinds[i].programId.slice(0, 8)}...)${marker}\n`;
+      }
+      return { valid: false, diagnostics };
     }
-    return { valid: false, diagnostics };
-  }
-
-  if (!hasFarmsRefresh && preFarmCount > 0) {
+    if (obligationBeforeFarmIdx < 0 || kinds[obligationBeforeFarmIdx].kind !== 'refreshObligation') {
+      return {
+        valid: false,
+        diagnostics: `Missing refreshObligation at idx ${obligationBeforeFarmIdx} before liquidation`,
+      };
+    }
+    preFarmCount = 1;
+    cursor = obligationBeforeFarmIdx;
+  } else if (preFarmKind === 'refreshObligationFarmsForReserve') {
     return {
       valid: false,
-      diagnostics: `Unexpected pre farms refresh present: hasFarmsRefresh=false but found ${preFarmCount} pre farm refresh instruction(s)`,
+      diagnostics: 'Unexpected pre farms refresh present: hasFarmsRefresh=false but found refreshObligationFarmsForReserve at liquidateIdx-1',
     };
   }
 
