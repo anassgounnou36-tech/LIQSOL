@@ -52,13 +52,13 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
 
     expect(executor).toContain('const farmsRequired = result.metadata.farmRequiredModes.length > 0;');
     expect(executor).toContain('if (farmsRequired) {');
-    expect(executor).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode }");
-    expect(executor).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: 'primary' }");
     expect(executor).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' }");
+    expect(executor).not.toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode }");
+    expect(executor).not.toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: 'primary' }");
 
     expect(presubmitter).toContain('const farmsRequired = candidate.farmRequiredModes.length > 0;');
     expect(presubmitter).toContain('if (farmsRequired) {');
-    expect(presubmitter).toContain("{ disableFarmsRefresh: false, preReserveRefreshMode: 'primary' }");
+    expect(presubmitter).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' }");
   });
 
   it('supports optional post farms in compiled validation', () => {
@@ -69,6 +69,8 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
     expect(canonical).toContain('if (requirePostFarmsRefresh) {');
     expect(canonical).toContain('if (postFarmCount !== preFarmCount) {');
     expect(executor).toContain('validateCompiledInstructionWindow(tx, validationHasFarms, requirePostFarmsRefresh)');
+    expect(executor).toContain('const farmsRequiredByReserveState = metadata.farmRequiredModes.length > 0;');
+    expect(executor).toContain('const requirePostFarmsRefresh = farmsRequiredByReserveState ||');
     expect(executor).toContain('builder produced invalid check_refresh window');
     expect(executor).toContain("decodedKinds[liquidateIdx + 1].kind === 'refreshObligationFarmsForReserve'");
   });
