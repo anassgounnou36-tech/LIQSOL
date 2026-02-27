@@ -1019,6 +1019,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
             if (ixLabel === 'refreshObligation') {
               const preRefreshCount = labels.filter((label) => label.startsWith('preRefreshReserve:')).length;
               const compiledRefreshObligationIx = tx.message.compiledInstructions[ixIndex];
+              // refreshObligation has 2 fixed accounts (lending market + obligation); the rest are reserve remaining accounts.
               const refreshObligationRemainingAccounts = Math.max(0, (compiledRefreshObligationIx?.accountKeyIndexes?.length ?? 0) - 2);
               if (preRefreshCount < refreshObligationRemainingAccounts) {
                 console.error('     - Likely missing reserve refresh due to PRIMARY downshift / size fallback (6006 expected).');

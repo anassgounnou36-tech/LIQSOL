@@ -54,7 +54,7 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
     expect(executor).toContain('if (farmsRequired) {');
     expect(executor).toContain("omitComputeBudgetIxs: true");
     expect(executor).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true }");
-    expect(executor).not.toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary', omitComputeBudgetIxs: false }");
+    expect(executor).not.toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' }");
     expect(executor).not.toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode }");
     expect(executor).not.toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: 'primary' }");
 
