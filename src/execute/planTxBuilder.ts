@@ -40,6 +40,7 @@ export async function buildPlanTransactions(opts: {
   preReserveRefreshModeOverride?: 'all' | 'primary' | 'auto';
   disableFarmsRefresh?: boolean;
   disablePostFarmsRefresh?: boolean;
+  omitComputeBudgetIxs?: boolean;
   refreshObligationMode?: 'active' | 'nonDefault';
 }): Promise<BuiltPlanTx> {
   const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
@@ -85,6 +86,7 @@ export async function buildPlanTransactions(opts: {
     preReserveRefreshMode: preReserveMode,
     disableFarmsRefresh: opts.disableFarmsRefresh,
     disablePostFarmsRefresh: opts.disablePostFarmsRefresh,
+    omitComputeBudgetIxs: opts.omitComputeBudgetIxs,
     refreshObligationMode,
   };
 

@@ -176,8 +176,8 @@ export class Presubmitter {
    */
   private async buildEntry(plan: FlashloanPlan): Promise<PresubmitEntry> {
     const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
-    const buildProfiles: Array<{ disableFarmsRefresh: boolean; disablePostFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto' }> = [
-      { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
+    const buildProfiles: Array<{ disableFarmsRefresh: boolean; disablePostFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto'; omitComputeBudgetIxs: boolean }> = [
+      { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
     ];
 
     let built: Awaited<ReturnType<typeof buildPlanTransactions>> | undefined;
@@ -202,6 +202,7 @@ export class Presubmitter {
         disableFarmsRefresh: profile.disableFarmsRefresh,
         disablePostFarmsRefresh: profile.disablePostFarmsRefresh,
         preReserveRefreshModeOverride: profile.preReserveRefreshMode,
+        omitComputeBudgetIxs: profile.omitComputeBudgetIxs,
       });
 
       const swapRequired = !candidate.collateralMint.equals(candidate.repayMint);
@@ -219,17 +220,17 @@ export class Presubmitter {
           signer: this.config.signer,
         });
         const sizeCheck = isTxTooLarge(candidateTx);
-        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},disablePostFarmsRefresh=${profile.disablePostFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
+        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},disablePostFarmsRefresh=${profile.disablePostFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},omitComputeBudgetIxs=${profile.omitComputeBudgetIxs},raw=${sizeCheck.raw}`);
         if (sizeCheck.tooLarge) {
-          console.log(`[Presubmit] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} disablePostFarmsRefresh=${profile.disablePostFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
+          console.log(`[Presubmit] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} disablePostFarmsRefresh=${profile.disablePostFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode} omitComputeBudgetIxs=${profile.omitComputeBudgetIxs}`);
           if (profileIndex === 0) {
             const farmsRequired = candidate.farmRequiredModes.length > 0;
             if (farmsRequired) {
-              buildProfiles.push({ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' });
+              buildProfiles.push({ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true });
             } else {
               buildProfiles.push(
-                { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
-                { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' },
+                { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
+                { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary', omitComputeBudgetIxs: false },
               );
             }
           }
@@ -237,7 +238,7 @@ export class Presubmitter {
           continue;
         }
       } else {
-        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},disablePostFarmsRefresh=${profile.disablePostFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=partial`);
+        attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},disablePostFarmsRefresh=${profile.disablePostFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},omitComputeBudgetIxs=${profile.omitComputeBudgetIxs},raw=partial`);
       }
 
       built = candidate;
