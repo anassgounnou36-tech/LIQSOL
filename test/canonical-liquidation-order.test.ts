@@ -155,7 +155,7 @@ describe('Canonical Liquidation Order', () => {
     expect(fixedErrors['Custom(6051)'].fix).toContain('PRE farms refresh');
   });
 
-  it('allows 2 PRE farms before liquidation when POST farms are disabled', async () => {
+  it('requires refreshObligation to be at liquidateIdx-2 when farms are required', async () => {
     const { validateCompiledInstructionWindow } = await import('../src/kamino/canonicalLiquidationIxs.js');
 
     const tx = await buildMockCompiledTx([
@@ -168,8 +168,8 @@ describe('Canonical Liquidation Order', () => {
     ]);
 
     const result = validateCompiledInstructionWindow(tx, true, false);
-    expect(result.valid).toBe(true);
-    expect(result.diagnostics).toContain('PRE farms count: 2');
+    expect(result.valid).toBe(false);
+    expect(result.diagnostics).toContain('Missing refreshObligation at idx');
   });
 
   it('requires POST farms count to mirror PRE farms when POST validation is enabled', async () => {
@@ -180,14 +180,12 @@ describe('Canonical Liquidation Order', () => {
       'refreshReserve',
       'refreshObligation',
       'refreshObligationFarmsForReserve',
-      'refreshObligationFarmsForReserve',
       'liquidateObligationAndRedeemReserveCollateral',
-      'refreshObligationFarmsForReserve',
     ]);
 
     const result = validateCompiledInstructionWindow(tx, true, true);
     expect(result.valid).toBe(false);
-    expect(result.diagnostics).toContain('Expected post farms count to equal pre farms count (2)');
+    expect(result.diagnostics).toContain('Expected post farms count to equal pre farms count (1)');
   });
 
   it('uses updated refreshObligation error message', async () => {
@@ -202,6 +200,21 @@ describe('Canonical Liquidation Order', () => {
 
     const result = validateCompiledInstructionWindow(tx, true, false);
     expect(result.valid).toBe(false);
-    expect(result.diagnostics).toContain('Missing refreshObligation before pre farms / liquidation');
+    expect(result.diagnostics).toContain('Missing refreshObligation at idx');
+  });
+
+  it('prints deterministic farms-adjacency diagnostic at liquidateIdx-1', async () => {
+    const { validateCompiledInstructionWindow } = await import('../src/kamino/canonicalLiquidationIxs.js');
+
+    const tx = await buildMockCompiledTx([
+      'refreshReserve',
+      'refreshReserve',
+      'refreshObligation',
+      'liquidateObligationAndRedeemReserveCollateral',
+    ]);
+
+    const result = validateCompiledInstructionWindow(tx, true, false);
+    expect(result.valid).toBe(false);
+    expect(result.diagnostics).toContain('expected kind at idx 2 = refreshObligationFarmsForReserve, got refreshObligation');
   });
 });
