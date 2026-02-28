@@ -12,6 +12,7 @@ interface BlockedState {
 interface SetupState {
   blocked: Record<string, BlockedState>;
   atasCreated: Record<string, boolean>;
+  executorLut?: string;
 }
 
 function defaultState(): SetupState {
@@ -30,6 +31,7 @@ export function loadSetupState(): SetupState {
     return {
       blocked: parsed.blocked ?? {},
       atasCreated: parsed.atasCreated ?? {},
+      executorLut: parsed.executorLut,
     };
   } catch {
     return defaultState();
@@ -51,5 +53,15 @@ export function isBlocked(planKey: string): boolean {
 export function markAtaCreated(mint: string): void {
   const state = loadSetupState();
   state.atasCreated[mint] = true;
+  saveSetupState(state);
+}
+
+export function getExecutorLutAddress(): string | undefined {
+  return loadSetupState().executorLut;
+}
+
+export function setExecutorLutAddress(addr: string): void {
+  const state = loadSetupState();
+  state.executorLut = addr;
   saveSetupState(state);
 }

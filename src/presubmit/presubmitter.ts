@@ -1,8 +1,23 @@
-import { Connection, PublicKey, VersionedTransaction, Keypair } from '@solana/web3.js';
+import { AddressLookupTableAccount, Connection, PublicKey, VersionedTransaction, Keypair } from '@solana/web3.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { buildPlanTransactions } from '../execute/planTxBuilder.js';
 import { buildVersionedTx } from '../execute/versionedTx.js';
 import { isTxTooLarge } from '../execute/txSize.js';
+import { getExecutorLutAddress } from '../state/setupState.js';
+import { loadExecutorLut } from '../solana/executorLutManager.js';
+
+function dedupeLookupTables(lookupTables: Array<AddressLookupTableAccount | undefined>) {
+  const seen = new Set<string>();
+  const deduped: AddressLookupTableAccount[] = [];
+  for (const lut of lookupTables) {
+    if (!lut) continue;
+    const key = lut.key.toBase58();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(lut);
+  }
+  return deduped;
+}
 
 /**
  * Presubmit cache entry for a ready-to-send transaction
@@ -124,6 +139,8 @@ export class Presubmitter {
   private cache: PresubmitCache;
   private config: PresubmitterConfig;
   private lastRefresh: Map<string, number> = new Map(); // obligation -> timestamp
+  private executorLut?: AddressLookupTableAccount;
+  private executorLutLoaded = false;
   
   constructor(config: PresubmitterConfig) {
     this.cache = new PresubmitCache();
@@ -175,6 +192,7 @@ export class Presubmitter {
    * Build presubmit entry for a plan
    */
   private async buildEntry(plan: FlashloanPlan): Promise<PresubmitEntry> {
+    const executorLut = await this.getExecutorLutIfConfigured();
     const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
     const buildProfiles: Array<{ disableFarmsRefresh: boolean; disablePostFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto'; omitComputeBudgetIxs: boolean }> = [
       { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
@@ -212,11 +230,13 @@ export class Presubmitter {
       let candidateMode: PresubmitEntry['mode'] = 'partial';
       if (!skippedBecauseSetup) {
         candidateMode = candidate.atomicIxs.length > candidate.mainIxs.length ? 'atomic' : 'main';
+        const selectedLookupTables = candidateMode === 'atomic' ? candidate.atomicLookupTables : candidate.swapLookupTables;
+        const mergedLookupTables = dedupeLookupTables([...selectedLookupTables, executorLut]);
         candidateTx = await buildVersionedTx({
           payer: this.config.signer.publicKey,
           blockhash: bh.blockhash,
           instructions: candidateMode === 'atomic' ? candidate.atomicIxs : candidate.mainIxs,
-          lookupTables: candidateMode === 'atomic' ? candidate.atomicLookupTables : candidate.swapLookupTables,
+          lookupTables: mergedLookupTables,
           signer: this.config.signer,
         });
         const sizeCheck = isTxTooLarge(candidateTx);
@@ -276,10 +296,26 @@ export class Presubmitter {
       ev: plan.ev,
       ttl: plan.ttlMin ?? undefined,
       blockhash: selectedBlockhash,
-      lookupTablesCount: built.atomicLookupTables.length,
+      lookupTablesCount: mode === 'atomic'
+        ? dedupeLookupTables([...built.atomicLookupTables, executorLut]).length
+        : dedupeLookupTables([...built.swapLookupTables, executorLut]).length,
       mode,
       needsSetupFirst: swapSkippedBecauseSetup || undefined,
     };
+  }
+
+  private async getExecutorLutIfConfigured(): Promise<AddressLookupTableAccount | undefined> {
+    if (this.executorLutLoaded) return this.executorLut;
+    this.executorLutLoaded = true;
+    const lutAddress = process.env.EXECUTOR_LUT_ADDRESS || getExecutorLutAddress();
+    if (!lutAddress) return undefined;
+    try {
+      this.executorLut = await loadExecutorLut(this.config.connection, new PublicKey(lutAddress));
+      return this.executorLut;
+    } catch (err) {
+      console.warn(`[Presubmit] Failed to load executor LUT ${lutAddress}:`, err instanceof Error ? err.message : String(err));
+      return undefined;
+    }
   }
   
   /**
