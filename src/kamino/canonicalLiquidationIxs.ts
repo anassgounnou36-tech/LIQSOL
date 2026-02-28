@@ -33,6 +33,7 @@ export interface CanonicalLiquidationConfig {
   // Compute budget
   cuLimit: number;
   cuPrice: number;
+  omitComputeBudgetIxs?: boolean;
   
   // Flashloan parameters (optional - if not provided, no flashloan will be used)
   flashloan?: {
@@ -111,15 +112,17 @@ export async function buildKaminoRefreshAndLiquidateIxsCanonical(
   const instructions: TransactionInstruction[] = [];
   const labels: string[] = [];
   
-  // 1. ComputeBudget instructions (always included)
-  const computeIxs = buildComputeBudgetIxs({
-    cuLimit: config.cuLimit,
-    cuPriceMicroLamports: config.cuPrice,
-  });
-  instructions.push(...computeIxs);
-  labels.push('computeBudget:limit');
-  if (computeIxs.length > 1) {
-    labels.push('computeBudget:price');
+  // 1. ComputeBudget instructions (optional)
+  if (!config.omitComputeBudgetIxs) {
+    const computeIxs = buildComputeBudgetIxs({
+      cuLimit: config.cuLimit,
+      cuPriceMicroLamports: config.cuPrice,
+    });
+    instructions.push(...computeIxs);
+    labels.push('computeBudget:limit');
+    if (computeIxs.length > 1) {
+      labels.push('computeBudget:price');
+    }
   }
   
   // 2. FlashBorrow (optional)

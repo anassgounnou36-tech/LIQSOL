@@ -52,13 +52,25 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
 
     expect(executor).toContain('const farmsRequired = result.metadata.farmRequiredModes.length > 0;');
     expect(executor).toContain('if (farmsRequired) {');
-    expect(executor).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' }");
+    expect(executor).toContain("omitComputeBudgetIxs: true");
+    expect(executor).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true }");
+    expect(executor).not.toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' }");
     expect(executor).not.toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode }");
     expect(executor).not.toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: true, preReserveRefreshMode: 'primary' }");
 
     expect(presubmitter).toContain('const farmsRequired = candidate.farmRequiredModes.length > 0;');
     expect(presubmitter).toContain('if (farmsRequired) {');
-    expect(presubmitter).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' }");
+    expect(presubmitter).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true }");
+  });
+
+  it('threads omitComputeBudgetIxs through canonical and plan builders', () => {
+    const canonical = read('src/kamino/canonicalLiquidationIxs.ts');
+    const planBuilder = read('src/execute/planTxBuilder.ts');
+
+    expect(canonical).toContain('omitComputeBudgetIxs?: boolean');
+    expect(canonical).toContain('if (!config.omitComputeBudgetIxs) {');
+    expect(planBuilder).toContain('omitComputeBudgetIxs?: boolean');
+    expect(planBuilder).toContain('omitComputeBudgetIxs: opts.omitComputeBudgetIxs');
   });
 
   it('supports optional post farms in compiled validation', () => {

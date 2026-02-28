@@ -206,6 +206,7 @@ async function buildFullTransaction(
     preReserveRefreshModeOverride?: 'all' | 'primary' | 'auto';
     disableFarmsRefresh?: boolean;
     disablePostFarmsRefresh?: boolean;
+    omitComputeBudgetIxs?: boolean;
   } = {}
 ): Promise<{ 
   setupIxs: TransactionInstruction[]; 
@@ -239,6 +240,7 @@ async function buildFullTransaction(
     preReserveRefreshModeOverride: opts.preReserveRefreshModeOverride,
     disableFarmsRefresh: opts.disableFarmsRefresh,
     disablePostFarmsRefresh: opts.disablePostFarmsRefresh,
+    omitComputeBudgetIxs: opts.omitComputeBudgetIxs,
   });
 
   return {
@@ -565,8 +567,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   };
   let presubmittedTx: VersionedTransaction | undefined;
   const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
-  const buildProfiles: Array<{ disableFarmsRefresh: boolean; disablePostFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto' }> = [
-    { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
+  const buildProfiles: Array<{ disableFarmsRefresh: boolean; disablePostFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto'; omitComputeBudgetIxs: boolean }> = [
+    { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
   ];
   
   try {
@@ -595,6 +597,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         disableFarmsRefresh: profile.disableFarmsRefresh,
         disablePostFarmsRefresh: profile.disablePostFarmsRefresh,
         preReserveRefreshModeOverride: profile.preReserveRefreshMode,
+        omitComputeBudgetIxs: profile.omitComputeBudgetIxs,
       });
 
       const sizeBh = await connection.getLatestBlockhash();
@@ -606,19 +609,19 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         signer,
       });
       const sizeCheck = isTxTooLarge(sizeCheckTx);
-      attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},disablePostFarmsRefresh=${profile.disablePostFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},raw=${sizeCheck.raw}`);
+      attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},disablePostFarmsRefresh=${profile.disablePostFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},omitComputeBudgetIxs=${profile.omitComputeBudgetIxs},raw=${sizeCheck.raw}`);
       if (sizeCheck.tooLarge) {
-        console.log(`[Executor] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} disablePostFarmsRefresh=${profile.disablePostFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode}`);
+        console.log(`[Executor] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} disablePostFarmsRefresh=${profile.disablePostFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode} omitComputeBudgetIxs=${profile.omitComputeBudgetIxs}`);
         if (profileIndex === 0) {
           const farmsRequired = result.metadata.farmRequiredModes.length > 0;
           if (farmsRequired) {
             buildProfiles.push(
-              { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' },
+              { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true },
             );
           } else {
             buildProfiles.push(
-              { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode },
-              { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary' },
+              { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
+              { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary', omitComputeBudgetIxs: false },
             );
           }
         }
@@ -1013,6 +1016,15 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
             dumpCompiledIxAccounts({ tx, ixIndex, label: ixLabel });
             console.error(`[Executor][DEBUG_REFRESH_OBLIGATION] failedIxLabel=${ixLabel}`);
             console.error(`[Executor][DEBUG_REFRESH_OBLIGATION] obligation=${target.obligationPubkey}`);
+            if (ixLabel === 'refreshObligation') {
+              const preRefreshCount = labels.filter((label) => label.startsWith('preRefreshReserve:')).length;
+              const compiledRefreshObligationIx = tx.message.compiledInstructions[ixIndex];
+              // refreshObligation has 2 fixed accounts (lending market + obligation); the rest are reserve remaining accounts.
+              const refreshObligationRemainingAccounts = Math.max(0, (compiledRefreshObligationIx?.accountKeyIndexes?.length ?? 0) - 2);
+              if (preRefreshCount < refreshObligationRemainingAccounts) {
+                console.error('     - Likely missing reserve refresh due to PRIMARY downshift / size fallback (6006 expected).');
+              }
+            }
             console.error('\n  💡 LIKELY CAUSE:');
             console.error('     The reserves selected for liquidation do not match the obligation\'s');
             console.error('     actual borrows/deposits. This happens when:');
