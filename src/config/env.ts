@@ -31,9 +31,14 @@ export const EnvSchema = z.object({
   LIQSOL_EXEC_MINT_ALLOWLIST: z.string().optional(),
 
   // Health ratio source selection
-  // - recomputed: use fresh oracle+reserve recompute (forward-looking, catches early liquidations)
+  // - recomputed: use fresh oracle+reserve recompute only
+  // - hybrid: use protocol-derived weights on recomputed totals when available, else recomputed
   // - protocol: use program's SF values (ground truth, handles elevation groups/farms)
-  LIQSOL_HEALTH_SOURCE: z.enum(['recomputed', 'protocol']).optional(),
+  LIQSOL_HEALTH_SOURCE: z.enum(['recomputed', 'protocol', 'hybrid']).optional(),
+  LIQSOL_RECOMPUTED_VERIFY_BACKEND: z.enum(['none', 'klend-sdk']).optional().default('none'),
+  LIQSOL_RECOMPUTED_VERIFY_TOP_K: z.coerce.number().optional().default(200),
+  LIQSOL_RECOMPUTED_VERIFY_CONCURRENCY: z.coerce.number().optional().default(8),
+  LIQSOL_RECOMPUTED_VERIFY_TTL_MS: z.coerce.number().optional().default(15_000),
 
   // PR 8.5: EV-based ranking configuration (opt-in)
   USE_EV_RANKING: z.string().optional().default('false'),

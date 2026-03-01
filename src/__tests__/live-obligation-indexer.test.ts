@@ -431,7 +431,7 @@ describe("LiveObligationIndexer", () => {
   });
 
   describe("Health source selection and scored fields", () => {
-    it("should prefer hybrid when LIQSOL_HEALTH_SOURCE=recomputed and hybrid exists", () => {
+    it("should use recomputed when LIQSOL_HEALTH_SOURCE=recomputed even if hybrid exists", () => {
       const mint = "So11111111111111111111111111111111111111112";
       const reserve = {
         reservePubkey: new PublicKey("11111111111111111111111111111112"),
@@ -488,13 +488,75 @@ describe("LiveObligationIndexer", () => {
         process.env.LIQSOL_HEALTH_SOURCE = prev;
       }
 
-      expect(scoring.healthSourceUsed).toBe("hybrid");
+      expect(scoring.healthSourceUsed).toBe("recomputed");
       expect(scoring.totalCollateralUsdRecomputed).toBeCloseTo(2, 6);
       expect(scoring.totalCollateralUsdAdjRecomputed).toBeCloseTo(1, 6);
-      expect(scoring.healthRatio).toBeCloseTo(1 / 3, 6);
+      expect(scoring.healthRatio).toBeCloseTo(scoring.healthRatioRecomputed ?? 0, 6);
       expect(scoring.collateralValueHybrid).toBeCloseTo(1, 6);
       expect(scoring.borrowValueHybrid).toBeCloseTo(3, 6);
       expect(scoring.healthRatioHybridRaw).toBeCloseTo(1 / 3, 6);
+      expect(scoring.liquidationEligible).toBe(true);
+    });
+
+    it("should prefer hybrid when LIQSOL_HEALTH_SOURCE=hybrid and hybrid exists", () => {
+      const mint = "So11111111111111111111111111111111111111112";
+      const reserve = {
+        reservePubkey: new PublicKey("11111111111111111111111111111112"),
+        liquidityMint: mint,
+        collateralMint: "cSOL111111111111111111111111111111111111",
+        availableAmount: 1000000n,
+        cumulativeBorrowRate: 1000000000000000000n,
+        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        loanToValue: 75,
+        liquidationThreshold: 50,
+        liquidationBonus: 500,
+        borrowFactor: 200,
+        oraclePubkeys: [new PublicKey("11111111111111111111111111111111")],
+        liquidityDecimals: 0,
+        collateralDecimals: 0,
+        scopePriceChain: null,
+        collateralExchangeRateUi: 1.0,
+      };
+      const reserveCache = {
+        byReserve: new Map([[reserve.reservePubkey.toString(), reserve]]),
+        byMint: new Map([[mint, reserve]]),
+      };
+      const oracleCache = new Map([
+        [mint, { price: 1n, confidence: 0n, slot: 1n, exponent: 0, oracleType: "pyth" as const }],
+      ]);
+      const indexer = new LiveObligationIndexer({
+        yellowstoneUrl: "https://test.example.com",
+        yellowstoneToken: "test-token",
+        programId: testProgramId,
+        rpcUrl: testRpcUrl,
+        reserveCache,
+        oracleCache,
+      });
+      indexer.setCurrentSlotHint(12400);
+      const obligation = {
+        obligationPubkey: "H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo",
+        ownerPubkey: "OwnerPubkey1111111111111111111111111111",
+        marketPubkey: "MarketPubkey111111111111111111111111111",
+        lastUpdateSlot: "12345",
+        deposits: [{ reserve: reserve.reservePubkey.toString(), mint, depositedAmount: "2" }],
+        borrows: [{ reserve: reserve.reservePubkey.toString(), mint, borrowedAmount: "1000000000000000000" }],
+        depositedValueSfRaw: "2000000000000000000",
+        borrowedAssetsMarketValueSfRaw: "1000000000000000000",
+        borrowFactorAdjustedDebtValueSfRaw: "3000000000000000000",
+        unhealthyBorrowValueSfRaw: "1000000000000000000",
+      };
+
+      const prev = process.env.LIQSOL_HEALTH_SOURCE;
+      process.env.LIQSOL_HEALTH_SOURCE = "hybrid";
+      const scoring = (indexer as any).computeHealthScoring(obligation);
+      if (prev === undefined) {
+        delete process.env.LIQSOL_HEALTH_SOURCE;
+      } else {
+        process.env.LIQSOL_HEALTH_SOURCE = prev;
+      }
+
+      expect(scoring.healthSourceUsed).toBe("hybrid");
+      expect(scoring.healthRatio).toBeCloseTo(1 / 3, 6);
       expect(scoring.liquidationEligible).toBe(true);
     });
 
@@ -562,6 +624,69 @@ describe("LiveObligationIndexer", () => {
       expect(scoring.collateralValueHybrid).toBeUndefined();
       expect(scoring.hybridDisabledReason).toBe("sf-stale");
       expect(scoring.slotLag).toBeGreaterThan(200000);
+    });
+
+    it("should gate liquidation from chosen source and not protocol override", () => {
+      const mint = "So11111111111111111111111111111111111111112";
+      const reserve = {
+        reservePubkey: new PublicKey("11111111111111111111111111111112"),
+        liquidityMint: mint,
+        collateralMint: "cSOL111111111111111111111111111111111111",
+        availableAmount: 1000000n,
+        cumulativeBorrowRate: 1000000000000000000n,
+        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        loanToValue: 75,
+        liquidationThreshold: 50,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        oraclePubkeys: [new PublicKey("11111111111111111111111111111111")],
+        liquidityDecimals: 0,
+        collateralDecimals: 0,
+        scopePriceChain: null,
+        collateralExchangeRateUi: 1.0,
+      };
+      const reserveCache = {
+        byReserve: new Map([[reserve.reservePubkey.toString(), reserve]]),
+        byMint: new Map([[mint, reserve]]),
+      };
+      const oracleCache = new Map([
+        [mint, { price: 1n, confidence: 0n, slot: 1n, exponent: 0, oracleType: "pyth" as const }],
+      ]);
+      const indexer = new LiveObligationIndexer({
+        yellowstoneUrl: "https://test.example.com",
+        yellowstoneToken: "test-token",
+        programId: testProgramId,
+        rpcUrl: testRpcUrl,
+        reserveCache,
+        oracleCache,
+      });
+      indexer.setCurrentSlotHint(500000);
+      const obligation = {
+        obligationPubkey: "H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo",
+        ownerPubkey: "OwnerPubkey1111111111111111111111111111",
+        marketPubkey: "MarketPubkey111111111111111111111111111",
+        lastUpdateSlot: "12345",
+        deposits: [{ reserve: reserve.reservePubkey.toString(), mint, depositedAmount: "3" }],
+        borrows: [{ reserve: reserve.reservePubkey.toString(), mint, borrowedAmount: "1000000000000000000" }],
+        depositedValueSfRaw: "3000000000000000000",
+        borrowedAssetsMarketValueSfRaw: "1000000000000000000",
+        borrowFactorAdjustedDebtValueSfRaw: "1000000000000000000",
+        unhealthyBorrowValueSfRaw: "500000000000000000",
+      };
+
+      const prev = process.env.LIQSOL_HEALTH_SOURCE;
+      process.env.LIQSOL_HEALTH_SOURCE = "recomputed";
+      const scoring = (indexer as any).computeHealthScoring(obligation);
+      if (prev === undefined) {
+        delete process.env.LIQSOL_HEALTH_SOURCE;
+      } else {
+        process.env.LIQSOL_HEALTH_SOURCE = prev;
+      }
+
+      expect(scoring.healthSourceUsed).toBe("recomputed");
+      expect(scoring.healthRatio).toBeGreaterThan(1);
+      expect(scoring.liquidationEligibleProtocol).toBe(true);
+      expect(scoring.liquidationEligible).toBe(false);
     });
 
     it("should include lastUpdateSlot in getScoredObligations output", () => {

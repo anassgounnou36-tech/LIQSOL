@@ -11,7 +11,9 @@ import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
 import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
 import { selectCandidates, type ScoredObligation } from "../strategy/candidateSelector.js";
 import { explainHealth } from "../math/healthBreakdown.js";
+import { isLiquidatable } from "../math/liquidation.js";
 import { divBigintToNumber } from "../utils/bn.js";
+import { getKlendSdkVerifier } from "../engine/klendSdkVerifier.js";
 
 const ratio = (a?: number, b?: number) =>
   (a && b && b > 0) ? (a / b).toFixed(4) : 'n/a';
@@ -240,12 +242,12 @@ async function main() {
         ownerPubkey: o.ownerPubkey,
         healthRatio: o.healthRatio,
         healthRatioRaw:
-          (o as any).healthRatioHybridRaw ??
+          o.healthRatioHybridRaw ??
           o.healthRatioRecomputedRaw ??
           o.healthRatioProtocolRaw ??
           o.healthRatio,
         liquidationEligibleProtocol: o.liquidationEligibleProtocol,
-        liquidationEligible: o.liquidationEligibleProtocol ?? o.liquidationEligible,
+        liquidationEligible: o.liquidationEligible,
         borrowValueUsd: o.borrowValue,
         collateralValueUsd: o.collateralValue,
         repayReservePubkey,
@@ -258,6 +260,7 @@ async function main() {
         healthRatioProtocolRaw: o.healthRatioProtocolRaw,
         healthRatioDiff: o.healthRatioDiff,
         healthSource: o.healthSource,
+        healthSourceConfigured: o.healthSourceConfigured,
         healthSourceUsed: o.healthSourceUsed,
         healthRatioHybrid: o.healthRatioHybrid,
         healthRatioHybridRaw: o.healthRatioHybridRaw,
@@ -301,6 +304,52 @@ async function main() {
     const candidates = selectCandidates(candidatesWithBothLegs, { nearThreshold: nearArg });
     const topN = candidates.slice(0, topArg);
 
+    const shouldVerifyWithSdk = env.LIQSOL_RECOMPUTED_VERIFY_BACKEND === "klend-sdk";
+    if (shouldVerifyWithSdk && topN.length > 0) {
+      const verifier = getKlendSdkVerifier({
+        rpcUrl: env.RPC_PRIMARY,
+        marketPubkey,
+        programId,
+        cacheTtlMs: Math.max(1, env.LIQSOL_RECOMPUTED_VERIFY_TTL_MS),
+      });
+      const verifyTopK = Math.max(0, Math.min(topN.length, env.LIQSOL_RECOMPUTED_VERIFY_TOP_K));
+      const verifyConcurrency = Math.max(1, env.LIQSOL_RECOMPUTED_VERIFY_CONCURRENCY);
+      const verifyQueue = topN.slice(0, verifyTopK);
+      // Shared cursor is safe here because JS runs this loop on a single-threaded event loop.
+      let verifyCursor = 0;
+
+      await Promise.all(
+        Array.from({ length: Math.min(verifyConcurrency, verifyQueue.length) }, async () => {
+          while (verifyCursor < verifyQueue.length) {
+            const idx = verifyCursor++;
+            const candidate = verifyQueue[idx];
+            const verification = await verifier.verify({
+              obligationPubkey: candidate.obligationPubkey,
+              ownerPubkey: candidate.ownerPubkey,
+            });
+            if (!verification.ok) continue;
+
+            candidate.healthRatioVerified = verification.healthRatioSdk;
+            candidate.healthRatioVerifiedRaw = verification.healthRatioSdkRaw;
+            candidate.healthSourceVerified = "klend-sdk";
+            candidate.borrowUsdAdjVerified = verification.borrowUsdAdjSdk;
+            candidate.collateralUsdAdjVerified = verification.collateralUsdAdjSdk;
+            candidate.liquidationEligibleVerified = isLiquidatable(verification.healthRatioSdk);
+
+            if (env.LIQSOL_HEALTH_SOURCE === "recomputed") {
+              candidate.healthRatio = verification.healthRatioSdk;
+              candidate.healthRatioRaw = verification.healthRatioSdkRaw;
+              candidate.liquidationEligible = candidate.liquidationEligibleVerified;
+              candidate.borrowValueUsd = verification.borrowUsdAdjSdk;
+              candidate.collateralValueUsd = verification.collateralUsdAdjSdk;
+              candidate.healthSourceUsed = "klend-sdk";
+              candidate.healthSource = "klend-sdk";
+            }
+          }
+        })
+      );
+    }
+
     // Report candidate counts after selection
     const candLiquidatable = candidates.filter(c => c.liquidationEligible).length;
     const candNear = candidates.filter(c => c.predictedLiquidatableSoon).length;
@@ -315,10 +364,10 @@ async function main() {
     console.log(`\nCandidates liquidatable: ${candLiquidatable}`);
     console.log(`Candidates near-threshold (<= ${nearArg}): ${candNear}\n`);
     console.log(
-      "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(proto) | HR(recomp) | ΔHR    | Obligation"
+      "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(protocol) | HR(recomputed-manual) | HR(klend-sdk-verified) | Gate source | Obligation"
     );
     console.log("Note: Borrow/Collateral values are risk-adjusted (borrowFactor × USD, liquidationThreshold × USD)");
-    console.log("-".repeat(190));
+    console.log("-".repeat(240));
 
     topN.forEach((c, index) => {
       const rank = (index + 1).toString().padStart(4);
@@ -329,13 +378,14 @@ async function main() {
       const borrowValueStr = `$${c.borrowValueUsd.toFixed(2)}`.padStart(12);
       const collateralValueStr = `$${c.collateralValueUsd.toFixed(2)}`.padStart(16);
       const hrChosen = c.healthRatio.toFixed(4).padStart(10);
-      const hrProto = ((c as any).healthRatioProtocol ?? 0).toFixed(4).padStart(9);
-      const hrRecomp = ((c as any).healthRatioRecomputed ?? 0).toFixed(4).padStart(10);
-      const hrDiff = ((c as any).healthRatioDiff ?? 0).toFixed(4).padStart(6);
+      const hrProto = (c.healthRatioProtocol ?? 0).toFixed(4).padStart(12);
+      const hrRecomp = (c.healthRatioRecomputed ?? 0).toFixed(4).padStart(20);
+      const hrVerified = (c.healthRatioVerified ?? 0).toFixed(4).padStart(23);
+      const gateSource = (c.healthSourceUsed ?? c.healthSource ?? "n/a").padEnd(11);
       const obligationStr = c.obligationPubkey;
 
       console.log(
-        `${rank} | ${priorityStr} | ${distanceStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrDiff} | ${obligationStr}`
+        `${rank} | ${priorityStr} | ${distanceStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrVerified} | ${gateSource} | ${obligationStr}`
       );
     });
 
@@ -448,10 +498,12 @@ async function main() {
           console.log(`    Unhealthy Borrow Value (adj):   $${sfToUsd(decoded.unhealthyBorrowValueSfRaw)}`);
           console.log(`    Borrow Factor Adjusted (adj):   $${sfToUsd(decoded.borrowFactorAdjustedDebtValueSfRaw)}`);
           console.log(`    HR(protocol):                   ${(cAny.healthRatioProtocol ?? 0).toFixed(6)}`);
-          console.log(`    HR(recomputed):                 ${(cAny.healthRatioRecomputed ?? 0).toFixed(6)}`);
+          console.log(`    HR(recomputed-manual):          ${(cAny.healthRatioRecomputed ?? 0).toFixed(6)}`);
+          console.log(`    HR(klend-sdk-verified):         ${(cAny.healthRatioVerified ?? 0).toFixed(6)}`);
           console.log(`    ΔHR (abs diff):                 ${(cAny.healthRatioDiff ?? 0).toFixed(6)}`);
-          console.log(`    Liquidatable (chosen):         ${c.liquidationEligible ? 'YES' : 'NO'}`);
+          console.log(`    Liquidatable (chosen):          ${c.liquidationEligible ? 'YES' : 'NO'}`);
           console.log(`    Liquidatable (protocol):       ${cAny.liquidationEligibleProtocol === undefined ? 'n/a' : (cAny.liquidationEligibleProtocol ? 'YES' : 'NO')}`);
+          console.log(`    Gate source used:              ${(cAny.healthSourceUsed ?? cAny.healthSource ?? 'n/a')}`);
           console.log('\n  Parity (recomputed vs protocol):');
           console.log(`    Source used:                  ${(cAny.healthSourceUsed ?? 'n/a')}`);
           const borrowRawRatio = ratio(cAny.totalBorrowUsdRecomputed, cAny.totalBorrowUsdProtocol);

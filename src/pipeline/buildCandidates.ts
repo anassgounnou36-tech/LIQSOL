@@ -166,12 +166,12 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
       ownerPubkey: o.ownerPubkey,
       healthRatio: o.healthRatio,
       healthRatioRaw:
-        (o as any).healthRatioHybridRaw ??
+        o.healthRatioHybridRaw ??
         o.healthRatioRecomputedRaw ??
         o.healthRatioProtocolRaw ??
         o.healthRatio,
       liquidationEligibleProtocol: o.liquidationEligibleProtocol,
-      liquidationEligible: o.liquidationEligibleProtocol ?? o.liquidationEligible,
+      liquidationEligible: o.liquidationEligible,
       borrowValueUsd: o.borrowValue,
       collateralValueUsd: o.collateralValue,
       repayReservePubkey,
@@ -184,10 +184,27 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
       healthRatioProtocolRaw: o.healthRatioProtocolRaw,
       healthRatioDiff: o.healthRatioDiff,
       healthSource: o.healthSource,
+      healthSourceConfigured: o.healthSourceConfigured,
+      healthSourceUsed: o.healthSourceUsed,
       borrowValueRecomputed: o.borrowValueRecomputed,
       collateralValueRecomputed: o.collateralValueRecomputed,
       borrowValueProtocol: o.borrowValueProtocol,
       collateralValueProtocol: o.collateralValueProtocol,
+      healthRatioHybrid: o.healthRatioHybrid,
+      healthRatioHybridRaw: o.healthRatioHybridRaw,
+      borrowValueHybrid: o.borrowValueHybrid,
+      collateralValueHybrid: o.collateralValueHybrid,
+      totalBorrowUsdRecomputed: o.totalBorrowUsdRecomputed,
+      totalCollateralUsdRecomputed: o.totalCollateralUsdRecomputed,
+      totalBorrowUsdAdjRecomputed: o.totalBorrowUsdAdjRecomputed,
+      totalCollateralUsdAdjRecomputed: o.totalCollateralUsdAdjRecomputed,
+      totalBorrowUsdProtocol: o.totalBorrowUsdProtocol,
+      totalCollateralUsdProtocol: o.totalCollateralUsdProtocol,
+      totalBorrowUsdAdjProtocol: o.totalBorrowUsdAdjProtocol,
+      totalCollateralUsdAdjProtocol: o.totalCollateralUsdAdjProtocol,
+      lastUpdateSlot: o.lastUpdateSlot,
+      slotLag: o.slotLag,
+      hybridDisabledReason: o.hybridDisabledReason,
       assets: assetSet.size > 0 ? Array.from(assetSet) : undefined,
     };
   });

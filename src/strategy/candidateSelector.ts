@@ -31,8 +31,15 @@ export interface ScoredObligation {
   healthRatioDiff?: number;
   healthSource?: string;
   healthSourceUsed?: string;
+  healthSourceConfigured?: string;
   healthRatioHybrid?: number;
   healthRatioHybridRaw?: number;
+  healthRatioVerified?: number;
+  healthRatioVerifiedRaw?: number;
+  healthSourceVerified?: string;
+  liquidationEligibleVerified?: boolean;
+  borrowUsdAdjVerified?: number;
+  collateralUsdAdjVerified?: number;
   borrowValueRecomputed?: number;
   collateralValueRecomputed?: number;
   borrowValueProtocol?: number;

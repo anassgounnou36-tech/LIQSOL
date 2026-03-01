@@ -75,7 +75,7 @@ export interface ObligationEntry {
 
   healthRatioDiff?: number;   // abs(protocol - recomputed), computed from raw ratios
   healthSource?: 'recomputed' | 'protocol' | 'hybrid'; // which source drove healthRatio
-  healthSourceConfigured?: 'recomputed' | 'protocol'; // env-configured source
+  healthSourceConfigured?: 'recomputed' | 'protocol' | 'hybrid'; // env-configured source
   healthSourceUsed?: 'recomputed' | 'protocol' | 'hybrid'; // actual source used after protocol-first logic
 
   // Hybrid health ratio (recomputed raw USD totals × protocol-derived effective weights)
@@ -361,7 +361,7 @@ export class LiveObligationIndexer {
     collateralValueProtocol?: number;
     healthRatioDiff?: number;
     healthSource?: 'recomputed' | 'protocol' | 'hybrid';
-    healthSourceConfigured?: 'recomputed' | 'protocol';
+    healthSourceConfigured?: 'recomputed' | 'protocol' | 'hybrid';
     healthSourceUsed?: 'recomputed' | 'protocol' | 'hybrid';
     healthRatioHybrid?: number;
     healthRatioHybridRaw?: number;
@@ -498,7 +498,7 @@ export class LiveObligationIndexer {
         collateralValueProtocol?: number;
         healthRatioDiff?: number;
         healthSource?: 'recomputed' | 'protocol' | 'hybrid';
-        healthSourceConfigured?: 'recomputed' | 'protocol';
+        healthSourceConfigured?: 'recomputed' | 'protocol' | 'hybrid';
         healthSourceUsed?: 'recomputed' | 'protocol' | 'hybrid';
         healthRatioHybrid?: number;
         healthRatioHybridRaw?: number;
@@ -610,9 +610,8 @@ export class LiveObligationIndexer {
         // Only recomputed available - no diff possible
       }
 
-      // 4. Determine health source: env override is a debug facility only.
-      //    Protocol-first policy: when protocol SF is scored, use it for eligibility.
-      const healthSourceConfigured = process.env.LIQSOL_HEALTH_SOURCE as ('recomputed' | 'protocol' | undefined);
+      // 4. Determine health source according to explicit env selection.
+      const healthSourceConfigured = process.env.LIQSOL_HEALTH_SOURCE as ('recomputed' | 'protocol' | 'hybrid' | undefined);
       dualFields.healthSourceConfigured = healthSourceConfigured;
 
       const hasHybrid =
@@ -622,11 +621,9 @@ export class LiveObligationIndexer {
 
       let healthSourceUsed: 'recomputed' | 'protocol' | 'hybrid';
       if (healthSourceConfigured === 'recomputed') {
-        if (hasHybrid) {
-          healthSourceUsed = 'hybrid';
-        } else {
-          healthSourceUsed = recomputedResult.scored ? 'recomputed' : (protocolResult.scored ? 'protocol' : 'recomputed');
-        }
+        healthSourceUsed = recomputedResult.scored ? 'recomputed' : (protocolResult.scored ? 'protocol' : 'recomputed');
+      } else if (healthSourceConfigured === 'hybrid') {
+        healthSourceUsed = hasHybrid ? 'hybrid' : (recomputedResult.scored ? 'recomputed' : (protocolResult.scored ? 'protocol' : 'recomputed'));
       } else if (healthSourceConfigured === 'protocol') {
         healthSourceUsed = protocolResult.scored ? 'protocol' : 'recomputed';
       } else {
@@ -676,8 +673,10 @@ export class LiveObligationIndexer {
         this.stats.unscoredReasons[recomputedResult.reason] = (this.stats.unscoredReasons[recomputedResult.reason] || 0) + 1;
       }
 
-      const liquidationEligible =
-        liquidationEligibleProtocol ?? isLiquidatable(activeResult.healthRatio);
+      // If the chosen source did not produce a score, treat as non-liquidatable to avoid false positives.
+      const liquidationEligible = activeResult.scored
+        ? isLiquidatable(activeResult.healthRatio)
+        : false;
 
       return {
         healthRatio: activeResult.healthRatio,
@@ -1145,6 +1144,7 @@ export class LiveObligationIndexer {
     healthRatioProtocolRaw?: number;
     healthRatioDiff?: number;
     healthSource?: string;
+    healthSourceConfigured?: string;
     healthSourceUsed?: string;
     healthRatioHybrid?: number;
     healthRatioHybridRaw?: number;
@@ -1184,6 +1184,7 @@ export class LiveObligationIndexer {
         healthRatioProtocolRaw: entry.healthRatioProtocolRaw,
         healthRatioDiff: entry.healthRatioDiff,
         healthSource: entry.healthSource,
+        healthSourceConfigured: entry.healthSourceConfigured,
         healthSourceUsed: entry.healthSourceUsed,
         healthRatioHybrid: entry.healthRatioHybrid,
         healthRatioHybridRaw: entry.healthRatioHybridRaw,
