@@ -235,7 +235,7 @@ describe("PR8 Health Computation Alignment", () => {
     const depositLeg = result.breakdown?.deposits[0];
     expect(depositLeg?.collateralMint).toBe("SOL_CTOKEN");
     expect(depositLeg?.liquidityMint).toBe("SOL"); // Underlying mint used for pricing
-    expect(depositLeg?.priceUsd).toBeCloseTo(99, 1); // Price from SOL oracle, not SOL_CTOKEN
+    expect(depositLeg?.priceUsd).toBeCloseTo(100, 1); // Price from SOL oracle, not SOL_CTOKEN
   });
 
   it("validation breakdown shows realistic values not millions of SOL", () => {
@@ -304,7 +304,7 @@ describe("PR8 Health Computation Alignment", () => {
     expect(depositLeg.amountUi).toBeGreaterThan(9);
     expect(depositLeg.amountUi).toBeLessThan(10);
     
-    // USD value should be ~$970 (9.8 SOL * $99/SOL), not millions
+    // USD value should be ~$980 (9.8 SOL * $100/SOL), not millions
     expect(depositLeg.usdValue).toBeGreaterThan(900);
     expect(depositLeg.usdValue).toBeLessThan(1000);
     

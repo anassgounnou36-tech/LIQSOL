@@ -780,7 +780,7 @@ describe("Reserve Cache Tests", () => {
   });
 
   describe("exchange rate with cumulativeBorrowRateBsfRaw", () => {
-    it("should compute total liquidity from borrowedAmountSf / 1e18 without reapplying cumulativeBorrowRateBsfRaw", async () => {
+    it("should compute total liquidity from borrowedAmountSf with cumulativeBorrowRateBsfRaw applied", async () => {
       const reservePubkey = new PublicKey("d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q");
 
       mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
@@ -801,7 +801,7 @@ describe("Reserve Cache Tests", () => {
         borrowFactor: 100,
         availableAmountRaw: "900000000", // 900 * 1e6
         borrowedAmountSfRaw: "100000000000000000000000000", // 100 * 1e6 * 1e18
-        cumulativeBorrowRateBsfRaw: "1302500000000000000", // 1.3025e18 should NOT inflate borrow again
+        cumulativeBorrowRateBsfRaw: "1302500000000000000", // 1.3025e18 inflates borrowed liquidity
         collateralMintTotalSupplyRaw: "1000000000", // 1000 * 1e6
         scopePriceChain: null,
       });
@@ -815,9 +815,9 @@ describe("Reserve Cache Tests", () => {
       const cache = await loadReserves(mockConnection, marketPubkey);
       const entry = cache.byMint.get(USDC_MINT)!;
       expect(entry).toBeDefined();
-      // totalLiquidityRaw = 900e6 + (100e6*1e18)/1e18 = 1000e6
-      // exchangeRate = collateralSupply / totalLiquidity = 1000e6 / 1000e6 = 1
-      expect(entry.collateralExchangeRateUi).toBeCloseTo(1.0, 6);
+      // totalLiquidityRaw = 900e6 + (100e6*1.3025e18)/1e18 = 1030.25e6
+      // exchangeRate = collateralSupply / totalLiquidity = 1000e6 / 1030.25e6
+      expect(entry.collateralExchangeRateUi).toBeCloseTo(1000 / 1030.25, 6);
     });
   });
 });

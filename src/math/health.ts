@@ -158,7 +158,8 @@ function exchangeRateUiFromReserve(reserve: ReserveCacheEntry): number | null {
  */
 function convertBorrowSfToUi(
   borrowedAmountSf: string | undefined | null,
-  liquidityDecimals: number
+  liquidityDecimals: number,
+  cumulativeBorrowRateBsfRaw: bigint
 ): number {
   if (!borrowedAmountSf) return 0;
 
@@ -167,7 +168,8 @@ function convertBorrowSfToUi(
     if (borrowedSf < 0n) return 0;
 
     const WAD = 10n ** 18n;
-    const borrowedTokensRaw = borrowedSf / WAD;
+    const rate = cumulativeBorrowRateBsfRaw > 0n ? cumulativeBorrowRateBsfRaw : WAD;
+    const borrowedTokensRaw = (borrowedSf * rate) / WAD / WAD;
 
     // Normalize by liquidity decimals to get UI units
     const liquidityScale = 10n ** BigInt(liquidityDecimals);
@@ -223,54 +225,43 @@ function uiFromMantissaSafe(mantissa: bigint, exponent: number): number | null {
 }
 
 /**
- * Apply confidence adjustment and stablecoin sanity check
- * Returns null if inputs are not finite or result is invalid
- * 
- * @param mint - Token mint address
- * @param basePrice - Base price in UI units
- * @param confidence - Confidence in UI units
- * @param side - Whether this is for collateral or borrow valuation
- * @returns Adjusted price or null if invalid
+ * Validate oracle price and return base UI price if valid
+ * Returns null if inputs are invalid
  */
-function adjustedUiPrice(
-  mint: string,
-  basePrice: number,
-  confidence: number,
-  side: "collateral" | "borrow"
-): number | null {
-  // Check for invalid inputs
-  if (!isFinite(basePrice) || !isFinite(confidence)) {
+function validatedUiPrice(args: {
+  mint: string;
+  oracleType: "pyth" | "switchboard" | "scope";
+  rawPrice: bigint;
+  rawConfidence: bigint;
+  exponent: number;
+}): number | null {
+  const { mint, oracleType, rawPrice, rawConfidence, exponent } = args;
+  const baseUi = uiFromMantissaSafe(rawPrice, exponent);
+  if (baseUi === null || !isFinite(baseUi) || baseUi <= 0) {
     return null;
   }
   
   // Sanity check for stablecoins: reject absurd base prices outside [0.5, 2.0]
-  // This catches oracle failures before applying confidence adjustments
   if (isStableMint(mint)) {
-    if (basePrice < 0.5 || basePrice > 2.0) {
+    if (baseUi < 0.5 || baseUi > 2.0) {
       logger.warn(
-        { mint, basePrice },
+        { mint, basePrice: baseUi },
         "Stablecoin price outside sanity bounds [0.5, 2.0], rejecting"
       );
       return null;
     }
   }
-  
-  // Apply confidence adjustment
-  const adjustedPrice = side === "collateral" 
-    ? Math.max(0, basePrice - confidence)
-    : basePrice + confidence;
-  
-  // Check for invalid result
-  if (!isFinite(adjustedPrice)) {
-    return null;
+
+  if (oracleType === "pyth") {
+    const CONFIDENCE_FACTOR = 50n;
+    const absPrice = rawPrice < 0n ? -rawPrice : rawPrice;
+    const absConfidence = rawConfidence < 0n ? -rawConfidence : rawConfidence;
+    if (absConfidence * CONFIDENCE_FACTOR > absPrice) {
+      return null;
+    }
   }
-  
-  // Apply stablecoin clamp [0.99, 1.01] to adjusted price
-  if (isStableMint(mint)) {
-    return Math.min(1.01, Math.max(0.99, adjustedPrice));
-  }
-  
-  return adjustedPrice;
+
+  return baseUi;
 }
 
 /**
@@ -321,16 +312,13 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Convert price and confidence to UI units
-    const baseUi = uiFromMantissaSafe(oraclePrice.price, oraclePrice.exponent);
-    const confUi = uiFromMantissaSafe(oraclePrice.confidence, oraclePrice.exponent);
-    
-    if (baseUi === null || confUi === null) {
-      return { scored: false, reason: "MISSING_ORACLE_PRICE" };
-    }
-    
-    // Apply confidence adjustment and stablecoin clamping for collateral
-    const priceUi = adjustedUiPrice(priceMint, baseUi, confUi, "collateral");
+    const priceUi = validatedUiPrice({
+      mint: priceMint,
+      oracleType: oraclePrice.oracleType,
+      rawPrice: oraclePrice.price,
+      rawConfidence: oraclePrice.confidence,
+      exponent: oraclePrice.exponent,
+    });
     
     if (priceUi === null || priceUi <= 0) {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
@@ -423,16 +411,13 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Convert price and confidence to UI units
-    const baseUi = uiFromMantissaSafe(oraclePrice.price, oraclePrice.exponent);
-    const confUi = uiFromMantissaSafe(oraclePrice.confidence, oraclePrice.exponent);
-    
-    if (baseUi === null || confUi === null) {
-      return { scored: false, reason: "MISSING_ORACLE_PRICE" };
-    }
-    
-    // Apply confidence adjustment and stablecoin clamping for borrow
-    const priceUi = adjustedUiPrice(borrow.mint, baseUi, confUi, "borrow");
+    const priceUi = validatedUiPrice({
+      mint: borrow.mint,
+      oracleType: oraclePrice.oracleType,
+      rawPrice: oraclePrice.price,
+      rawConfidence: oraclePrice.confidence,
+      exponent: oraclePrice.exponent,
+    });
     
     if (priceUi === null || priceUi <= 0) {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
@@ -441,7 +426,8 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
     // Convert SF to UI units using safe helper
     const borrowUi = convertBorrowSfToUi(
       borrow.borrowedAmount,
-      reserve.liquidityDecimals
+      reserve.liquidityDecimals,
+      reserve.cumulativeBorrowRateBsfRaw
     );
     
     if (!Number.isFinite(borrowUi)) {

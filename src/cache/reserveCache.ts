@@ -114,6 +114,7 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
   try {
     const availRaw = BigInt(decoded.availableAmountRaw);
     const borrowSfRaw = BigInt(decoded.borrowedAmountSfRaw);
+    const rateBsfRaw = BigInt(decoded.cumulativeBorrowRateBsfRaw || "0");
     const supply = BigInt(decoded.collateralMintTotalSupplyRaw);
 
     // Guard: if supply is zero or negative, exchange rate is undefined
@@ -122,8 +123,8 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
     }
 
     const WAD = 10n ** 18n;
-
-    const borrowRaw = borrowSfRaw / WAD;
+    const borrowRate = rateBsfRaw > 0n ? rateBsfRaw : WAD;
+    const borrowRaw = (borrowSfRaw * borrowRate) / WAD / WAD;
     
     // Calculate total liquidity in raw units
     const totalLiquidityRaw = availRaw + borrowRaw;

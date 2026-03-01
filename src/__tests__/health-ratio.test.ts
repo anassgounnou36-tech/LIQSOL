@@ -106,13 +106,13 @@ describe("Health Ratio and Liquidation", () => {
         prices,
       });
 
-      // Deposit: 1 SOL * ($100 - $0.01 confidence) * 0.85 liquidationThreshold = $84.9915 weighted collateral
-      // Borrow: 50 USDC * ($1 + $0.0001 confidence) * 1.0 borrowFactor = $50.005 weighted borrow
-      // Health ratio: $84.9915 / $50.005 ≈ 1.699
+      // Deposit: 1 SOL * $100 * 0.85 liquidationThreshold = $85 weighted collateral
+      // Borrow: 50 USDC * $1 * 1.0 borrowFactor = $50 weighted borrow
+      // Health ratio: $85 / $50 = 1.7
       const scored = expectScored(result);
-      expect(scored.collateralValue).toBeCloseTo(84.9915, 2);
-      expect(scored.borrowValue).toBeCloseTo(50.005, 2);
-      expect(scored.healthRatio).toBeCloseTo(1.699, 2);
+      expect(scored.collateralValue).toBeCloseTo(85, 2);
+      expect(scored.borrowValue).toBeCloseTo(50, 2);
+      expect(scored.healthRatio).toBeCloseTo(1.7, 2);
     });
 
     it("should handle missing reserve gracefully", () => {
@@ -359,12 +359,12 @@ describe("Health Ratio and Liquidation", () => {
         prices,
       });
 
-      // Deposit: 0.5 SOL * ($100 - $0.01) * 0.6 liquidationThreshold = $29.997 weighted collateral
-      // Borrow: 100 USDC * ($1 + $0.0001) * 1.0 borrowFactor = $100.01 weighted borrow
-      // Health ratio: $29.997 / $100.01 ≈ 0.30 (underwater)
+      // Deposit: 0.5 SOL * $100 * 0.6 liquidationThreshold = $30 weighted collateral
+      // Borrow: 100 USDC * $1 * 1.0 borrowFactor = $100 weighted borrow
+      // Health ratio: $30 / $100 = 0.30 (underwater)
       const scored = expectScored(result);
-      expect(scored.collateralValue).toBeCloseTo(29.997, 1);
-      expect(scored.borrowValue).toBeCloseTo(100.01, 1);
+      expect(scored.collateralValue).toBeCloseTo(30, 1);
+      expect(scored.borrowValue).toBeCloseTo(100, 1);
       expect(scored.healthRatio).toBeCloseTo(0.30, 1);
     });
 
@@ -434,7 +434,7 @@ describe("Health Ratio and Liquidation", () => {
       expect(scored.healthRatio).toBe(2.0); // No debt = max health
     });
 
-    it("should convert borrowedAmountSf to UI without applying cumulativeBorrowRateBsfRaw again", () => {
+    it("should convert borrowedAmountSf to UI with cumulativeBorrowRateBsfRaw applied", () => {
       const WAD = 1000000000000000000n; // 1e18
       const rate13025 = (WAD * 13025n) / 10000n; // 1.3025 × 1e18
 
@@ -484,7 +484,7 @@ describe("Health Ratio and Liquidation", () => {
         },
       ];
 
-      // With any cumulative rate, borrowedAmountSf already includes interest and should decode to 100 USDC.
+      // borrowedAmountSf conversion applies cumulativeBorrowRateBsfRaw.
       const resultBase = computeHealthRatio({
         deposits: [],
         borrows,
@@ -503,8 +503,8 @@ describe("Health Ratio and Liquidation", () => {
       const withHigherRate = expectScored(resultWithHigherRate);
 
       expect(base.totalBorrowUsd).toBeCloseTo(100, 6);
-      expect(withHigherRate.totalBorrowUsd).toBeCloseTo(100, 6);
-      expect(withHigherRate.borrowValue).toBeCloseTo(base.borrowValue, 6);
+      expect(withHigherRate.totalBorrowUsd).toBeCloseTo(130.25, 6);
+      expect(withHigherRate.borrowValue).toBeCloseTo(130.25, 6);
     });
   });
 
