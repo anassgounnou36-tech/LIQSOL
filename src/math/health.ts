@@ -168,6 +168,7 @@ function convertBorrowSfToUi(
     if (borrowedSf < 0n) return 0;
 
     const WAD = 10n ** 18n;
+    // Fallback to identity rate if reserve rate is missing/invalid.
     const rate = cumulativeBorrowRateBsfRaw > 0n ? cumulativeBorrowRateBsfRaw : WAD;
     const borrowedTokensRaw = (borrowedSf * rate) / WAD / WAD;
 
@@ -253,6 +254,7 @@ function validatedUiPrice(args: {
   }
 
   if (oracleType === "pyth") {
+    // 2% max confidence width: confidence / |price| <= 0.02  => confidence * 50 <= |price|
     const CONFIDENCE_FACTOR = 50n;
     const absPrice = rawPrice < 0n ? -rawPrice : rawPrice;
     const absConfidence = rawConfidence < 0n ? -rawConfidence : rawConfidence;

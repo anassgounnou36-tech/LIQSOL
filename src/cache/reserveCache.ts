@@ -123,6 +123,7 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
     }
 
     const WAD = 10n ** 18n;
+    // Fallback to identity rate if reserve rate is missing/invalid.
     const borrowRate = rateBsfRaw > 0n ? rateBsfRaw : WAD;
     const borrowRaw = (borrowSfRaw * borrowRate) / WAD / WAD;
     
