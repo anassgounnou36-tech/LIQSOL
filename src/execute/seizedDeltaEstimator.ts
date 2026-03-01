@@ -22,22 +22,22 @@ export interface EstimateSeizedCollateralDeltaParams {
  * 1. ComputeBudget instructions (limit, optional price)
  * 
  * PRE BLOCK (contiguous):
- * 2. RefreshReserve (collateral reserve) - for RefreshObligation slot freshness
- * 3. RefreshReserve (repay reserve) - for RefreshObligation slot freshness
- * 4. RefreshObligation (with ALL reserves as remaining accounts)
- * 5. RefreshFarmsForObligationForReserve (collateral and/or debt, 0-2 instructions, if farms exist)
+ * 2..(N+1). RefreshReserve for N reserves that match the RefreshObligation remaining
+ *           accounts ordering (deposits → borrows) used for this liquidation build
+ * (N+2). RefreshObligation (with those same reserves as remaining accounts)
+ * (N+3). RefreshFarmsForObligationForReserve (collateral and/or debt, 0-2 instructions, if farms exist)
  * 
  * LIQUIDATE:
- * 6. LiquidateObligationAndRedeemReserveCollateral
+ * next. LiquidateObligationAndRedeemReserveCollateral
  * 
  * POST BLOCK (immediately after liquidation):
- * 7. RefreshFarmsForObligationForReserve (mirrors PRE farms, if exist)
+ * next. RefreshFarmsForObligationForReserve (mirrors PRE farms, if exist)
  * 
  * DO NOT include flashBorrow/flashRepay in the simulation - this isolates the
  * liquidation path for delta measurement and avoids flash loan pairing issues.
  * 
- * PRE reserve refresh instructions (steps 2-3) are required to prevent ReserveStale (6009)
- * during RefreshObligation. POST farms instructions (step 7) are required to satisfy
+ * PRE reserve refresh instructions (steps 2..N+1) are required to prevent ReserveStale (6009)
+ * during RefreshObligation. POST farms instructions (described above) are required to satisfy
  * KLend's check_refresh adjacency validation immediately after liquidation.
  * 
  * Algorithm:

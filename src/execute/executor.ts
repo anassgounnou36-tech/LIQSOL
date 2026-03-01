@@ -9,12 +9,13 @@ import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { isPlanComplete, getMissingFields } from '../scheduler/planValidation.js';
 import { buildKaminoRefreshAndLiquidateIxsCanonical, validateCompiledInstructionWindow, decodeCompiledInstructionKinds } from '../kamino/canonicalLiquidationIxs.js';
 import { downgradeBlockedPlan, dropPlanFromQueue } from '../scheduler/txScheduler.js';
-import { isBlocked, markAtaCreated, markBlocked } from '../state/setupState.js';
+import { getExecutorLutAddress, isBlocked, markAtaCreated, markBlocked, setExecutorLutAddress } from '../state/setupState.js';
 import { buildPlanTransactions } from './planTxBuilder.js';
 import { buildVersionedTx } from './versionedTx.js';
 import { buildComputeBudgetIxs } from '../execution/computeBudget.js';
 import { Presubmitter } from '../presubmit/presubmitter.js';
 import { isTxTooLarge } from './txSize.js';
+import { collectLutCandidateAddresses, createExecutorLut, extendExecutorLut, loadExecutorLut } from '../solana/executorLutManager.js';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
@@ -26,6 +27,21 @@ let cachedAtaRentLamports: number | undefined;
 const dryRunSetupRequiredCache = new Map<string, number>();
 const obligationHealthyCooldown = new Map<string, number>(); // planKey -> absolute expiry timestamp (ms)
 let presubmitterSingleton: Presubmitter | undefined;
+
+function dedupeLookupTables(
+  lookupTables: Array<AddressLookupTableAccount | undefined>
+): AddressLookupTableAccount[] {
+  const seen = new Set<string>();
+  const deduped: AddressLookupTableAccount[] = [];
+  for (const lut of lookupTables) {
+    if (!lut) continue;
+    const key = lut.key.toBase58();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(lut);
+  }
+  return deduped;
+}
 
 function dumpCompiledIxAccounts(opts: {
   tx: VersionedTransaction;
@@ -328,13 +344,41 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       return { status: 'no-plans' };
     }
 
+    const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
+    if (!kpPath || !fs.existsSync(kpPath)) {
+      console.error(`[Executor] Keypair not found at ${kpPath}.`);
+      return { status: 'missing-keypair' };
+    }
+    const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
+    const signer = Keypair.fromSecretKey(Uint8Array.from(secret));
+    const market = new PublicKey(env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
+    const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
+
+    const lutManageEnabled = (env.EXECUTOR_LUT_MANAGE ?? 'false') === 'true';
+    const desiredExecutorLutAddress = env.EXECUTOR_LUT_ADDRESS || getExecutorLutAddress();
+    let executorLutAddress = desiredExecutorLutAddress;
+    let executorLut: AddressLookupTableAccount | undefined;
+
+    if (!executorLutAddress && lutManageEnabled && broadcast) {
+      const createdLut = await createExecutorLut(connection, signer);
+      executorLutAddress = createdLut.toBase58();
+      setExecutorLutAddress(executorLutAddress);
+      console.log(`[LUT] executor LUT created: ${executorLutAddress}`);
+    }
+
+    if (executorLutAddress) {
+      executorLut = await loadExecutorLut(connection, new PublicKey(executorLutAddress));
+      if (executorLut) {
+        console.log(`[LUT] executor LUT loaded: ${executorLut.key.toBase58()} size=${executorLut.state.addresses.length}`);
+      } else {
+        console.warn(`[LUT] executor LUT not found on chain: ${executorLutAddress}`);
+      }
+    }
+
     if (!startupFeePayerCheckDone) {
       startupFeePayerCheckDone = true;
       try {
-        const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
-        const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
-        const startupSigner = Keypair.fromSecretKey(Uint8Array.from(secret));
-        const startupBalanceLamports = await connection.getBalance(startupSigner.publicKey);
+        const startupBalanceLamports = await connection.getBalance(signer.publicKey);
         if (startupBalanceLamports < minFeePayerLamports) {
           console.warn(
             `[Executor] Fee payer low balance: ${(startupBalanceLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL < ${(minFeePayerLamports / LAMPORTS_PER_SOL).toFixed(2)} SOL (EXEC_MIN_FEE_PAYER_SOL)`
@@ -437,11 +481,6 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
   if (presubmitEnabled) {
     if (!presubmitterSingleton) {
-      const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
-      const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
-      const signer = Keypair.fromSecretKey(Uint8Array.from(secret));
-      const market = new PublicKey(env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
-      const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
       presubmitterSingleton = new Presubmitter({
         connection,
         signer,
@@ -528,17 +567,6 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
     // Execute this candidate (wrapped in try-catch for error handling)
     try {
-      const kpPath = normalizeWslPath(env.BOT_KEYPAIR_PATH);
-      if (!kpPath || !fs.existsSync(kpPath)) {
-        console.error(`[Executor] Keypair not found at ${kpPath}.`);
-        continue; // Skip to next candidate
-      }
-      const secret = JSON.parse(fs.readFileSync(kpPath, 'utf8'));
-      const signer = Keypair.fromSecretKey(Uint8Array.from(secret));
-
-      const market = new PublicKey(env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
-      const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
-
       console.log('[Executor] Building full transaction...');
   const buildStart = Date.now();
   
@@ -600,15 +628,51 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         omitComputeBudgetIxs: profile.omitComputeBudgetIxs,
       });
 
+      const candidateIxs = result.setupIxs.length > 0 ? result.atomicIxs : result.ixs;
+      const candidateLuts = result.setupIxs.length > 0 ? result.atomicLookupTables : result.swapLookupTables;
       const sizeBh = await connection.getLatestBlockhash();
-      const sizeCheckTx = await buildVersionedTx({
+      const baseSizeTx = await buildVersionedTx({
         payer: signer.publicKey,
         blockhash: sizeBh.blockhash,
-        instructions: result.setupIxs.length > 0 ? result.atomicIxs : result.ixs,
-        lookupTables: result.setupIxs.length > 0 ? result.atomicLookupTables : result.swapLookupTables,
+        instructions: candidateIxs,
+        lookupTables: candidateLuts,
         signer,
       });
-      const sizeCheck = isTxTooLarge(sizeCheckTx);
+      const baseSizeCheck = isTxTooLarge(baseSizeTx);
+
+      let allLuts = dedupeLookupTables([...candidateLuts, executorLut]);
+      let sizeCheckTx = await buildVersionedTx({
+        payer: signer.publicKey,
+        blockhash: sizeBh.blockhash,
+        instructions: candidateIxs,
+        lookupTables: allLuts,
+        signer,
+      });
+      let sizeCheck = isTxTooLarge(sizeCheckTx);
+      console.log(`[LUT] raw bytes: before=${baseSizeCheck.raw} after=${sizeCheck.raw} luts=${allLuts.length}`);
+
+      if (sizeCheck.tooLarge && lutManageEnabled && broadcast && executorLut) {
+        const desiredAddresses = collectLutCandidateAddresses(candidateIxs, signer.publicKey);
+        const existing = new Set(executorLut.state.addresses.map((a) => a.toBase58()));
+        const missingCount = desiredAddresses.filter((a) => !existing.has(a.toBase58())).length;
+        if (missingCount > 0) {
+          console.log(`[LUT] extending LUT: missing=${missingCount} (batched)`);
+          executorLut = await extendExecutorLut(connection, signer, executorLut, desiredAddresses);
+          allLuts = dedupeLookupTables([...candidateLuts, executorLut]);
+          const recheckBh = await connection.getLatestBlockhash();
+          sizeCheckTx = await buildVersionedTx({
+            payer: signer.publicKey,
+            blockhash: recheckBh.blockhash,
+            instructions: candidateIxs,
+            lookupTables: allLuts,
+            signer,
+          });
+          const extendedSizeCheck = isTxTooLarge(sizeCheckTx);
+          console.log(`[LUT] raw bytes: before=${sizeCheck.raw} after=${extendedSizeCheck.raw} luts=${allLuts.length}`);
+          sizeCheck = extendedSizeCheck;
+        }
+      }
+
       attemptedProfiles.push(`disableFarmsRefresh=${profile.disableFarmsRefresh},disablePostFarmsRefresh=${profile.disablePostFarmsRefresh},preReserveRefreshMode=${profile.preReserveRefreshMode},omitComputeBudgetIxs=${profile.omitComputeBudgetIxs},raw=${sizeCheck.raw}`);
       if (sizeCheck.tooLarge) {
         console.log(`[Executor] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} disablePostFarmsRefresh=${profile.disablePostFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode} omitComputeBudgetIxs=${profile.omitComputeBudgetIxs}`);
@@ -714,11 +778,12 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     }
     
     const atomicBh = await connection.getLatestBlockhash();
+    const atomicLuts = dedupeLookupTables([...atomicLookupTables, executorLut]);
     const atomicTx = await buildVersionedTx({
       payer: signer.publicKey,
       blockhash: atomicBh.blockhash,
       instructions: atomicIxs,
-      lookupTables: atomicLookupTables,
+      lookupTables: atomicLuts,
       signer,
     });
 
@@ -824,11 +889,12 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       signer,
       async ({ blockhash, cuLimit, cuPrice }) => {
         const rebuilt = withUpdatedComputeBudget(atomicIxs, atomicLabels, cuLimit, cuPrice);
+        const rebuildAtomicLuts = dedupeLookupTables([...atomicLookupTables, executorLut]);
         return buildVersionedTx({
           payer: signer.publicKey,
           blockhash,
           instructions: rebuilt.instructions,
-          lookupTables: atomicLookupTables,
+          lookupTables: rebuildAtomicLuts,
           signer,
         });
       },
@@ -872,11 +938,12 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
   // Build and sign transaction
   const bh = await connection.getLatestBlockhash();
+  const mainLuts = dedupeLookupTables([...swapLookupTables, executorLut]);
   const tx = presubmittedTx ?? await buildVersionedTx({
     payer: signer.publicKey,
     blockhash: bh.blockhash,
     instructions: ixs,
-    lookupTables: swapLookupTables,
+    lookupTables: mainLuts,
     signer,
   });
 
@@ -1088,11 +1155,12 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         signer,
         async ({ blockhash, cuLimit, cuPrice }) => {
           const rebuilt = withUpdatedComputeBudget(ixs, labels, cuLimit, cuPrice);
+          const rebuildMainLuts = dedupeLookupTables([...swapLookupTables, executorLut]);
           return buildVersionedTx({
             payer: signer.publicKey,
             blockhash,
             instructions: rebuilt.instructions,
-            lookupTables: swapLookupTables,
+            lookupTables: rebuildMainLuts,
             signer,
           });
         },

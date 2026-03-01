@@ -46,6 +46,17 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
     expect(source).toContain('[SeizedDelta] ═══ PROGRAM LOGS ═══');
   });
 
+  it('uses preReserveMode and LUT-aware versioned tx for seized-delta simulation', () => {
+    const planBuilder = read('src/execute/planTxBuilder.ts');
+    expect(planBuilder).toContain('preReserveRefreshMode: preReserveMode');
+    expect(planBuilder).toContain('const lutAddr = process.env.EXECUTOR_LUT_ADDRESS ?? getExecutorLutAddress();');
+    expect(planBuilder).toContain('const executorLut = lutAddr ? await loadExecutorLut(opts.connection, new PublicKey(lutAddr)) : undefined;');
+    expect(planBuilder).toContain('const simTx = await buildVersionedTx({');
+    expect(planBuilder).toContain('lookupTables: executorLut ? [executorLut] : undefined');
+    expect(planBuilder).not.toContain("preReserveRefreshMode: 'primary'");
+    expect(planBuilder).not.toContain('compileToLegacyMessage()');
+  });
+
   it('keeps farms-off downshift profiles disabled when farms are required', () => {
     const executor = read('src/execute/executor.ts');
     const presubmitter = read('src/presubmit/presubmitter.ts');

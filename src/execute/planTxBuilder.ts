@@ -1,9 +1,12 @@
-import { AddressLookupTableAccount, Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import { AddressLookupTableAccount, Connection, Keypair, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { buildKaminoRefreshAndLiquidateIxsCanonical } from '../kamino/canonicalLiquidationIxs.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { resolveMintFlexible } from '../solana/mint.js';
 import { buildJupiterSwapIxs, formatBaseUnitsToUiString } from './swapBuilder.js';
 import { estimateSeizedCollateralDeltaBaseUnits } from './seizedDeltaEstimator.js';
+import { buildVersionedTx } from './versionedTx.js';
+import { getExecutorLutAddress } from '../state/setupState.js';
+import { loadExecutorLut } from '../solana/executorLutManager.js';
 
 export type BuiltPlanTx = {
   setupIxs: TransactionInstruction[];
@@ -107,22 +110,25 @@ export async function buildPlanTransactions(opts: {
       console.log('[Executor] ⚠️  Swap sizing skipped: Setup required (ATAs missing)');
     } else if (opts.useRealSwapSizing) {
       try {
+        const lutAddr = process.env.EXECUTOR_LUT_ADDRESS ?? getExecutorLutAddress();
+        const executorLut = lutAddr ? await loadExecutorLut(opts.connection, new PublicKey(lutAddr)) : undefined;
+
         const estimateSeizedWithMode = async (mode: 'active' | 'nonDefault') => {
           const simCanonical = await buildKaminoRefreshAndLiquidateIxsCanonical({
             ...canonicalConfig,
             flashloan: undefined,
-            preReserveRefreshMode: 'primary',
+            preReserveRefreshMode: preReserveMode,
             refreshObligationMode: mode,
           });
 
           const bh = await opts.connection.getLatestBlockhash();
-          const simMsg = new TransactionMessage({
-            payerKey: opts.signer.publicKey,
-            recentBlockhash: bh.blockhash,
+          const simTx = await buildVersionedTx({
+            payer: opts.signer.publicKey,
+            blockhash: bh.blockhash,
             instructions: simCanonical.instructions,
+            lookupTables: executorLut ? [executorLut] : undefined,
+            signer: opts.signer,
           });
-          const simTx = new VersionedTransaction(simMsg.compileToLegacyMessage());
-          simTx.sign([opts.signer]);
 
           return estimateSeizedCollateralDeltaBaseUnits({
             connection: opts.connection,
