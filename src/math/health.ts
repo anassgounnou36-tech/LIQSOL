@@ -254,7 +254,10 @@ function validatedUiPrice(args: {
   }
 
   if (oracleType === "pyth") {
-    // 2% max confidence width: confidence / |price| <= 0.02  => confidence * 50 <= |price|
+    // 2% max confidence width:
+    // confidence / |price| <= 0.02
+    // => confidence <= 0.02 * |price|
+    // => 50 * confidence <= |price|  (equivalently confidence * 50 <= |price|)
     const CONFIDENCE_FACTOR = 50n;
     const absPrice = rawPrice < 0n ? -rawPrice : rawPrice;
     const absConfidence = rawConfidence < 0n ? -rawConfidence : rawConfidence;
