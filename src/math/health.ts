@@ -14,6 +14,7 @@ const STABLECOIN_MINTS = new Set([
   "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", // PYUSD
   "7XS55hUuoRrw1rUixhJv8o2zdX1kH31ZQAz1r4qAS8Fh", // USDH
 ]);
+const PYTH_CONFIDENCE_FACTOR = 50n;
 
 /**
  * Gate spammy exchange rate warnings behind environment flag
@@ -223,28 +224,18 @@ function uiFromMantissaSafe(mantissa: bigint, exponent: number): number | null {
 }
 
 /**
- * Apply confidence adjustment and stablecoin sanity check
- * Returns null if inputs are not finite or result is invalid
- * 
- * @param mint - Token mint address
- * @param basePrice - Base price in UI units
- * @param confidence - Confidence in UI units
- * @param side - Whether this is for collateral or borrow valuation
- * @returns Adjusted price or null if invalid
+ * Validate and return base UI price.
+ * Confidence is used only as a validity check for Pyth prices.
  */
-function adjustedUiPrice(
+function validatedBaseUiPrice(
   mint: string,
-  basePrice: number,
-  confidence: number,
-  side: "collateral" | "borrow"
+  oraclePrice: OraclePriceData,
+  basePrice: number
 ): number | null {
-  // Check for invalid inputs
-  if (!isFinite(basePrice) || !isFinite(confidence)) {
+  if (!isFinite(basePrice) || basePrice <= 0) {
     return null;
   }
-  
-  // Sanity check for stablecoins: reject absurd base prices outside [0.5, 2.0]
-  // This catches oracle failures before applying confidence adjustments
+
   if (isStableMint(mint)) {
     if (basePrice < 0.5 || basePrice > 2.0) {
       logger.warn(
@@ -254,23 +245,16 @@ function adjustedUiPrice(
       return null;
     }
   }
-  
-  // Apply confidence adjustment
-  const adjustedPrice = side === "collateral" 
-    ? Math.max(0, basePrice - confidence)
-    : basePrice + confidence;
-  
-  // Check for invalid result
-  if (!isFinite(adjustedPrice)) {
-    return null;
+
+  if (oraclePrice.oracleType === "pyth") {
+    const price = oraclePrice.price < 0n ? -oraclePrice.price : oraclePrice.price;
+    const confidence = oraclePrice.confidence < 0n ? -oraclePrice.confidence : oraclePrice.confidence;
+    if (price <= 0n || confidence * PYTH_CONFIDENCE_FACTOR > price) {
+      return null;
+    }
   }
-  
-  // Apply stablecoin clamp [0.99, 1.01] to adjusted price
-  if (isStableMint(mint)) {
-    return Math.min(1.01, Math.max(0.99, adjustedPrice));
-  }
-  
-  return adjustedPrice;
+
+  return basePrice;
 }
 
 /**
@@ -321,17 +305,13 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Convert price and confidence to UI units
+    // Convert price to UI units
     const baseUi = uiFromMantissaSafe(oraclePrice.price, oraclePrice.exponent);
-    const confUi = uiFromMantissaSafe(oraclePrice.confidence, oraclePrice.exponent);
-    
-    if (baseUi === null || confUi === null) {
+    if (baseUi === null) {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
-    
-    // Apply confidence adjustment and stablecoin clamping for collateral
-    const priceUi = adjustedUiPrice(priceMint, baseUi, confUi, "collateral");
-    
+
+    const priceUi = validatedBaseUiPrice(priceMint, oraclePrice, baseUi);
     if (priceUi === null || priceUi <= 0) {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
@@ -423,17 +403,13 @@ export function computeHealthRatio(input: HealthRatioInput): HealthRatioResult {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
     
-    // Convert price and confidence to UI units
+    // Convert price to UI units
     const baseUi = uiFromMantissaSafe(oraclePrice.price, oraclePrice.exponent);
-    const confUi = uiFromMantissaSafe(oraclePrice.confidence, oraclePrice.exponent);
-    
-    if (baseUi === null || confUi === null) {
+    if (baseUi === null) {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }
-    
-    // Apply confidence adjustment and stablecoin clamping for borrow
-    const priceUi = adjustedUiPrice(borrow.mint, baseUi, confUi, "borrow");
-    
+
+    const priceUi = validatedBaseUiPrice(borrow.mint, oraclePrice, baseUi);
     if (priceUi === null || priceUi <= 0) {
       return { scored: false, reason: "MISSING_ORACLE_PRICE" };
     }

@@ -40,7 +40,6 @@ function extractOraclePubkeys(tokenInfo: {
   pythConfiguration?: { price?: { toString: () => string } };
   switchboardConfiguration?: {
     priceAggregator?: { toString: () => string };
-    twapAggregator?: { toString: () => string };
   };
   scopeConfiguration?: { priceFeed?: { toString: () => string } };
 }): string[] {
@@ -63,13 +62,6 @@ function extractOraclePubkeys(tokenInfo: {
     oracles.push(
       tokenInfo.switchboardConfiguration.priceAggregator.toString()
     );
-  }
-
-  if (
-    tokenInfo?.switchboardConfiguration?.twapAggregator &&
-    tokenInfo.switchboardConfiguration.twapAggregator.toString() !== nullPubkey
-  ) {
-    oracles.push(tokenInfo.switchboardConfiguration.twapAggregator.toString());
   }
 
   // Extract Scope price feed
@@ -231,4 +223,3 @@ export function decodeReserve(
 
   return result;
 }
-

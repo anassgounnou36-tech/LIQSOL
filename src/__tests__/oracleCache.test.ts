@@ -151,6 +151,60 @@ describe("Oracle Cache Tests", () => {
       expect(mockConnection.getMultipleAccountsInfo).not.toHaveBeenCalled();
     });
 
+    it("should keep the freshest oracle price when multiple pubkeys map to one mint", async () => {
+      const mint = "So11111111111111111111111111111111111111112";
+      const newerOracle = new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix");
+      const olderOracle = new PublicKey("H6ARHf6YXhGU3NaCZRwojWAcV8KftzSmtqMLphnnaiGo");
+
+      const reservePubkey = PublicKey.unique();
+      const reserveEntry = {
+        reservePubkey,
+        liquidityMint: mint,
+        availableAmount: 5000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: "mock-collateral-mint",
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 9,
+        collateralDecimals: 9,
+        oraclePubkeys: [newerOracle, olderOracle],
+      };
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
+
+      const mkSwitchboardData = (timestamp: number, price: bigint): Buffer => {
+        const switchboardData = Buffer.alloc(500);
+        switchboardData.writeBigInt64LE(price, 217);
+        switchboardData.writeUInt32LE(8, 225);
+        switchboardData.writeBigInt64LE(100000n, 249);
+        switchboardData.writeBigInt64LE(BigInt(timestamp), 129);
+        return switchboardData;
+      };
+
+      const now = Math.floor(Date.now() / 1000);
+      const newerData = mkSwitchboardData(now, 11000000000n);
+      const olderData = mkSwitchboardData(now - 10, 9000000000n);
+
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: newerData, owner: new PublicKey("SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f") },
+        { data: olderData, owner: new PublicKey("SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f") },
+      ]);
+
+      const cache = await loadOracles(mockConnection, reserveCache);
+      const mapped = cache.get(mint);
+
+      expect(mapped).toBeDefined();
+      expect(mapped!.slot).toBe(BigInt(now));
+      expect(mapped!.price).toBe(11000000000n);
+    });
+
     it("should handle null oracle account data", async () => {
       const mint1 = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
       const oracle1 = new PublicKey(
