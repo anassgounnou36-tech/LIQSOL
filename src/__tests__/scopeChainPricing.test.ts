@@ -122,6 +122,16 @@ describe("Scope Chain Pricing Tests", () => {
       });
       expect(chain).toBeNull();
     });
+
+    it("parses [0, 65535, 65535, 65535] as null", () => {
+      const chain = extractScopePriceChain({
+        scopeConfiguration: {
+          priceFeed: scopeFeed,
+          priceChain: [0, 65535, 65535, 65535],
+        },
+      });
+      expect(chain).toBeNull();
+    });
   });
 
   describe("Multi-hop chain pricing", () => {
@@ -330,7 +340,7 @@ describe("Scope Chain Pricing Tests", () => {
   });
 
   describe("Magnitude sanity checks", () => {
-    it("rejects extremely tiny prices (e.g., ~1e-6 USD)", async () => {
+    it("accepts extremely tiny positive prices (e.g., ~1e-6 USD)", async () => {
       const mint = "So11111111111111111111111111111111111111112";
       const reservePubkey = PublicKey.unique();
 
@@ -360,7 +370,7 @@ describe("Scope Chain Pricing Tests", () => {
 
       const cache = await loadOracles(mockConnection, reserveCache);
 
-      expect(cache.has(mint)).toBe(false);
+      expect(cache.has(mint)).toBe(true);
     });
 
     it("rejects extremely large prices (e.g., > 1,000,000 USD)", async () => {

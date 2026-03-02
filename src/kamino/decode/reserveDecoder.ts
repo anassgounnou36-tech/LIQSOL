@@ -151,28 +151,16 @@ export function extractScopePriceChain(tokenInfo: {
   if (!priceChain || !Array.isArray(priceChain) || priceChain.length === 0) {
     return null;
   }
-  
-  // Treat all-zero chains as unset
-  if (priceChain.every((value) => Number(value) === 0)) {
+
+  const rawChains = priceChain.map((value) => Number(value));
+  const filteredChains = rawChains.filter((chain) => !SCOPE_CHAIN_SENTINEL_VALUES.has(chain));
+
+  // Treat unset chains as null (either empty after sentinel filtering, or all zeros)
+  if (filteredChains.length === 0 || filteredChains.every((chain) => chain === 0)) {
     return null;
   }
 
-  // Filter and validate chain indices
-  const validChains: number[] = [];
-  for (const chainValue of priceChain) {
-    const chain = Number(chainValue);
-    
-    // Skip sentinel values (512 and 65535) which mean "not set"
-    if (SCOPE_CHAIN_SENTINEL_VALUES.has(chain)) {
-      continue;
-    }
-    
-    // Validate: chain should be in 0..511
-    if (chain >= 0 && chain < 512) {
-      validChains.push(chain);
-    }
-  }
-  
+  const validChains = filteredChains.filter((chain) => chain >= 0 && chain < 512);
   return validChains.length > 0 ? validChains : null;
 }
 

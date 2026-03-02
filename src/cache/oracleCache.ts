@@ -245,13 +245,13 @@ function decodeScopePrice(
     const uiPrice = result.price.toNumber();
 
     // Validate result
-    if (!isFinite(uiPrice) || isNaN(uiPrice) || uiPrice <= 0) {
+    if (!Number.isFinite(uiPrice) || uiPrice <= 0) {
       logger.warn({ chain: chains, uiPrice }, "[OracleCache] Scope chain returned invalid price");
       return null;
     }
 
-    // Magnitude check (USD prices should be in reasonable range)
-    if (uiPrice < 0.0001 || uiPrice > 1_000_000) {
+    // Accept any finite positive price; keep only an upper-bound sanity check.
+    if (uiPrice > 1_000_000) {
       logger.warn({ chain: chains, uiPrice }, "[OracleCache] Scope chain price magnitude out of range");
       return null;
     }
@@ -786,17 +786,25 @@ export async function loadOracles(
       unpricedRequiredMints.add(mint);
     }
   }
-  const coverageLogFn = unpricedRequiredMints.size > 0 ? logger.warn : logger.info;
-  coverageLogFn(
-    {
-      reserveCount: reserveCache.byReserve.size,
-      requiredPriceMintsCount: requiredPriceMints.size,
-      pricedRequiredMintsCount: pricedRequiredMints.size,
-      unpricedRequiredMintsCount: unpricedRequiredMints.size,
-      unpricedRequiredMintsSample: Array.from(unpricedRequiredMints).slice(0, 5),
-    },
-    "[OracleCache] Oracle coverage summary"
-  );
+  const coverageSummary = {
+    reserveCount: reserveCache.byReserve.size,
+    requiredPriceMintsCount: requiredPriceMints.size,
+    pricedRequiredMintsCount: pricedRequiredMints.size,
+    unpricedRequiredMintsCount: unpricedRequiredMints.size,
+    unpricedRequiredMintsSample: Array.from(unpricedRequiredMints).slice(0, 5),
+  };
+
+  if (unpricedRequiredMints.size > 0) {
+    logger.warn(
+      coverageSummary,
+      "[OracleCache] Oracle coverage summary"
+    );
+  } else {
+    logger.info(
+      coverageSummary,
+      "[OracleCache] Oracle coverage summary"
+    );
+  }
 
   // Part B: Oracle sanity checks (prevent false positives)
   performOracleSanityChecks(cache, allowedLiquidityMints);
