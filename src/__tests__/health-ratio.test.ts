@@ -397,7 +397,7 @@ describe("Health Ratio and Liquidation", () => {
           "SOL",
           {
             price: 10000000000n, // $100 with exponent -8
-            confidence: 300000000n, // $3 confidence (>2% threshold)
+            confidence: 300000000n, // $3 confidence (3%), exceeds 2% threshold
             slot: 1000000n,
             exponent: -8,
             oracleType: "pyth",
