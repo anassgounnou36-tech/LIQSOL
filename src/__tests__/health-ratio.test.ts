@@ -106,13 +106,13 @@ describe("Health Ratio and Liquidation", () => {
         prices,
       });
 
-      // Deposit: 1 SOL * ($100 - $0.01 confidence) * 0.85 liquidationThreshold = $84.9915 weighted collateral
-      // Borrow: 50 USDC * ($1 + $0.0001 confidence) * 1.0 borrowFactor = $50.005 weighted borrow
-      // Health ratio: $84.9915 / $50.005 ≈ 1.699
+      // Deposit: 1 SOL * $100 * 0.85 liquidationThreshold = $85 weighted collateral
+      // Borrow: 50 USDC * $1 * 1.0 borrowFactor = $50 weighted borrow
+      // Health ratio: $85 / $50 = 1.7
       const scored = expectScored(result);
-      expect(scored.collateralValue).toBeCloseTo(84.9915, 2);
-      expect(scored.borrowValue).toBeCloseTo(50.005, 2);
-      expect(scored.healthRatio).toBeCloseTo(1.699, 2);
+      expect(scored.collateralValue).toBeCloseTo(85, 2);
+      expect(scored.borrowValue).toBeCloseTo(50, 2);
+      expect(scored.healthRatio).toBeCloseTo(1.7, 2);
     });
 
     it("should handle missing reserve gracefully", () => {
@@ -198,6 +198,62 @@ describe("Health Ratio and Liquidation", () => {
       });
 
       // Should return unscored when price is missing
+      expect(result.scored).toBe(false);
+      if (!result.scored) {
+        expect(result.reason).toBe("MISSING_ORACLE_PRICE");
+      }
+    });
+
+    it("should reject pyth prices when confidence is too wide", () => {
+      const reserves: Map<string, ReserveCacheEntry> = new Map([
+        [
+          "SOL",
+          {
+            reservePubkey: PublicKey.unique(),
+            liquidityMint: "SOL",
+            availableAmount: 1000000n,
+            loanToValue: 80,
+            liquidationThreshold: 85,
+            liquidationBonus: 500,
+            borrowFactor: 100,
+            oraclePubkeys: [PublicKey.unique()],
+            liquidityDecimals: 9,
+            collateralDecimals: 9,
+            cumulativeBorrowRate: 10000000000n,
+            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            collateralMint: "mock-collateral-mint",
+            collateralExchangeRateUi: 1.0,
+            scopePriceChain: null,
+          },
+        ],
+      ]);
+
+      const prices: OracleCache = new Map([
+        [
+          "SOL",
+          {
+            price: 100000000n, // $1
+            confidence: 3000000n, // $0.03 => 3% (> 2% max)
+            slot: 1000000n,
+            exponent: -8,
+            oracleType: "pyth",
+          },
+        ],
+      ]);
+
+      const result = computeHealthRatio({
+        deposits: [
+          {
+            reserve: "reserve1",
+            mint: "SOL",
+            depositedAmount: "1000000000",
+          },
+        ],
+        borrows: [],
+        reserves,
+        prices,
+      });
+
       expect(result.scored).toBe(false);
       if (!result.scored) {
         expect(result.reason).toBe("MISSING_ORACLE_PRICE");
@@ -359,12 +415,12 @@ describe("Health Ratio and Liquidation", () => {
         prices,
       });
 
-      // Deposit: 0.5 SOL * ($100 - $0.01) * 0.6 liquidationThreshold = $29.997 weighted collateral
-      // Borrow: 100 USDC * ($1 + $0.0001) * 1.0 borrowFactor = $100.01 weighted borrow
-      // Health ratio: $29.997 / $100.01 ≈ 0.30 (underwater)
+      // Deposit: 0.5 SOL * $100 * 0.6 liquidationThreshold = $30 weighted collateral
+      // Borrow: 100 USDC * $1 * 1.0 borrowFactor = $100 weighted borrow
+      // Health ratio: $30 / $100 = 0.30 (underwater)
       const scored = expectScored(result);
-      expect(scored.collateralValue).toBeCloseTo(29.997, 1);
-      expect(scored.borrowValue).toBeCloseTo(100.01, 1);
+      expect(scored.collateralValue).toBeCloseTo(30, 1);
+      expect(scored.borrowValue).toBeCloseTo(100, 1);
       expect(scored.healthRatio).toBeCloseTo(0.30, 1);
     });
 
