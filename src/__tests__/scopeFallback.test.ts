@@ -22,7 +22,7 @@ vi.mock("@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js", () =>
 }));
 
 import { OraclePrices } from "@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js";
-import { scopeMintChainMap } from "../cache/reserveCache.js";
+import { scopeOracleMintChains } from "../cache/reserveCache.js";
 
 describe("Scope Chain Pricing (replaces fallback chain tests)", () => {
   let mockConnection: Connection;
@@ -31,8 +31,22 @@ describe("Scope Chain Pricing (replaces fallback chain tests)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockConnection = {} as Connection;
-    scopeMintChainMap.clear();
+    scopeOracleMintChains.clear();
   });
+
+  function setScopeOracleMintChain(
+    oraclePubkey: PublicKey,
+    mint: string,
+    chain: number[]
+  ): void {
+    const oracleKey = oraclePubkey.toString();
+    let mintChains = scopeOracleMintChains.get(oracleKey);
+    if (!mintChains) {
+      mintChains = new Map<string, number[]>();
+      scopeOracleMintChains.set(oracleKey, mintChains);
+    }
+    mintChains.set(mint, chain);
+  }
 
   /**
    * Helper to create mock Scope price data at a specific chain index.
@@ -85,8 +99,8 @@ describe("Scope Chain Pricing (replaces fallback chain tests)", () => {
         byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
       };
 
-      // Populate scopeMintChainMap as loadReserves would
-      scopeMintChainMap.set(mint1, [3]);
+      // Populate scopeOracleMintChains as loadReserves would
+      setScopeOracleMintChain(oraclePubkey, mint1, [3]);
 
       const currentTimestamp = Math.floor(Date.now() / 1000);
       const mockPrices = createMockScopePriceArray(
@@ -141,7 +155,7 @@ describe("Scope Chain Pricing (replaces fallback chain tests)", () => {
       };
 
       // Configure chain [100] but prices[100] is null
-      scopeMintChainMap.set(mint1, [100]);
+      setScopeOracleMintChain(oraclePubkey, mint1, [100]);
 
       vi.mocked(OraclePrices.decode).mockReturnValue({
         prices: new Array(512).fill(null),
@@ -186,7 +200,7 @@ describe("Scope Chain Pricing (replaces fallback chain tests)", () => {
         byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
       };
 
-      scopeMintChainMap.set(mint1, [3]);
+      setScopeOracleMintChain(oraclePubkey, mint1, [3]);
 
       const staleTimestamp = Math.floor(Date.now() / 1000) - 130; // 130s stale (> 120s threshold)
       const mockPrices = createMockScopePriceArray(
