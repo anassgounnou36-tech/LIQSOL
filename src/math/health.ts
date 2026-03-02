@@ -15,7 +15,7 @@ const STABLECOIN_MINTS = new Set([
   "7XS55hUuoRrw1rUixhJv8o2zdX1kH31ZQAz1r4qAS8Fh", // USDH
 ]);
 
-const PYTH_CONFIDENCE_FACTOR = 50;
+const PYTH_CONFIDENCE_WIDTH_FACTOR = 50; // 2% max width => confidence * 50 <= price
 
 /**
  * Gate spammy exchange rate warnings behind environment flag
@@ -257,9 +257,9 @@ function validatedBaseUiPrice(
     if (confUi === null || !isFinite(confUi) || confUi < 0) {
       return null;
     }
-    if (confUi * PYTH_CONFIDENCE_FACTOR > basePrice) {
+    if (confUi * PYTH_CONFIDENCE_WIDTH_FACTOR > basePrice) {
       logger.warn(
-        { mint, basePrice, confUi, factor: PYTH_CONFIDENCE_FACTOR },
+        { mint, basePrice, confUi, factor: PYTH_CONFIDENCE_WIDTH_FACTOR },
         "Pyth confidence too wide, rejecting"
       );
       return null;
