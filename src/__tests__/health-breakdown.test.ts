@@ -5,6 +5,9 @@ import { PublicKey } from "@solana/web3.js";
 import type { ReserveCacheEntry, ReserveCache } from "../cache/reserveCache.js";
 import type { OracleCache } from "../cache/oracleCache.js";
 import type { ObligationDeposit, ObligationBorrow, DecodedObligation } from "../kamino/types.js";
+import { SF_SCALE } from "../math/fractionScale.js";
+
+const sfFromRaw = (raw: bigint) => (raw * SF_SCALE).toString();
 
 // Helper to extract scored result
 type Scored = Extract<HealthRatioResult, { scored: true }>;
@@ -31,7 +34,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
           liquidityDecimals: 9,
           collateralDecimals: 9,
           cumulativeBorrowRate: 10000000000n,
-          cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+          cumulativeBorrowRateBsfRaw: SF_SCALE,
           collateralMint: "SOL_CTOKEN",
           collateralExchangeRateUi: 1.0,
           scopePriceChain: null,
@@ -51,7 +54,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
           liquidityDecimals: 6,
           collateralDecimals: 6,
           cumulativeBorrowRate: 10000000000n,
-          cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+          cumulativeBorrowRateBsfRaw: SF_SCALE,
           collateralMint: "USDC_CTOKEN",
           collateralExchangeRateUi: 1.0,
           scopePriceChain: null,
@@ -94,7 +97,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
       {
         reserve: "USDC_RESERVE",
         mint: "USDC",
-        borrowedAmount: "500000000000000000000000000", // 500 USDC in SF (scaled fraction)
+        borrowedAmount: sfFromRaw(500000000n), // 500 USDC in SF (scaled by SF_SCALE)
       },
     ];
 
@@ -158,7 +161,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
           liquidityDecimals: 9,
           collateralDecimals: 9,
           cumulativeBorrowRate: 10000000000n,
-          cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+          cumulativeBorrowRateBsfRaw: SF_SCALE,
           collateralMint: "SOL_CTOKEN",
           collateralExchangeRateUi: 1.0,
           scopePriceChain: null,
@@ -216,7 +219,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            cumulativeBorrowRateBsfRaw: SF_SCALE,
             collateralMint: "SOL_CTOKEN",
             collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
@@ -292,7 +295,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
           liquidityDecimals: 9,
           collateralDecimals: 9,
           cumulativeBorrowRate: 10000000000n,
-          cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+          cumulativeBorrowRateBsfRaw: SF_SCALE,
           collateralMint: "SOL_CTOKEN",
           collateralExchangeRateUi: 1.0,
           scopePriceChain: null,
@@ -325,7 +328,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
       {
         reserve: "USDC_RESERVE",
         mint: "USDC",
-        borrowedAmount: "10000000000000000000000000", // 10 USDC in SF
+        borrowedAmount: sfFromRaw(10000000n), // 10 USDC in SF (scaled by SF_SCALE)
       },
     ];
 
@@ -342,7 +345,7 @@ describe("Health Breakdown with computeHealthRatio", () => {
       liquidityDecimals: 6,
       collateralDecimals: 6,
       cumulativeBorrowRate: 10000000000n,
-      cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+      cumulativeBorrowRateBsfRaw: SF_SCALE,
       collateralMint: "USDC_CTOKEN",
       collateralExchangeRateUi: 1.0,
       scopePriceChain: null,

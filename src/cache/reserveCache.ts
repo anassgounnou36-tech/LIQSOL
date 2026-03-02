@@ -6,6 +6,7 @@ import { decodeReserve, setReserveMintCache } from "../kamino/decoder.js";
 import { anchorDiscriminator } from "../kamino/decode/discriminator.js";
 import type { DecodedReserve } from "../kamino/types.js";
 import { divBigintToNumber } from "../utils/bn.js";
+import { SF_SCALE } from "../math/fractionScale.js";
 import { parseSplMintDecimals } from "../utils/splMint.js";
 
 /**
@@ -93,9 +94,9 @@ export const scopeMintChainMap = new Map<string, number[]>();
  * underlyingLiquidityUi = (depositedNotesUi * totalLiquidityUi) / collateralSupplyUi
  * 
  * Formula details:
- * - borrowedAmountSf already includes interest and is scaled by 1e18 (WAD)
- * - divide by 1e18 to get raw tokens
- * - totalLiquidityRaw = availableAmountRaw + (borrowedAmountSfRaw / 1e18)
+ * - borrowedAmountSf is scaled by Fraction scale (2^60)
+ * - divide by SF scale to get raw tokens
+ * - totalLiquidityRaw = availableAmountRaw + (borrowedAmountSfRaw / SF_SCALE)
  * - Use bigint mul-div to avoid precision collapse
  * 
  * @param decoded - Decoded reserve with raw state fields
@@ -121,9 +122,7 @@ function computeExchangeRateUi(decoded: DecodedReserve): number {
       return 0;
     }
 
-    const WAD = 10n ** 18n;
-
-    const borrowRaw = borrowSfRaw / WAD;
+    const borrowRaw = borrowSfRaw / SF_SCALE;
     
     // Calculate total liquidity in raw units
     const totalLiquidityRaw = availRaw + borrowRaw;

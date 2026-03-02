@@ -5,6 +5,9 @@ import { PublicKey } from "@solana/web3.js";
 import type { ReserveCacheEntry } from "../cache/reserveCache.js";
 import type { OracleCache } from "../cache/oracleCache.js";
 import type { ObligationDeposit, ObligationBorrow } from "../kamino/types.js";
+import { SF_SCALE } from "../math/fractionScale.js";
+
+const sfFromRaw = (raw: bigint) => (raw * SF_SCALE).toString();
 
 // Helper type and function to work with discriminated union
 type Scored = Extract<HealthRatioResult, { scored: true }>;
@@ -32,7 +35,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            cumulativeBorrowRateBsfRaw: SF_SCALE,
             collateralMint: "mock-collateral-mint",
             collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
@@ -52,7 +55,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 6,
             collateralDecimals: 6,
             cumulativeBorrowRate: 10000000000n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            cumulativeBorrowRateBsfRaw: SF_SCALE,
             collateralMint: "mock-collateral-mint",
             collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
@@ -95,7 +98,7 @@ describe("Health Ratio and Liquidation", () => {
         {
           reserve: "reserve2",
           mint: "USDC",
-          borrowedAmount: "50000000000000000000000000", // 50 USDC (6 decimals), SF-scaled (50 * 10^6 * 10^18)
+          borrowedAmount: sfFromRaw(50000000n), // 50 USDC (6 decimals), SF-scaled (50 * 10^6 * SF_SCALE)
         },
       ];
 
@@ -170,7 +173,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            cumulativeBorrowRateBsfRaw: SF_SCALE,
             collateralMint: "mock-collateral-mint",
             collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
@@ -220,7 +223,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            cumulativeBorrowRateBsfRaw: SF_SCALE,
             collateralMint: "mock-collateral-mint",
             collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
@@ -253,7 +256,7 @@ describe("Health Ratio and Liquidation", () => {
         {
           reserve: "reserve1",
           mint: "SOL",
-          borrowedAmount: "100000000000000000000000000", // 0.1 SOL (9 decimals), SF-scaled (0.1 * 10^9 * 10^18)
+          borrowedAmount: sfFromRaw(100000000n), // 0.1 SOL (9 decimals), SF-scaled (0.1 * 10^9 * SF_SCALE)
         },
       ];
 
@@ -285,7 +288,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            cumulativeBorrowRateBsfRaw: SF_SCALE,
             collateralMint: "mock-collateral-mint",
             collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
@@ -305,7 +308,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 6,
             collateralDecimals: 6,
             cumulativeBorrowRate: 10000000000n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            cumulativeBorrowRateBsfRaw: SF_SCALE,
             collateralMint: "mock-collateral-mint",
             collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
@@ -348,7 +351,7 @@ describe("Health Ratio and Liquidation", () => {
         {
           reserve: "reserve2",
           mint: "USDC",
-          borrowedAmount: "100000000000000000000000000", // 100 USDC (6 decimals), SF-scaled (100 * 10^6 * 10^18)
+          borrowedAmount: sfFromRaw(100000000n), // 100 USDC (6 decimals), SF-scaled (100 * 10^6 * SF_SCALE)
         },
       ];
 
@@ -384,7 +387,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 9,
             collateralDecimals: 9,
             cumulativeBorrowRate: 10000000000n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            cumulativeBorrowRateBsfRaw: SF_SCALE,
             collateralMint: "mock-collateral-mint",
             collateralExchangeRateUi: 1.0,
             scopePriceChain: null,
@@ -436,7 +439,7 @@ describe("Health Ratio and Liquidation", () => {
             liquidityDecimals: 6,
             collateralDecimals: 6,
             cumulativeBorrowRate: 10000000000n,
-            cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+            cumulativeBorrowRateBsfRaw: SF_SCALE,
             collateralMint: "mock-collateral-mint",
             // Exchange rate = 1.1 means 1.1 collateral tokens = 1 liquidity token
             // So 100 collateral tokens = 100 / 1.1 = ~90.91 liquidity tokens
@@ -485,8 +488,8 @@ describe("Health Ratio and Liquidation", () => {
     });
 
     it("should convert borrowedAmountSf to UI without applying cumulativeBorrowRateBsfRaw again", () => {
-      const WAD = 1000000000000000000n; // 1e18
-      const rate13025 = (WAD * 13025n) / 10000n; // 1.3025 × 1e18
+      const WAD = SF_SCALE; // SF_SCALE
+      const rate13025 = (WAD * 13025n) / 10000n; // 1.3025 × SF_SCALE
 
       const makeReserves = (rate: bigint): Map<string, ReserveCacheEntry> =>
         new Map([
@@ -525,12 +528,12 @@ describe("Health Ratio and Liquidation", () => {
         ],
       ]);
 
-      // 100 USDC borrow in SF units (100 * 10^6 * 10^18)
+      // 100 USDC borrow in SF units (100 * 10^6 * SF_SCALE)
       const borrows: ObligationBorrow[] = [
         {
           reserve: "reserve1",
           mint: "USDC",
-          borrowedAmount: "100000000000000000000000000",
+          borrowedAmount: sfFromRaw(100000000n),
         },
       ];
 

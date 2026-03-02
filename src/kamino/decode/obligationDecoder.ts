@@ -132,6 +132,7 @@ export function decodeObligation(
     decoded.borrows as Array<{
       borrowReserve: { toString: () => string };
       borrowedAmountSf: unknown;
+      cumulativeBorrowRateBsf?: unknown;
     }>
   )
     .filter((b) => gtZero(b.borrowedAmountSf))
@@ -141,6 +142,9 @@ export function decodeObligation(
         reserveLiquidityMintCache.get(b.borrowReserve.toString()) ||
         UNKNOWN_MINT_PLACEHOLDER,
       borrowedAmount: toBigInt(b.borrowedAmountSf).toString(),
+      ...(b.cumulativeBorrowRateBsf !== undefined
+        ? { cumulativeBorrowRateBsfRaw: toBigInt(b.cumulativeBorrowRateBsf).toString() }
+        : {}),
     }));
 
   return {

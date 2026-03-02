@@ -4,6 +4,7 @@ import { writeFileSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
 import { CommitmentLevel } from "@triton-one/yellowstone-grpc";
+import { SF_SCALE } from "../math/fractionScale.js";
 
 // Mock the Yellowstone modules
 vi.mock("../yellowstone/client.js", () => ({
@@ -250,8 +251,8 @@ describe("LiveObligationIndexer", () => {
         liquidityMint: solMint,
         collateralMint: "cSOL111111111111111111111111111111111111",
         availableAmount: 1000000n,
-        cumulativeBorrowRate: 1000000000000000000n,
-        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        cumulativeBorrowRate: SF_SCALE,
+        cumulativeBorrowRateBsfRaw: SF_SCALE,
         loanToValue: 75,
         liquidationThreshold: 80,
         liquidationBonus: 500,
@@ -326,8 +327,8 @@ describe("LiveObligationIndexer", () => {
         liquidityMint: solMint,
         collateralMint: "cSOL111111111111111111111111111111111111",
         availableAmount: 1000000n,
-        cumulativeBorrowRate: 1000000000000000000n,
-        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        cumulativeBorrowRate: SF_SCALE,
+        cumulativeBorrowRateBsfRaw: SF_SCALE,
         loanToValue: 75,
         liquidationThreshold: 80,
         liquidationBonus: 500,
@@ -344,8 +345,8 @@ describe("LiveObligationIndexer", () => {
         liquidityMint: usdcMint,
         collateralMint: "cUSDC11111111111111111111111111111111111",
         availableAmount: 1000000n,
-        cumulativeBorrowRate: 1000000000000000000n,
-        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        cumulativeBorrowRate: SF_SCALE,
+        cumulativeBorrowRateBsfRaw: SF_SCALE,
         loanToValue: 75,
         liquidationThreshold: 80,
         liquidationBonus: 500,
@@ -438,8 +439,8 @@ describe("LiveObligationIndexer", () => {
         liquidityMint: mint,
         collateralMint: "cSOL111111111111111111111111111111111111",
         availableAmount: 1000000n,
-        cumulativeBorrowRate: 1000000000000000000n,
-        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        cumulativeBorrowRate: SF_SCALE,
+        cumulativeBorrowRateBsfRaw: SF_SCALE.toString(),
         loanToValue: 75,
         liquidationThreshold: 50,
         liquidationBonus: 500,
@@ -472,11 +473,11 @@ describe("LiveObligationIndexer", () => {
         marketPubkey: "MarketPubkey111111111111111111111111111",
         lastUpdateSlot: "12345",
         deposits: [{ reserve: reserve.reservePubkey.toString(), mint, depositedAmount: "2" }],
-        borrows: [{ reserve: reserve.reservePubkey.toString(), mint, borrowedAmount: "1000000000000000000" }],
-        depositedValueSfRaw: "2000000000000000000",
-        borrowedAssetsMarketValueSfRaw: "1000000000000000000",
-        borrowFactorAdjustedDebtValueSfRaw: "3000000000000000000",
-        unhealthyBorrowValueSfRaw: "1000000000000000000",
+        borrows: [{ reserve: reserve.reservePubkey.toString(), mint, borrowedAmount: SF_SCALE.toString() }],
+        depositedValueSfRaw: (2n * SF_SCALE).toString(),
+        borrowedAssetsMarketValueSfRaw: SF_SCALE.toString(),
+        borrowFactorAdjustedDebtValueSfRaw: (3n * SF_SCALE).toString(),
+        unhealthyBorrowValueSfRaw: SF_SCALE.toString(),
       };
 
       const prev = process.env.LIQSOL_HEALTH_SOURCE;
@@ -505,8 +506,8 @@ describe("LiveObligationIndexer", () => {
         liquidityMint: mint,
         collateralMint: "cSOL111111111111111111111111111111111111",
         availableAmount: 1000000n,
-        cumulativeBorrowRate: 1000000000000000000n,
-        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        cumulativeBorrowRate: SF_SCALE,
+        cumulativeBorrowRateBsfRaw: SF_SCALE.toString(),
         loanToValue: 75,
         liquidationThreshold: 50,
         liquidationBonus: 500,
@@ -539,11 +540,11 @@ describe("LiveObligationIndexer", () => {
         marketPubkey: "MarketPubkey111111111111111111111111111",
         lastUpdateSlot: "12345",
         deposits: [{ reserve: reserve.reservePubkey.toString(), mint, depositedAmount: "2" }],
-        borrows: [{ reserve: reserve.reservePubkey.toString(), mint, borrowedAmount: "1000000000000000000" }],
-        depositedValueSfRaw: "2000000000000000000",
-        borrowedAssetsMarketValueSfRaw: "1000000000000000000",
-        borrowFactorAdjustedDebtValueSfRaw: "3000000000000000000",
-        unhealthyBorrowValueSfRaw: "1000000000000000000",
+        borrows: [{ reserve: reserve.reservePubkey.toString(), mint, borrowedAmount: SF_SCALE.toString() }],
+        depositedValueSfRaw: (2n * SF_SCALE).toString(),
+        borrowedAssetsMarketValueSfRaw: SF_SCALE.toString(),
+        borrowFactorAdjustedDebtValueSfRaw: (3n * SF_SCALE).toString(),
+        unhealthyBorrowValueSfRaw: SF_SCALE.toString(),
       };
 
       const prev = process.env.LIQSOL_HEALTH_SOURCE;
@@ -567,8 +568,8 @@ describe("LiveObligationIndexer", () => {
         liquidityMint: mint,
         collateralMint: "cSOL111111111111111111111111111111111111",
         availableAmount: 1000000n,
-        cumulativeBorrowRate: 1000000000000000000n,
-        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        cumulativeBorrowRate: SF_SCALE,
+        cumulativeBorrowRateBsfRaw: SF_SCALE.toString(),
         loanToValue: 75,
         liquidationThreshold: 50,
         liquidationBonus: 500,
@@ -601,11 +602,11 @@ describe("LiveObligationIndexer", () => {
         marketPubkey: "MarketPubkey111111111111111111111111111",
         lastUpdateSlot: "12345",
         deposits: [{ reserve: reserve.reservePubkey.toString(), mint, depositedAmount: "2" }],
-        borrows: [{ reserve: reserve.reservePubkey.toString(), mint, borrowedAmount: "1000000000000000000" }],
-        depositedValueSfRaw: "2000000000000000000",
-        borrowedAssetsMarketValueSfRaw: "1000000000000000000",
-        borrowFactorAdjustedDebtValueSfRaw: "3000000000000000000",
-        unhealthyBorrowValueSfRaw: "1000000000000000000",
+        borrows: [{ reserve: reserve.reservePubkey.toString(), mint, borrowedAmount: SF_SCALE.toString() }],
+        depositedValueSfRaw: (2n * SF_SCALE).toString(),
+        borrowedAssetsMarketValueSfRaw: SF_SCALE.toString(),
+        borrowFactorAdjustedDebtValueSfRaw: (3n * SF_SCALE).toString(),
+        unhealthyBorrowValueSfRaw: SF_SCALE.toString(),
       };
 
       const prev = process.env.LIQSOL_HEALTH_SOURCE;
@@ -633,8 +634,8 @@ describe("LiveObligationIndexer", () => {
         liquidityMint: mint,
         collateralMint: "cSOL111111111111111111111111111111111111",
         availableAmount: 1000000n,
-        cumulativeBorrowRate: 1000000000000000000n,
-        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        cumulativeBorrowRate: SF_SCALE,
+        cumulativeBorrowRateBsfRaw: SF_SCALE.toString(),
         loanToValue: 75,
         liquidationThreshold: 50,
         liquidationBonus: 500,
@@ -667,11 +668,11 @@ describe("LiveObligationIndexer", () => {
         marketPubkey: "MarketPubkey111111111111111111111111111",
         lastUpdateSlot: "12345",
         deposits: [{ reserve: reserve.reservePubkey.toString(), mint, depositedAmount: "3" }],
-        borrows: [{ reserve: reserve.reservePubkey.toString(), mint, borrowedAmount: "1000000000000000000" }],
-        depositedValueSfRaw: "3000000000000000000",
-        borrowedAssetsMarketValueSfRaw: "1000000000000000000",
-        borrowFactorAdjustedDebtValueSfRaw: "1000000000000000000",
-        unhealthyBorrowValueSfRaw: "500000000000000000",
+        borrows: [{ reserve: reserve.reservePubkey.toString(), mint, borrowedAmount: SF_SCALE.toString() }],
+        depositedValueSfRaw: (3n * SF_SCALE).toString(),
+        borrowedAssetsMarketValueSfRaw: SF_SCALE.toString(),
+        borrowFactorAdjustedDebtValueSfRaw: SF_SCALE.toString(),
+        unhealthyBorrowValueSfRaw: (SF_SCALE / 2n).toString(),
       };
 
       const prev = process.env.LIQSOL_HEALTH_SOURCE;
