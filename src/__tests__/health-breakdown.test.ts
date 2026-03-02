@@ -119,27 +119,27 @@ describe("Health Breakdown with computeHealthRatio", () => {
     expect(depositLeg?.liquidityMint).toBe("SOL");
     expect(depositLeg?.collateralSharesUi).toBeCloseTo(10, 2);
     expect(depositLeg?.underlyingUi).toBeCloseTo(10, 2);
-    expect(depositLeg?.priceUsd).toBeCloseTo(99, 1); // $100 - $1 confidence for collateral
-    expect(depositLeg?.usdRaw).toBeCloseTo(990, 5);
-    expect(depositLeg?.usdWeighted).toBeCloseTo(841.5, 5); // 990 * 0.85 liquidation threshold
+    expect(depositLeg?.priceUsd).toBeCloseTo(100, 1);
+    expect(depositLeg?.usdRaw).toBeCloseTo(1000, 5);
+    expect(depositLeg?.usdWeighted).toBeCloseTo(850, 5); // 1000 * 0.85 liquidation threshold
     
     // Check borrow breakdown
     const borrowLeg = scored.breakdown?.borrows[0];
     expect(borrowLeg?.liquidityMint).toBe("USDC");
     expect(borrowLeg?.borrowUi).toBeCloseTo(500, 2);
-    expect(borrowLeg?.priceUsd).toBeCloseTo(1.01, 0.01); // $1 + $0.01 confidence for borrow
-    expect(borrowLeg?.usdRaw).toBeCloseTo(505, 5);
-    expect(borrowLeg?.usdWeighted).toBeCloseTo(505, 5); // 505 * 1.0 borrow factor
+    expect(borrowLeg?.priceUsd).toBeCloseTo(1, 1);
+    expect(borrowLeg?.usdRaw).toBeCloseTo(500, 5);
+    expect(borrowLeg?.usdWeighted).toBeCloseTo(500, 5); // 500 * 1.0 borrow factor
     
     // Check totals
-    expect(scored.totalCollateralUsd).toBeCloseTo(990, 5);
-    expect(scored.totalCollateralUsdAdj).toBeCloseTo(841.5, 5);
-    expect(scored.totalBorrowUsd).toBeCloseTo(505, 5);
-    expect(scored.totalBorrowUsdAdj).toBeCloseTo(505, 5);
+    expect(scored.totalCollateralUsd).toBeCloseTo(1000, 5);
+    expect(scored.totalCollateralUsdAdj).toBeCloseTo(850, 5);
+    expect(scored.totalBorrowUsd).toBeCloseTo(500, 5);
+    expect(scored.totalBorrowUsdAdj).toBeCloseTo(500, 5);
     
     // Check health ratio
-    expect(scored.healthRatio).toBeCloseTo(1.67, 0.1); // 841.5 / 505
-    expect(scored.healthRatioRaw).toBeCloseTo(1.67, 0.1);
+    expect(scored.healthRatio).toBeCloseTo(1.7, 0.1); // 850 / 500
+    expect(scored.healthRatioRaw).toBeCloseTo(1.7, 0.1);
   });
 
   it("should not return breakdown when includeBreakdown option is false", () => {

@@ -75,6 +75,17 @@ export interface OraclePriceData {
  */
 export type OracleCache = Map<string, OraclePriceData>;
 
+function maybeSetMintPrice(
+  cache: OracleCache,
+  mint: string,
+  next: OraclePriceData
+): void {
+  const prev = cache.get(mint);
+  if (!prev || next.slot > prev.slot) {
+    cache.set(mint, next);
+  }
+}
+
 /**
  * Decodes a Pyth price account using the official Pyth SDK
  *
@@ -355,7 +366,7 @@ export function applyOracleAccountUpdate(args: {
       const decoded = decodeScopePrice(data, chains);
       if (!decoded) continue;
       const adjustedPrice = applyStablecoinClamp(decoded.price, decoded.exponent, mint);
-      oracleCache.set(mint, { ...decoded, price: adjustedPrice });
+      maybeSetMintPrice(oracleCache, mint, { ...decoded, price: adjustedPrice });
       updatedMints.add(mint);
     }
     return { updatedMints: Array.from(updatedMints), oracleType };
@@ -372,7 +383,7 @@ export function applyOracleAccountUpdate(args: {
   oracleCache.set(oraclePubkey, decoded);
   for (const mint of allMints) {
     const adjustedPrice = applyStablecoinClamp(decoded.price, decoded.exponent, mint);
-    oracleCache.set(mint, { ...decoded, price: adjustedPrice });
+    maybeSetMintPrice(oracleCache, mint, { ...decoded, price: adjustedPrice });
     updatedMints.add(mint);
   }
 
@@ -675,7 +686,7 @@ export async function loadOracles(
         const adjustedPriceData = { ...priceData, price: clampedPrice };
         
         // Store price under mint
-        cache.set(mint, adjustedPriceData);
+        maybeSetMintPrice(cache, mint, adjustedPriceData);
         scopeCount++;
         
         // Store first successful decode as diagnostic entry
@@ -739,7 +750,7 @@ export async function loadOracles(
       const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
       const adjustedPriceData = { ...priceData, price: clampedPrice };
       
-      cache.set(mint, adjustedPriceData);
+      maybeSetMintPrice(cache, mint, adjustedPriceData);
       assigned++;
       
       logger.debug(

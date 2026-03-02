@@ -65,13 +65,6 @@ function extractOraclePubkeys(tokenInfo: {
     );
   }
 
-  if (
-    tokenInfo?.switchboardConfiguration?.twapAggregator &&
-    tokenInfo.switchboardConfiguration.twapAggregator.toString() !== nullPubkey
-  ) {
-    oracles.push(tokenInfo.switchboardConfiguration.twapAggregator.toString());
-  }
-
   // Extract Scope price feed
   if (
     tokenInfo?.scopeConfiguration?.priceFeed &&
@@ -231,4 +224,3 @@ export function decodeReserve(
 
   return result;
 }
-
