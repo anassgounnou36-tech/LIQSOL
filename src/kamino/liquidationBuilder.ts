@@ -10,7 +10,8 @@ import { parseUiAmountToBaseUnits } from "../execute/amount.js";
 import { resolveTokenProgramId } from "../solana/tokenProgram.js";
 import { buildCreateAtaIdempotentIx } from "../solana/ata.js";
 import { addressSafe } from "../solana/addressSafe.js";
-import { toBigInt, gtZero } from "../utils/bn.js";
+import { toBigInt, gtZero, divBigintToNumber } from "../utils/bn.js";
+import { SF_SCALE } from "../math/fractionScale.js";
 import { SYSVAR_RENT_ADDRESS } from "@solana/sysvars";
 import { KLEND_PROGRAM_ID as KLEND_PROGRAM_ID_FROM_DECODER, KAMINO_DISCRIMINATORS } from "../execute/decodeKaminoKindFromCompiled.js";
 import { decodeObligationSlotsAll } from "./decode/obligationDecoder.js";
@@ -321,7 +322,12 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
         const decimals = reserve.stats.decimals;
         
         // Rough USD value estimate (SDK should provide better methods)
-        const borrowValue = (Number(borrowedAmountSf) / 1e18) * (price / Math.pow(10, decimals));
+        const borrowAmountUi = divBigintToNumber(
+          toBigInt(borrowedAmountSf),
+          SF_SCALE * (10n ** BigInt(decimals)),
+          6
+        );
+        const borrowValue = borrowAmountUi * price;
         
         if (borrowValue > maxBorrowValue) {
           maxBorrowValue = borrowValue;
@@ -911,20 +917,25 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       );
     }
     
-    // Get borrowed amount in base units (this is scaled by cumulative borrow rate)
+    // Get borrowed amount in base units from SF using reserve/borrow-leg rate ratio
     // For safety, we'll repay a portion of the debt (e.g., 50% close factor)
     const borrowedAmountSf = repayBorrow.borrowedAmountSf;
-    const cumulativeBorrowRate = repayReserve.state.liquidity.cumulativeBorrowRateBsf;
+    const reserveCumulativeBorrowRate = repayReserve.state.liquidity.cumulativeBorrowRateBsf;
+    const borrowLegCumulativeBorrowRate = (repayBorrow as any).cumulativeBorrowRateBsf ?? reserveCumulativeBorrowRate;
     
     // Convert from scaled fraction to base units using bigint-based math
-    // borrowedAmountSf is in 1e18 scale, need to convert using cumulative borrow rate
-    // borrowAmount = borrowedAmountSf * cumulativeBorrowRate / 10^18 / 10^18
+    // adjustedBorrowedSf = borrowedSf * reserveRate / borrowLegRate
+    // borrowAmount = adjustedBorrowedSf / SF_SCALE
     try {
       const borrowedSf = toBigInt(borrowedAmountSf);
-      const cumRateBsf = toBigInt(cumulativeBorrowRate);
-      
-      const SCALE_1E18 = 10n ** 18n;
-      const borrowAmountBaseBig = (borrowedSf * cumRateBsf) / SCALE_1E18 / SCALE_1E18;
+      const reserveRateBsf = toBigInt(reserveCumulativeBorrowRate);
+      const borrowLegRateBsf = toBigInt(borrowLegCumulativeBorrowRate);
+      if (borrowLegRateBsf <= 0n) {
+        throw new Error("Invalid borrow leg cumulative borrow rate (must be > 0)");
+      }
+
+      const adjustedBorrowedSf = (borrowedSf * reserveRateBsf) / borrowLegRateBsf;
+      const borrowAmountBaseBig = adjustedBorrowedSf / SF_SCALE;
       
       // Close factor typically 50% for Kamino (500 parts per thousand)
       const closeFactorPermille = 500n; // 50% = 500/1000
@@ -944,8 +955,10 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
       console.error("[LiqBuilder] bigint conversion failed", {
         borrowedAmountSfType: typeof borrowedAmountSf,
         borrowedAmountSfRaw: borrowedAmountSf,
-        cumulativeBorrowRateBsfType: typeof cumulativeBorrowRate,
-        cumulativeBorrowRateBsfRaw: cumulativeBorrowRate,
+        reserveCumulativeBorrowRateBsfType: typeof reserveCumulativeBorrowRate,
+        reserveCumulativeBorrowRateBsfRaw: reserveCumulativeBorrowRate,
+        borrowLegCumulativeBorrowRateBsfType: typeof borrowLegCumulativeBorrowRate,
+        borrowLegCumulativeBorrowRateBsfRaw: borrowLegCumulativeBorrowRate,
         err: err instanceof Error ? err.message : String(err),
       });
       throw err;

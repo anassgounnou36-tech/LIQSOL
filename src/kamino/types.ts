@@ -27,7 +27,7 @@ export interface DecodedReserve {
   borrowFactor: number;
   /** Available liquidity amount (raw, not adjusted for decimals) */
   availableAmountRaw: string;
-  /** Borrowed amount in SF (scaled fraction, 1e18-scaled) */
+  /** Borrowed amount in SF (scaled fraction, 2^60-scaled) */
   borrowedAmountSfRaw: string;
   /** Cumulative borrow rate BSF (BigFractionBytes as bigint string) - used for individual borrow conversion only */
   cumulativeBorrowRateBsfRaw: string;
@@ -56,15 +56,15 @@ export interface DecodedObligation {
   borrows: ObligationBorrow[];
 
   // Protocol SF risk values (optional - decoded directly from on-chain Obligation account)
-  /** Raw deposited value in SF (1e18-scaled), stored as string to avoid Number() overflow */
+  /** Raw deposited value in SF (2^60-scaled), stored as string to avoid Number() overflow */
   depositedValueSfRaw?: string;
-  /** Raw borrowed assets market value in SF (1e18-scaled) */
+  /** Raw borrowed assets market value in SF (2^60-scaled) */
   borrowedAssetsMarketValueSfRaw?: string;
-  /** Borrow-factor-adjusted debt value in SF (1e18-scaled) */
+  /** Borrow-factor-adjusted debt value in SF (2^60-scaled) */
   borrowFactorAdjustedDebtValueSfRaw?: string;
-  /** Allowed borrow value in SF (1e18-scaled) */
+  /** Allowed borrow value in SF (2^60-scaled) */
   allowedBorrowValueSfRaw?: string;
-  /** Unhealthy borrow value (borrow limit) in SF (1e18-scaled) */
+  /** Unhealthy borrow value (borrow limit) in SF (2^60-scaled) */
   unhealthyBorrowValueSfRaw?: string;
 
   // Protocol metadata
@@ -104,4 +104,6 @@ export interface ObligationBorrow {
   mint: string;
   /** Amount borrowed (as string to avoid precision loss) */
   borrowedAmount: string;
+  /** Optional borrow-leg cumulative borrow rate BSF (BigFractionBytes as bigint string) */
+  cumulativeBorrowRateBsfRaw?: string;
 }

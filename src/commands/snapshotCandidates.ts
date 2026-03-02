@@ -12,6 +12,7 @@ import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
 import { selectCandidates, type ScoredObligation } from "../strategy/candidateSelector.js";
 import { explainHealth } from "../math/healthBreakdown.js";
 import { isLiquidatable } from "../math/liquidation.js";
+import { SF_SCALE } from "../math/fractionScale.js";
 import { divBigintToNumber } from "../utils/bn.js";
 import { getKlendSdkVerifier } from "../engine/klendSdkVerifier.js";
 
@@ -486,7 +487,6 @@ async function main() {
           // Protocol SF cross-check
           const decoded = entry.decoded;
           const cAny = c as any;
-          const SF_SCALE = 10n ** 18n;
           const sfToUsd = (raw: string | undefined): string => {
             try {
               return divBigintToNumber(BigInt(raw ?? '0'), SF_SCALE, 2).toFixed(2);

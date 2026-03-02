@@ -5,6 +5,10 @@ import { loadReserves } from "../cache/reserveCache.js";
 import * as decoder from "../kamino/decoder.js";
 import * as discriminator from "../kamino/decode/discriminator.js";
 import { SOL_MINT, USDC_MINT, BTC_MINT } from "../constants/mints.js";
+import { SF_SCALE } from "../math/fractionScale.js";
+
+const sfFromRaw = (raw: bigint) => (raw * SF_SCALE).toString();
+const oneRateBsfRaw = SF_SCALE.toString();
 
 // Mock the dependencies
 vi.mock("../observability/logger.js", () => ({
@@ -76,8 +80,8 @@ describe("Reserve Cache Tests", () => {
             liquidationBonus: 500,
             borrowFactor: 100,
             availableAmountRaw: "5000000",
-            borrowedAmountSfRaw: "1000000000000000000000000",
-            cumulativeBorrowRateBsfRaw: "1000000000000000000",
+            borrowedAmountSfRaw: sfFromRaw(1000000n),
+            cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
             collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
           };
@@ -95,8 +99,8 @@ describe("Reserve Cache Tests", () => {
             liquidationBonus: 450,
             borrowFactor: 100,
             availableAmountRaw: "10000000",
-            borrowedAmountSfRaw: "2000000000000000000000000",
-            cumulativeBorrowRateBsfRaw: "1000000000000000000",
+            borrowedAmountSfRaw: sfFromRaw(2000000n),
+            cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
             collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
           };
@@ -208,8 +212,8 @@ describe("Reserve Cache Tests", () => {
             liquidationBonus: 500,
             borrowFactor: 100,
             availableAmountRaw: "5000000",
-            borrowedAmountSfRaw: "1000000000000000000000000",
-            cumulativeBorrowRateBsfRaw: "1000000000000000000",
+            borrowedAmountSfRaw: sfFromRaw(1000000n),
+            cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
             collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
           };
@@ -227,8 +231,8 @@ describe("Reserve Cache Tests", () => {
             liquidationBonus: 450,
             borrowFactor: 100,
             availableAmountRaw: "10000000",
-            borrowedAmountSfRaw: "2000000000000000000000000",
-            cumulativeBorrowRateBsfRaw: "1000000000000000000",
+            borrowedAmountSfRaw: sfFromRaw(2000000n),
+            cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
             collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
           };
@@ -364,8 +368,8 @@ describe("Reserve Cache Tests", () => {
           liquidationBonus: 500,
           borrowFactor: 100,
           availableAmountRaw: "5000000",
-          borrowedAmountSfRaw: "1000000000000000000000000",
-          cumulativeBorrowRateBsfRaw: "1000000000000000000",
+          borrowedAmountSfRaw: sfFromRaw(1000000n),
+          cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
           collateralMintTotalSupplyRaw: "1000000",
           scopePriceChain: null,
         };
@@ -447,8 +451,8 @@ describe("Reserve Cache Tests", () => {
         liquidationBonus: 500,
         borrowFactor: 100,
         availableAmountRaw: "5000000",
-        borrowedAmountSfRaw: "1000000000000000000000000",
-        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        borrowedAmountSfRaw: sfFromRaw(1000000n),
+        cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
         collateralMintTotalSupplyRaw: "1000000",
         scopePriceChain: null,
       }));
@@ -520,8 +524,8 @@ describe("Reserve Cache Tests", () => {
         liquidationBonus: 500,
         borrowFactor: 100,
         availableAmountRaw: "5000000",
-        borrowedAmountSfRaw: "1000000000000000000000000",
-        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        borrowedAmountSfRaw: sfFromRaw(1000000n),
+        cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
         collateralMintTotalSupplyRaw: "1000000",
         scopePriceChain: null,
       }));
@@ -558,7 +562,7 @@ describe("Reserve Cache Tests", () => {
 
       // Test scenario:
       // availableAmount = 1000 tokens (raw: 1000e6 = 1000000000)
-      // borrowedAmountSf = 500 tokens (scaled: 500e6 * 1e18 = 500000000000000000000000000)
+      // borrowedAmountSf = 500 tokens (scaled: 500e6 * SF_SCALE)
       // totalLiquidity = 1000 + 500 = 1500 tokens
       // collateralSupply = 1500 tokens (raw: 1500e6 = 1500000000)
       // exchangeRate = 1500 / 1500 = 1.0
@@ -575,8 +579,8 @@ describe("Reserve Cache Tests", () => {
         liquidationBonus: 500,
         borrowFactor: 100,
         availableAmountRaw: "1000000000", // 1000 USDC
-        borrowedAmountSfRaw: "500000000000000000000000000", // 500 USDC * 1e18
-        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        borrowedAmountSfRaw: sfFromRaw(500000000n), // 500 USDC * SF_SCALE
+        cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
         collateralMintTotalSupplyRaw: "1500000000", // 1500 collateral tokens
         scopePriceChain: null,
       });
@@ -590,7 +594,7 @@ describe("Reserve Cache Tests", () => {
       expect(entry).toBeDefined();
       
       // With the corrected formula: exchangeRate = collateralSupply / totalLiquidity
-      // totalLiquidity = 1000 + (500e18 / 1e18) = 1000 + 500 = 1500
+      // totalLiquidity = 1000 + (500e6*SF_SCALE / SF_SCALE) = 1000 + 500 = 1500
       // collateralSupply = 1500
       // exchangeRate = 1500 / 1500 = 1.0
       expect(entry!.collateralExchangeRateUi).toBeCloseTo(1.0, 6);
@@ -616,7 +620,7 @@ describe("Reserve Cache Tests", () => {
       );
 
       // availableAmount = 1000 tokens
-      // borrowedAmountSf = 100 tokens (scaled by 1e18)
+      // borrowedAmountSf = 100 tokens (scaled by SF_SCALE)
       // totalLiquidity = 1100 tokens
       // collateralSupply = 1200 tokens (more than liquidity due to accrued interest)
       // exchangeRate = 1200 / 1100 = ~1.091
@@ -633,8 +637,8 @@ describe("Reserve Cache Tests", () => {
         liquidationBonus: 500,
         borrowFactor: 100,
         availableAmountRaw: "1000000000", // 1000 tokens
-        borrowedAmountSfRaw: "100000000000000000000000000", // 100 tokens * 1e18
-        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        borrowedAmountSfRaw: sfFromRaw(100000000n), // 100 tokens * SF_SCALE
+        cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
         collateralMintTotalSupplyRaw: "1200000000", // 1200 collateral tokens
         scopePriceChain: null,
       });
@@ -701,8 +705,8 @@ describe("Reserve Cache Tests", () => {
           liquidationBonus: 500,
           borrowFactor: 100,
           availableAmountRaw: "1000000000",
-          borrowedAmountSfRaw: "100000000000000000000000000",
-          cumulativeBorrowRateBsfRaw: "1000000000000000000",
+          borrowedAmountSfRaw: sfFromRaw(100000000n),
+          cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
           collateralMintTotalSupplyRaw: "1000000000",
           scopePriceChain: null,
         };
@@ -759,8 +763,8 @@ describe("Reserve Cache Tests", () => {
         liquidationBonus: 500,
         borrowFactor: 100,
         availableAmountRaw: "1000000000",
-        borrowedAmountSfRaw: "100000000000000000000000000",
-        cumulativeBorrowRateBsfRaw: "1000000000000000000",
+        borrowedAmountSfRaw: sfFromRaw(100000000n),
+        cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
         collateralMintTotalSupplyRaw: "1000000000",
         scopePriceChain: null,
       }));
@@ -780,7 +784,7 @@ describe("Reserve Cache Tests", () => {
   });
 
   describe("exchange rate with cumulativeBorrowRateBsfRaw", () => {
-    it("should compute total liquidity from borrowedAmountSf / 1e18 without reapplying cumulativeBorrowRateBsfRaw", async () => {
+    it("should compute total liquidity from borrowedAmountSf / SF_SCALE without reapplying cumulativeBorrowRateBsfRaw", async () => {
       const reservePubkey = new PublicKey("d4A2prbA2whesmvHaL88BH6Ewn5N4bTSU2Ze8P6Bc4Q");
 
       mockConnection.getProgramAccounts = vi.fn().mockResolvedValue([
@@ -800,8 +804,8 @@ describe("Reserve Cache Tests", () => {
         liquidationBonus: 500,
         borrowFactor: 100,
         availableAmountRaw: "900000000", // 900 * 1e6
-        borrowedAmountSfRaw: "100000000000000000000000000", // 100 * 1e6 * 1e18
-        cumulativeBorrowRateBsfRaw: "1302500000000000000", // 1.3025e18 should NOT inflate borrow again
+        borrowedAmountSfRaw: sfFromRaw(100000000n), // 100 * 1e6 * SF_SCALE
+        cumulativeBorrowRateBsfRaw: ((SF_SCALE * 13025n) / 10000n).toString(), // 1.3025 × SF_SCALE should NOT inflate borrow again
         collateralMintTotalSupplyRaw: "1000000000", // 1000 * 1e6
         scopePriceChain: null,
       });
@@ -815,7 +819,7 @@ describe("Reserve Cache Tests", () => {
       const cache = await loadReserves(mockConnection, marketPubkey);
       const entry = cache.byMint.get(USDC_MINT)!;
       expect(entry).toBeDefined();
-      // totalLiquidityRaw = 900e6 + (100e6*1e18)/1e18 = 1000e6
+      // totalLiquidityRaw = 900e6 + (100e6*SF_SCALE)/SF_SCALE = 1000e6
       // exchangeRate = collateralSupply / totalLiquidity = 1000e6 / 1000e6 = 1
       expect(entry.collateralExchangeRateUi).toBeCloseTo(1.0, 6);
     });

@@ -1,8 +1,6 @@
 import { DecodedObligation } from '../kamino/types.js';
 import { divBigintToNumber } from '../utils/bn.js';
-
-/** Scope framework scale factor: SF values are stored as 1e18-scaled integers */
-const SF_SCALE = 10n ** 18n;
+import { SF_SCALE } from "./fractionScale.js";
 
 export interface ProtocolHealthResult {
   scored: boolean;
@@ -51,7 +49,7 @@ export function computeProtocolHealth(obligation: DecodedObligation): ProtocolHe
   const borrowedAssetsMarketValue = BigInt(obligation.borrowedAssetsMarketValueSfRaw ?? '0');
   const depositedValue = BigInt(obligation.depositedValueSfRaw ?? '0');
 
-  // Convert SF-scaled bigints to USD (divide by 1e18)
+  // Convert SF-scaled bigints to USD (divide by 2^60 Fraction scale)
   const borrowValueUsd = divBigintToNumber(borrowFactorAdjustedDebt, SF_SCALE, 6);
   const collateralValueUsd = divBigintToNumber(unhealthyBorrowValue, SF_SCALE, 6);
   const totalBorrowUsd = divBigintToNumber(borrowedAssetsMarketValue, SF_SCALE, 6);
