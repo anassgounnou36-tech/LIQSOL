@@ -142,7 +142,9 @@ export function decodeObligation(
         reserveLiquidityMintCache.get(b.borrowReserve.toString()) ||
         UNKNOWN_MINT_PLACEHOLDER,
       borrowedAmount: toBigInt(b.borrowedAmountSf).toString(),
-      cumulativeBorrowRateBsfRaw: toBigInt(b.cumulativeBorrowRateBsf ?? 0n).toString(),
+      ...(b.cumulativeBorrowRateBsf !== undefined
+        ? { cumulativeBorrowRateBsfRaw: toBigInt(b.cumulativeBorrowRateBsf).toString() }
+        : {}),
     }));
 
   return {

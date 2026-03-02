@@ -919,9 +919,15 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     
     // Get borrowed amount in base units from SF using reserve/borrow-leg rate ratio
     // For safety, we'll repay a portion of the debt (e.g., 50% close factor)
-    const borrowedAmountSf = repayBorrow.borrowedAmountSf;
+    if (!repayBorrow || typeof repayBorrow !== "object" || !("borrowedAmountSf" in repayBorrow)) {
+      throw new Error("Cannot derive repay amount: borrow leg is missing borrowedAmountSf");
+    }
+    const borrowedAmountSf = (repayBorrow as { borrowedAmountSf: unknown }).borrowedAmountSf;
     const reserveCumulativeBorrowRate = repayReserve.state.liquidity.cumulativeBorrowRateBsf;
-    const borrowLegCumulativeBorrowRate = (repayBorrow as any).cumulativeBorrowRateBsf ?? reserveCumulativeBorrowRate;
+    const borrowLegCumulativeBorrowRate =
+      "cumulativeBorrowRateBsf" in repayBorrow
+        ? (repayBorrow as { cumulativeBorrowRateBsf?: unknown }).cumulativeBorrowRateBsf
+        : undefined;
     
     // Convert from scaled fraction to base units using bigint-based math
     // adjustedBorrowedSf = borrowedSf * reserveRate / borrowLegRate
@@ -929,7 +935,7 @@ export async function buildKaminoLiquidationIxs(p: BuildKaminoLiquidationParams)
     try {
       const borrowedSf = toBigInt(borrowedAmountSf);
       const reserveRateBsf = toBigInt(reserveCumulativeBorrowRate);
-      const borrowLegRateBsf = toBigInt(borrowLegCumulativeBorrowRate);
+      const borrowLegRateBsf = toBigInt(borrowLegCumulativeBorrowRate ?? reserveCumulativeBorrowRate);
       if (borrowLegRateBsf <= 0n) {
         throw new Error("Invalid borrow leg cumulative borrow rate (must be > 0)");
       }

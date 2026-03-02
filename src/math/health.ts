@@ -177,6 +177,7 @@ function convertBorrowSfToUi(
     ) {
       const borrowLegRate = BigInt(borrowLegCumulativeBorrowRateBsfRaw);
       if (borrowLegRate > 0n) {
+        // bigint arithmetic is arbitrary precision; no overflow risk in this mul/div path.
         borrowedSf = (borrowedSf * reserveCumulativeBorrowRateBsfRaw) / borrowLegRate;
       }
     }
