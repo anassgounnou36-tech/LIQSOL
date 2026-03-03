@@ -214,8 +214,9 @@ function decodeScopePrice(
     return null;
   }
 
-  if (!Scope.isScopeChainValid(chains)) {
-    logger.warn({ chain: chains }, "[OracleCache] Invalid Scope chain");
+  const hasOutOfRangeIndex = chains.some((idx) => !Number.isInteger(idx) || idx < 0 || idx > 511);
+  if (hasOutOfRangeIndex) {
+    logger.warn({ chain: chains }, "[OracleCache] Scope chain index out of range");
     return null;
   }
 
@@ -227,12 +228,7 @@ function decodeScopePrice(
     return null;
   }
 
-  try {
-    // Compute USD price from the full chain
-    const result = Scope.getPriceFromScopeChain(chains, oraclePrices);
-
-    // Staleness check using the oldest timestamp in the chain
-    const timestampSec = result.timestamp.toNumber();
+  const buildPriceData = (uiPrice: number, timestampSec: number): OraclePriceData | null => {
     const ageSec = Date.now() / 1000 - timestampSec;
     if (ageSec > SCOPE_MAX_AGE_SEC) {
       logger.warn(
@@ -242,9 +238,6 @@ function decodeScopePrice(
       return null;
     }
 
-    const uiPrice = result.price.toNumber();
-
-    // Validate result
     if (!Number.isFinite(uiPrice) || uiPrice <= 0) {
       logger.warn({ chain: chains, uiPrice }, "[OracleCache] Scope chain returned invalid price");
       return null;
@@ -277,7 +270,27 @@ function decodeScopePrice(
       slot: BigInt(Math.floor(timestampSec)),
       oracleType: "scope",
     };
+  };
+
+  try {
+    // Compute USD price from the full chain
+    const result = Scope.getPriceFromScopeChain(chains, oraclePrices);
+    return buildPriceData(result.price.toNumber(), result.timestamp.toNumber());
   } catch (err) {
+    if (chains.length === 1) {
+      const singleHop = oraclePrices.prices[chains[0]];
+      const value = singleHop?.price?.value ? Number(singleHop.price.value.toString()) : NaN;
+      const exp = singleHop?.price?.exp ? Number(singleHop.price.exp.toString()) : NaN;
+      const timestampSec = singleHop?.unixTimestamp ? Number(singleHop.unixTimestamp.toString()) : NaN;
+      if (Number.isFinite(value) && Number.isFinite(exp) && Number.isFinite(timestampSec)) {
+        const fallbackUiPrice = value * Math.pow(10, -exp);
+        const fallbackDecoded = buildPriceData(fallbackUiPrice, timestampSec);
+        if (fallbackDecoded) {
+          logger.debug({ chain: chains }, "[OracleCache] Scope single-hop fallback decode succeeded");
+          return fallbackDecoded;
+        }
+      }
+    }
     logger.warn(
       { chain: chains, err: err instanceof Error ? err.message : String(err) },
       "[OracleCache] Scope chain pricing failed"
@@ -799,6 +812,27 @@ export async function loadOracles(
       coverageSummary,
       "[OracleCache] Oracle coverage summary"
     );
+
+    for (const [reservePubkey, reserve] of reserveCache.byReserve.entries()) {
+      if (!unpricedRequiredMints.has(reserve.liquidityMint)) continue;
+      const scopeOraclePubkey =
+        reserve.oraclePubkeys.find((pk) => scopeOracleMintChains.get(pk.toString())?.has(reserve.liquidityMint))?.toString() ??
+        reserve.oraclePubkeys[0]?.toString() ??
+        null;
+      const scopePriceChainFiltered =
+        scopeOraclePubkey ? (scopeOracleMintChains.get(scopeOraclePubkey)?.get(reserve.liquidityMint) ?? null) : null;
+      logger.debug(
+        {
+          reservePubkey,
+          liquidityMint: reserve.liquidityMint,
+          scopeOraclePubkey,
+          scopePriceChainRaw: reserve.scopePriceChain,
+          scopePriceChainFiltered,
+          oraclePubkeys: reserve.oraclePubkeys.map((pk) => pk.toString()),
+        },
+        "[OracleCache] Unpriced required mint reserve details"
+      );
+    }
   } else {
     logger.info(
       coverageSummary,

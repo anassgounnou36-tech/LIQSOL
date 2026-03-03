@@ -210,6 +210,38 @@ describe("Scope Chain Pricing Tests", () => {
       expect(priceData.price).toBe(10000000000n);
       expect(priceData.exponent).toBe(-8);
     });
+
+    it("computes USD price from single-element chain [0]", async () => {
+      const mint = "So11111111111111111111111111111111111111112";
+      const reservePubkey = PublicKey.unique();
+
+      setScopeOracleMintChain(oraclePubkey, mint, [0]);
+
+      const currentTimestamp = Math.floor(Date.now() / 1000);
+      const mockPrices = createMockScopePriceArray(
+        new Map([
+          [0, { price: "9900000000", exp: 8, timestamp: currentTimestamp }],
+        ])
+      );
+
+      vi.mocked(OraclePrices.decode).mockReturnValue({ prices: mockPrices } as any);
+
+      const scopeData = Buffer.alloc(1000);
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: scopeData, owner: SCOPE_PROGRAM_ID },
+      ]);
+
+      const reserveEntry = makeReserveEntry(reservePubkey, mint, oraclePubkey, [0]);
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
+
+      const cache = await loadOracles(mockConnection, reserveCache);
+
+      expect(cache.has(mint)).toBe(true);
+      expect(cache.get(mint)?.price).toBe(9900000000n);
+    });
   });
 
   describe("Invalid chain handling", () => {

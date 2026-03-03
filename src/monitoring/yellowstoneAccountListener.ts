@@ -228,7 +228,7 @@ export class YellowstoneAccountListener extends EventEmitter {
     logger.info({ reconnectCount: this.reconnectCount, delayMs: delay }, 'Reconnecting account listener');
     // Cleanup before resubscribe
     this.cleanupStream();
-    setTimeout(() => this.subscribe(), delay);
+    setTimeout(() => void this.subscribe().catch((e) => this.onError(e as Error)), delay);
   }
 
   // Public API to update account targets and resubscribe

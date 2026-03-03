@@ -26,23 +26,28 @@ export function buildMintObligationMapping(): { mintToKeys: MintToKeys; keyToMin
   const candidatesPath = path.join(process.cwd(), 'data', 'candidates.json');
 
   const queue = loadJson(queuePath);
-  const candidates = queue ? null : loadJson(candidatesPath);
-  const sourceArray: any[] = Array.isArray(queue)
+  const queueArray: any[] = Array.isArray(queue)
     ? queue
     : Array.isArray(queue?.data)
     ? queue.data
-    : Array.isArray(candidates?.candidates)
+    : [];
+  const shouldUseCandidates = queueArray.length === 0;
+  const candidates = shouldUseCandidates ? loadJson(candidatesPath) : null;
+  const candidatesArray: any[] = Array.isArray(candidates?.candidates)
     ? candidates.candidates
+    : Array.isArray(candidates?.data)
+    ? candidates.data
     : Array.isArray(candidates)
     ? candidates
     : [];
+  const sourceArray: any[] = shouldUseCandidates ? candidatesArray : queueArray;
 
   if (!sourceArray || sourceArray.length === 0) {
     logger.warn('No mapping source found: expected data/tx_queue.json or data/candidates.json');
     return { mintToKeys, keyToMints };
   }
 
-  logger.debug({ source: queue ? 'tx_queue.json' : 'candidates.json', count: sourceArray.length }, 'Building mint→obligation mapping');
+  logger.debug({ source: shouldUseCandidates ? 'candidates.json' : 'tx_queue.json', count: sourceArray.length }, 'Building mint→obligation mapping');
 
   for (const item of sourceArray) {
     const key = String(item.key ?? item.obligationPubkey ?? '');

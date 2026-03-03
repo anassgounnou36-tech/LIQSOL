@@ -15,6 +15,14 @@ interface BotRunOptions {
   maxAttemptsPerCycle?: number;
 }
 
+process.on('unhandledRejection', (err) => {
+  logger.error({ err }, 'UnhandledRejection');
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error({ err }, 'UncaughtException');
+});
+
 function parseArgs(): BotRunOptions {
   const args = process.argv.slice(2);
   
