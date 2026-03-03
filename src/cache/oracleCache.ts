@@ -607,6 +607,7 @@ export async function loadOracles(
   let scopeCount = 0;
   let unknownCount = 0;
   let failedCount = 0;
+  const oracleProgramByPubkey = new Map<string, 'pyth' | 'switchboard' | 'scope' | 'unknown'>();
 
   for (const { pubkey, data, owner } of allOracleAccounts) {
     if (!data) {
@@ -628,6 +629,16 @@ export async function loadOracles(
     }
 
     const pubkeyStr = pubkey.toString();
+    oracleProgramByPubkey.set(
+      pubkeyStr,
+      owner.equals(PYTH_PROGRAM_ID)
+        ? 'pyth'
+        : owner.equals(SWITCHBOARD_V2_PROGRAM_ID)
+        ? 'switchboard'
+        : owner.equals(SCOPE_PROGRAM_ID)
+        ? 'scope'
+        : 'unknown'
+    );
     const mints = oracleToMints.get(pubkeyStr);
     if (!mints || mints.size === 0) {
       continue;
@@ -823,6 +834,12 @@ export async function loadOracles(
         null;
       const scopePriceChainFiltered =
         scopeOraclePubkey ? (scopeOracleMintChains.get(scopeOraclePubkey)?.get(reserve.liquidityMint) ?? null) : null;
+      const pythOraclePubkeys = reserve.oraclePubkeys
+        .filter((pk) => oracleProgramByPubkey.get(pk.toString()) === 'pyth')
+        .map((pk) => pk.toString());
+      const switchboardOraclePubkeys = reserve.oraclePubkeys
+        .filter((pk) => oracleProgramByPubkey.get(pk.toString()) === 'switchboard')
+        .map((pk) => pk.toString());
       logger.debug(
         {
           reservePubkey,
@@ -830,6 +847,8 @@ export async function loadOracles(
           scopeOraclePubkey,
           scopePriceChainRaw: reserve.scopePriceChain,
           scopePriceChainFiltered,
+          pythOraclePubkeys,
+          switchboardOraclePubkeys,
           oraclePubkeys: reserve.oraclePubkeys.map((pk) => pk.toString()),
         },
         "[OracleCache] Unpriced required mint reserve details"

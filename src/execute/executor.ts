@@ -129,6 +129,7 @@ interface Plan {
   hazard?: number | string;
   ttlStr?: string;
   ttlMin?: number | string | null; // Can be null for unknown
+  predictedAtMs?: number | string | null; // Optional alternate timestamp key
   predictedLiquidationAtMs?: number | string | null; // Absolute timestamp
   createdAtMs?: number | string;
   repayMint?: string;
@@ -323,6 +324,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const minFeePayerLamports = Math.floor(Number(env.EXEC_MIN_FEE_PAYER_SOL ?? 0.05) * LAMPORTS_PER_SOL);
     const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
     const ttlGraceMs = Number(env.TTL_GRACE_MS ?? 60_000);
+    const execReadyTtlMaxMin = Number(env.EXEC_READY_TTL_MAX_MIN ?? 0.25);
+    const execEarlyGraceMs = Number(env.EXEC_EARLY_GRACE_MS ?? 3_000);
     const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
     const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'false') === 'true';
     const dryRunSetupCacheTtlMs = Math.max(0, Number(env.EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS ?? 300) * 1000);
@@ -335,6 +338,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     console.log(`  EXEC_MAX_TTL_MIN: ${maxTtlMin}`);
     console.log(`  EXEC_MIN_FEE_PAYER_SOL: ${Number(env.EXEC_MIN_FEE_PAYER_SOL ?? 0.05)}`);
     console.log(`  TTL_GRACE_MS: ${ttlGraceMs}`);
+    console.log(`  EXEC_READY_TTL_MAX_MIN: ${execReadyTtlMaxMin}`);
+    console.log(`  EXEC_EARLY_GRACE_MS: ${execEarlyGraceMs}`);
     console.log(`  TTL_UNKNOWN_PASSES: ${ttlUnknownPasses}`);
     console.log(`  SCHED_FORCE_INCLUDE_LIQUIDATABLE: ${forceIncludeLiquidatable}`);
 
@@ -370,6 +375,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       executorLut = await loadExecutorLut(connection, new PublicKey(executorLutAddress));
       if (executorLut) {
         console.log(`[LUT] executor LUT loaded: ${executorLut.key.toBase58()} size=${executorLut.state.addresses.length}`);
+        if (executorLut.state.addresses.length === 0) {
+          console.log('[LUT] executor LUT is empty; skipping LUT usage until populated');
+        }
       } else {
         console.warn(`[LUT] executor LUT not found on chain: ${executorLutAddress}`);
       }
@@ -393,16 +401,17 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const nowMs = Date.now();
     const filterReasons = {
       total: plans.length,
-    rejected_ev: 0,
-    rejected_ttl_expired: 0,
-    rejected_ttl_too_high: 0,
-    rejected_hazard: 0,
-    accepted_liquidatable_forced: 0,
-    accepted_normal: 0,
-  };
+      rejected_ev: 0,
+      rejected_ttl_expired: 0,
+      rejected_ttl_too_high: 0,
+      rejected_hazard: 0,
+      accepted_liquidatable_forced: 0,
+      accepted_normal: 0,
+      skipped_too_early: 0,
+    };
 
-  const candidates = plans
-    .filter(p => {
+    const candidates = plans
+      .filter(p => {
       // Force-include liquidatable if enabled
       if (forceIncludeLiquidatable && p.liquidationEligible) {
         filterReasons.accepted_liquidatable_forced++;
@@ -470,7 +479,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       
       // Quaternary: hazard desc
       return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
-    });
+      });
 
   console.log('[Executor] Filter results:', filterReasons);
 
@@ -565,6 +574,35 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       continue; // Skip to next candidate
     }
 
+    const targetPlan = target as Plan;
+    const targetTtlMin = targetPlan.ttlMin === null || targetPlan.ttlMin === undefined ? null : Number(targetPlan.ttlMin);
+    const targetPredictedAtMs =
+      typeof targetPlan.predictedAtMs === 'number'
+        ? targetPlan.predictedAtMs
+        : typeof targetPlan.predictedLiquidationAtMs === 'number'
+        ? targetPlan.predictedLiquidationAtMs
+        : typeof targetPlan.predictedAtMs === 'string'
+        ? Number(targetPlan.predictedAtMs)
+        : typeof targetPlan.predictedLiquidationAtMs === 'string'
+        ? Number(targetPlan.predictedLiquidationAtMs)
+        : null;
+
+    if (targetTtlMin !== null && Number.isFinite(targetTtlMin) && targetTtlMin > execReadyTtlMaxMin) {
+      filterReasons.skipped_too_early++;
+      console.log(
+        `[Executor] skip reason=too-early key=${planKey.slice(0, 8)} ttlMin=${targetTtlMin.toFixed(3)} > readyWindow=${execReadyTtlMaxMin}`
+      );
+      continue;
+    }
+
+    if (targetPredictedAtMs !== null && Number.isFinite(targetPredictedAtMs) && now < targetPredictedAtMs - execEarlyGraceMs) {
+      filterReasons.skipped_too_early++;
+      console.log(
+        `[Executor] skip reason=too-early key=${planKey.slice(0, 8)} now=${now} predictedAtMs=${targetPredictedAtMs} earlyGraceMs=${execEarlyGraceMs}`
+      );
+      continue;
+    }
+
     // Execute this candidate (wrapped in try-catch for error handling)
     try {
       console.log('[Executor] Building full transaction...');
@@ -640,7 +678,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       });
       const baseSizeCheck = isTxTooLarge(baseSizeTx);
 
-      let allLuts = dedupeLookupTables([...candidateLuts, executorLut]);
+      let allLuts = dedupeLookupTables([
+        ...candidateLuts,
+        executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+      ]);
       let sizeCheckTx = await buildVersionedTx({
         payer: signer.publicKey,
         blockhash: sizeBh.blockhash,
@@ -658,7 +699,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         if (missingCount > 0) {
           console.log(`[LUT] extending LUT: missing=${missingCount} (batched)`);
           executorLut = await extendExecutorLut(connection, signer, executorLut, desiredAddresses);
-          allLuts = dedupeLookupTables([...candidateLuts, executorLut]);
+          allLuts = dedupeLookupTables([
+            ...candidateLuts,
+            executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+          ]);
           const recheckBh = await connection.getLatestBlockhash();
           sizeCheckTx = await buildVersionedTx({
             payer: signer.publicKey,
@@ -677,7 +721,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       if (sizeCheck.tooLarge) {
         console.log(`[Executor] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} disablePostFarmsRefresh=${profile.disablePostFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode} omitComputeBudgetIxs=${profile.omitComputeBudgetIxs}`);
         if (profileIndex === 0) {
-          const farmsRequired = result.metadata.farmRequiredModes.length > 0;
+          const farmsRequired =
+            result.metadata.hasFarmsRefresh ||
+            result.metadata.hasPostFarmsRefresh ||
+            result.metadata.farmRequiredModes.length > 0;
           if (farmsRequired) {
             buildProfiles.push(
               { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true },
@@ -778,7 +825,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     }
     
     const atomicBh = await connection.getLatestBlockhash();
-    const atomicLuts = dedupeLookupTables([...atomicLookupTables, executorLut]);
+    const atomicLuts = dedupeLookupTables([
+      ...atomicLookupTables,
+      executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+    ]);
     const atomicTx = await buildVersionedTx({
       payer: signer.publicKey,
       blockhash: atomicBh.blockhash,
@@ -889,7 +939,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       signer,
       async ({ blockhash, cuLimit, cuPrice }) => {
         const rebuilt = withUpdatedComputeBudget(atomicIxs, atomicLabels, cuLimit, cuPrice);
-        const rebuildAtomicLuts = dedupeLookupTables([...atomicLookupTables, executorLut]);
+        const rebuildAtomicLuts = dedupeLookupTables([
+          ...atomicLookupTables,
+          executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+        ]);
         return buildVersionedTx({
           payer: signer.publicKey,
           blockhash,
@@ -938,7 +991,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
   // Build and sign transaction
   const bh = await connection.getLatestBlockhash();
-  const mainLuts = dedupeLookupTables([...swapLookupTables, executorLut]);
+  const mainLuts = dedupeLookupTables([
+    ...swapLookupTables,
+    executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+  ]);
   const tx = presubmittedTx ?? await buildVersionedTx({
     payer: signer.publicKey,
     blockhash: bh.blockhash,
@@ -1155,7 +1211,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         signer,
         async ({ blockhash, cuLimit, cuPrice }) => {
           const rebuilt = withUpdatedComputeBudget(ixs, labels, cuLimit, cuPrice);
-          const rebuildMainLuts = dedupeLookupTables([...swapLookupTables, executorLut]);
+          const rebuildMainLuts = dedupeLookupTables([
+            ...swapLookupTables,
+            executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+          ]);
           return buildVersionedTx({
             payer: signer.publicKey,
             blockhash,

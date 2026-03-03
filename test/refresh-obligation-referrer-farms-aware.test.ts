@@ -61,7 +61,10 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
     const executor = read('src/execute/executor.ts');
     const presubmitter = read('src/presubmit/presubmitter.ts');
 
-    expect(executor).toContain('const farmsRequired = result.metadata.farmRequiredModes.length > 0;');
+    expect(executor).toContain('const farmsRequired =');
+    expect(executor).toContain('result.metadata.hasFarmsRefresh ||');
+    expect(executor).toContain('result.metadata.hasPostFarmsRefresh ||');
+    expect(executor).toContain('result.metadata.farmRequiredModes.length > 0;');
     expect(executor).toContain('if (farmsRequired) {');
     expect(executor).toContain("omitComputeBudgetIxs: true");
     expect(executor).toContain("{ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true }");
@@ -82,6 +85,23 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
     expect(canonical).toContain('if (!config.omitComputeBudgetIxs) {');
     expect(planBuilder).toContain('omitComputeBudgetIxs?: boolean');
     expect(planBuilder).toContain('omitComputeBudgetIxs: opts.omitComputeBudgetIxs');
+  });
+
+  it('gates execution to a ready TTL window and early grace', () => {
+    const executor = read('src/execute/executor.ts');
+    const env = read('src/config/env.ts');
+
+    expect(env).toContain("EXEC_READY_TTL_MAX_MIN: z.string().optional().default('0.25')");
+    expect(env).toContain("EXEC_EARLY_GRACE_MS: z.string().optional().default('3000')");
+    expect(executor).toContain("const execReadyTtlMaxMin = Number(env.EXEC_READY_TTL_MAX_MIN ?? 0.25);");
+    expect(executor).toContain("const execEarlyGraceMs = Number(env.EXEC_EARLY_GRACE_MS ?? 3_000);");
+    expect(executor).toContain('skip reason=too-early');
+  });
+
+  it('avoids using empty executor LUT during compilation', () => {
+    const executor = read('src/execute/executor.ts');
+    expect(executor).toContain('executor LUT is empty; skipping LUT usage until populated');
+    expect(executor).toContain('executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined');
   });
 
   it('supports optional post farms in compiled validation', () => {
