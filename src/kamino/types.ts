@@ -35,6 +35,8 @@ export interface DecodedReserve {
   collateralMintTotalSupplyRaw: string;
   /** Scope price chain indices array (0-511) for multi-chain Scope oracles with fallback, null if not using Scope */
   scopePriceChain: number[] | null;
+  /** Scope oracle account pubkey for this reserve, null/undefined if not using Scope */
+  scopeOraclePubkey?: string | null;
 }
 
 /**

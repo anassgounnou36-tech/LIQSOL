@@ -3,6 +3,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { loadOracles } from "../cache/oracleCache.js";
 import type { ReserveCache } from "../cache/reserveCache.js";
+import { extractScopePriceChain } from "../kamino/decode/reserveDecoder.js";
 
 // Mock the dependencies
 vi.mock("../observability/logger.js", () => ({
@@ -22,7 +23,7 @@ vi.mock("@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js", () =>
 }));
 
 import { OraclePrices } from "@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js";
-import { scopeMintChainMap } from "../cache/reserveCache.js";
+import { scopeOracleMintChains } from "../cache/reserveCache.js";
 
 const SCOPE_PROGRAM_ID = new PublicKey("HFn8GnPADiny6XqUoWE8uRPPxb29ikn4yTuPa9MF2fWJ");
 
@@ -75,6 +76,20 @@ function makeReserveEntry(
   };
 }
 
+function setScopeOracleMintChain(
+  oraclePubkey: PublicKey,
+  mint: string,
+  chain: number[]
+): void {
+  const oracleKey = oraclePubkey.toString();
+  let mintChains = scopeOracleMintChains.get(oracleKey);
+  if (!mintChains) {
+    mintChains = new Map<string, number[]>();
+    scopeOracleMintChains.set(oracleKey, mintChains);
+  }
+  mintChains.set(mint, chain);
+}
+
 describe("Scope Chain Pricing Tests", () => {
   let mockConnection: Connection;
   const oraclePubkey = new PublicKey("3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH");
@@ -82,7 +97,41 @@ describe("Scope Chain Pricing Tests", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockConnection = {} as Connection;
-    scopeMintChainMap.clear();
+    scopeOracleMintChains.clear();
+  });
+
+  describe("Scope chain sentinel parsing", () => {
+    const scopeFeed = { toString: () => "3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH" };
+
+    it("parses [0, 3, 512, 65535] into [0, 3]", () => {
+      const chain = extractScopePriceChain({
+        scopeConfiguration: {
+          priceFeed: scopeFeed,
+          priceChain: [0, 3, 512, 65535],
+        },
+      });
+      expect(chain).toEqual([0, 3]);
+    });
+
+    it("parses [512, 65535, 512, 65535] as null", () => {
+      const chain = extractScopePriceChain({
+        scopeConfiguration: {
+          priceFeed: scopeFeed,
+          priceChain: [512, 65535, 512, 65535],
+        },
+      });
+      expect(chain).toBeNull();
+    });
+
+    it("parses [0, 65535, 65535, 65535] as null", () => {
+      const chain = extractScopePriceChain({
+        scopeConfiguration: {
+          priceFeed: scopeFeed,
+          priceChain: [0, 65535, 65535, 65535],
+        },
+      });
+      expect(chain).toBeNull();
+    });
   });
 
   describe("Multi-hop chain pricing", () => {
@@ -92,7 +141,7 @@ describe("Scope Chain Pricing Tests", () => {
 
       // chain [0, 1]: prices[0] = 86.5 USD (SOL/USD), prices[1] = 1.15 (LST/SOL ratio)
       // Expected final price: 86.5 * 1.15 = 99.475 USD
-      scopeMintChainMap.set(mint, [0, 1]);
+      setScopeOracleMintChain(oraclePubkey, mint, [0, 1]);
 
       const currentTimestamp = Math.floor(Date.now() / 1000);
       const mockPrices = createMockScopePriceArray(
@@ -132,7 +181,7 @@ describe("Scope Chain Pricing Tests", () => {
       const reservePubkey = PublicKey.unique();
 
       // chain [50]: prices[50] = 100 USD
-      scopeMintChainMap.set(mint, [50]);
+      setScopeOracleMintChain(oraclePubkey, mint, [50]);
 
       const currentTimestamp = Math.floor(Date.now() / 1000);
       const mockPrices = createMockScopePriceArray(
@@ -169,7 +218,7 @@ describe("Scope Chain Pricing Tests", () => {
       const reservePubkey = PublicKey.unique();
 
       // chain [100]: prices[100] = null (missing)
-      scopeMintChainMap.set(mint, [100]);
+      setScopeOracleMintChain(oraclePubkey, mint, [100]);
 
       vi.mocked(OraclePrices.decode).mockReturnValue({
         prices: new Array(512).fill(null),
@@ -197,7 +246,7 @@ describe("Scope Chain Pricing Tests", () => {
       const reservePubkey = PublicKey.unique();
 
       // chain [1]: prices[1] = null
-      scopeMintChainMap.set(mint, [1]);
+      setScopeOracleMintChain(oraclePubkey, mint, [1]);
 
       vi.mocked(OraclePrices.decode).mockReturnValue({
         prices: new Array(512).fill(null),
@@ -226,7 +275,7 @@ describe("Scope Chain Pricing Tests", () => {
       const reservePubkey = PublicKey.unique();
 
       // Use chain [1] (non-zero, valid according to isScopeChainValid)
-      scopeMintChainMap.set(mint, [1]);
+      setScopeOracleMintChain(oraclePubkey, mint, [1]);
 
       const staleTimestamp = Math.floor(Date.now() / 1000) - 130; // 130 seconds old (> 120s threshold)
       const mockPrices = createMockScopePriceArray(
@@ -258,7 +307,7 @@ describe("Scope Chain Pricing Tests", () => {
       const mint = "So11111111111111111111111111111111111111112";
       const reservePubkey = PublicKey.unique();
 
-      scopeMintChainMap.set(mint, [0, 1]);
+      setScopeOracleMintChain(oraclePubkey, mint, [0, 1]);
 
       const currentTimestamp = Math.floor(Date.now() / 1000);
       const staleTimestamp = currentTimestamp - 130; // 130 seconds old (> 120s threshold)
@@ -291,12 +340,12 @@ describe("Scope Chain Pricing Tests", () => {
   });
 
   describe("Magnitude sanity checks", () => {
-    it("rejects extremely tiny prices (e.g., ~1e-6 USD)", async () => {
+    it("accepts extremely tiny positive prices (e.g., ~1e-6 USD)", async () => {
       const mint = "So11111111111111111111111111111111111111112";
       const reservePubkey = PublicKey.unique();
 
       // Use chain [1] (non-zero, valid)
-      scopeMintChainMap.set(mint, [1]);
+      setScopeOracleMintChain(oraclePubkey, mint, [1]);
 
       // 1e12 * 10^(-18) = 1e-6 USD
       const currentTimestamp = Math.floor(Date.now() / 1000);
@@ -321,7 +370,7 @@ describe("Scope Chain Pricing Tests", () => {
 
       const cache = await loadOracles(mockConnection, reserveCache);
 
-      expect(cache.has(mint)).toBe(false);
+      expect(cache.has(mint)).toBe(true);
     });
 
     it("rejects extremely large prices (e.g., > 1,000,000 USD)", async () => {
@@ -329,7 +378,7 @@ describe("Scope Chain Pricing Tests", () => {
       const reservePubkey = PublicKey.unique();
 
       // Use chain [1] (non-zero, valid)
-      scopeMintChainMap.set(mint, [1]);
+      setScopeOracleMintChain(oraclePubkey, mint, [1]);
 
       // 1e20 * 10^(-8) = 1e12 USD
       const currentTimestamp = Math.floor(Date.now() / 1000);
@@ -362,7 +411,7 @@ describe("Scope Chain Pricing Tests", () => {
       const reservePubkey = PublicKey.unique();
 
       // Use chain [1] (non-zero, valid)
-      scopeMintChainMap.set(mint, [1]);
+      setScopeOracleMintChain(oraclePubkey, mint, [1]);
 
       // 1e10 * 10^(-8) = 100 USD
       const currentTimestamp = Math.floor(Date.now() / 1000);

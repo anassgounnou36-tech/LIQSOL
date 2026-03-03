@@ -2,7 +2,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { logger } from "../observability/logger.js";
 import type { ReserveCache } from "./reserveCache.js";
-import { scopeMintChainMap, getMintsByOracle } from "./reserveCache.js";
+import { getMintsByOracle, scopeOracleMintChains } from "./reserveCache.js";
 import { parsePriceData } from "@pythnetwork/client";
 import { OraclePrices } from "@kamino-finance/scope-sdk/dist/@codegen/scope/accounts/index.js";
 import { Scope } from "@kamino-finance/scope-sdk";
@@ -245,13 +245,13 @@ function decodeScopePrice(
     const uiPrice = result.price.toNumber();
 
     // Validate result
-    if (!isFinite(uiPrice) || isNaN(uiPrice) || uiPrice <= 0) {
+    if (!Number.isFinite(uiPrice) || uiPrice <= 0) {
       logger.warn({ chain: chains, uiPrice }, "[OracleCache] Scope chain returned invalid price");
       return null;
     }
 
-    // Magnitude check (USD prices should be in reasonable range)
-    if (uiPrice < 0.0001 || uiPrice > 1_000_000) {
+    // Accept any finite positive price; keep only an upper-bound sanity check.
+    if (uiPrice > 1_000_000) {
       logger.warn({ chain: chains, uiPrice }, "[OracleCache] Scope chain price magnitude out of range");
       return null;
     }
@@ -353,12 +353,12 @@ export function applyOracleAccountUpdate(args: {
   const updatedMints = new Set<string>();
 
   if (oracleType === 'scope') {
-    for (const mint of allMints) {
-      const chains = scopeMintChainMap.get(mint) ?? [];
-      if (chains.length === 0) {
-        logger.warn({ oracle: oraclePubkey, mint }, "[OracleCache] Missing Scope chain mapping for mint; skipping");
-        continue;
-      }
+    const mintChains = scopeOracleMintChains.get(oraclePubkey);
+    if (!mintChains) {
+      logger.debug({ oracle: oraclePubkey }, "[OracleCache] Scope oracle has no mint-chain mapping; skipping");
+      return { updatedMints: [], oracleType };
+    }
+    for (const [mint, chains] of mintChains.entries()) {
       const decoded = decodeScopePrice(data, chains);
       if (!decoded) continue;
       const adjustedPrice = applyStablecoinClamp(decoded.price, decoded.exponent, mint);
@@ -585,19 +585,6 @@ export async function loadOracles(
     "Fetched oracle account data"
   );
 
-  // Diagnostic: Check oracle coverage
-  // Note: Scope oracles use shared feed accounts, so few unique oracles is expected
-  if (oraclePubkeys.length < 10 && reserveCache.byReserve.size > 50) {
-    logger.warn(
-      {
-        cached: oraclePubkeys.length,
-        reserveCount: reserveCache.byReserve.size,
-        note: 'Scope oracles use shared feed accounts',
-      },
-      "Oracle coverage check"
-    );
-  }
-
   // Decode oracle accounts and map to mints
   const cache = new Map<string, OraclePriceData>();
   let pythCount = 0;
@@ -648,12 +635,10 @@ export async function loadOracles(
         switchboardCount++;
       }
     } else if (owner.equals(SCOPE_PROGRAM_ID)) {
-      // Scope oracles need mint-aware chain selection
-      // Decode separately for each mint that uses this oracle
-      const assignedMints = getMintsByOracle(reserveCache, pubkeyStr);
-      
-      if (assignedMints.length === 0) {
-        logger.debug({ oracle: pubkeyStr }, "Scope oracle has no assigned mints, skipping");
+      const mintChains = scopeOracleMintChains.get(pubkeyStr);
+
+      if (!mintChains || mintChains.size === 0) {
+        logger.debug({ oracle: pubkeyStr }, "Scope oracle has no mint-chain mapping, skipping");
         continue;
       }
       
@@ -661,13 +646,7 @@ export async function loadOracles(
       let diagnosticPriceData: OraclePriceData | null = null;
       
       // Decode price for each mint using its reserve-configured Scope price chain
-      for (const mint of assignedMints) {
-        const chains = scopeMintChainMap.get(mint) ?? [];
-        if (chains.length === 0) {
-          logger.warn({ oracle: pubkeyStr, mint }, "[OracleCache] Missing Scope chain mapping for mint; skipping");
-          continue;
-        }
-
+      for (const [mint, chains] of mintChains.entries()) {
         const priceData = decodeScopePrice(data, chains);
         if (!priceData) {
           logger.warn(
@@ -790,26 +769,42 @@ export async function loadOracles(
     "Oracle cache loaded successfully"
   );
 
-  // Coverage summary: report how many mints have prices vs. missing
-  const pricedMints = new Set<string>();
-  const unpricedMints = new Set<string>();
-  for (const [mint] of cache.entries()) {
-    pricedMints.add(mint);
+  // Coverage summary: only liquidity mints are required for pricing.
+  const requiredPriceMints = new Set<string>();
+  for (const [, reserve] of reserveCache.byReserve.entries()) {
+    requiredPriceMints.add(reserve.liquidityMint);
   }
-  for (const [mint] of reserveCache.byMint.entries()) {
-    if (!pricedMints.has(mint)) {
-      unpricedMints.add(mint);
+  const pricedRequiredMints = new Set<string>();
+  for (const mint of requiredPriceMints) {
+    if (cache.has(mint)) {
+      pricedRequiredMints.add(mint);
     }
   }
-  logger.info(
-    {
-      reserveCount: reserveCache.byReserve.size,
-      pricedMints: pricedMints.size,
-      unpricedMints: unpricedMints.size,
-      unpricedSample: Array.from(unpricedMints).slice(0, 5),
-    },
-    "[OracleCache] Oracle coverage summary"
-  );
+  const unpricedRequiredMints = new Set<string>();
+  for (const mint of requiredPriceMints) {
+    if (!pricedRequiredMints.has(mint)) {
+      unpricedRequiredMints.add(mint);
+    }
+  }
+  const coverageSummary = {
+    reserveCount: reserveCache.byReserve.size,
+    requiredPriceMintsCount: requiredPriceMints.size,
+    pricedRequiredMintsCount: pricedRequiredMints.size,
+    unpricedRequiredMintsCount: unpricedRequiredMints.size,
+    unpricedRequiredMintsSample: Array.from(unpricedRequiredMints).slice(0, 5),
+  };
+
+  if (unpricedRequiredMints.size > 0) {
+    logger.warn(
+      coverageSummary,
+      "[OracleCache] Oracle coverage summary"
+    );
+  } else {
+    logger.info(
+      coverageSummary,
+      "[OracleCache] Oracle coverage summary"
+    );
+  }
 
   // Part B: Oracle sanity checks (prevent false positives)
   performOracleSanityChecks(cache, allowedLiquidityMints);

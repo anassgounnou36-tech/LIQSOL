@@ -3,7 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { getConnection } from "../solana/connection.js";
 import { loadReadonlyEnv } from "../config/env.js";
 import { logger } from "../observability/logger.js";
-import { loadReserves, scopeMintChainMap } from "../cache/reserveCache.js";
+import { loadReserves, scopeOracleMintChains } from "../cache/reserveCache.js";
 import { loadOracles } from "../cache/oracleCache.js";
 import { SOL_MINT, USDC_MINT, USDT_MINT } from "../constants/mints.js";
 import { uiPriceFromMantissa } from "../utils/priceConversion.js";
@@ -126,12 +126,20 @@ async function main() {
         console.log(`    - ${oraclePubkey.toString()}`);
       }
 
-      // Check if this mint has Scope chain configuration
-      const scopeChains = scopeMintChainMap.get(mint);
-      if (scopeChains && scopeChains.length > 0) {
-        console.log(`  Scope Configured Chains: [${scopeChains.join(", ")}]`);
-      } else {
-        console.log(`  Scope Configured Chains: None (default to chain 0)`);
+      let printedScopeConfig = false;
+      for (const oraclePubkey of reserve.oraclePubkeys) {
+        const oracleKey = oraclePubkey.toString();
+        const mintChains = scopeOracleMintChains.get(oracleKey);
+        const scopeChains = mintChains?.get(mint);
+        if (scopeChains && scopeChains.length > 0) {
+          printedScopeConfig = true;
+          console.log(`  Scope Oracle: ${oracleKey}`);
+          console.log(`  Scope Configured Chains: [${scopeChains.join(", ")}]`);
+          console.log(`  Scope Oracle Mint Coverage: ${mintChains?.size ?? 0}`);
+        }
+      }
+      if (!printedScopeConfig) {
+        console.log("  Scope Configured Chains: None");
       }
 
       if (!priceData) {
@@ -159,6 +167,16 @@ async function main() {
 
         if (isStablecoin && (uiPrice < 0.95 || uiPrice > 1.05)) {
           console.log(`  ⚠️  WARNING: Stablecoin price outside expected range [0.95, 1.05] USD`);
+        }
+      }
+    }
+
+    if (scopeOracleMintChains.size > 0) {
+      console.log("\nScope oracle mapping:");
+      for (const [scopeOracle, mintChains] of scopeOracleMintChains.entries()) {
+        console.log(`  Oracle ${scopeOracle}:`);
+        for (const [mint, chains] of mintChains.entries()) {
+          console.log(`    ${mint} -> [${chains.join(", ")}]`);
         }
       }
     }

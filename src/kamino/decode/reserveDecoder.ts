@@ -14,9 +14,9 @@ const __dirname = dirname(__filename);
 
 /**
  * Sentinel values used in Scope priceChain arrays to indicate "not set".
- * Scope uses both 0 and 0xFFFF (65535) as padding/sentinel indicators.
+ * Scope uses 512 and 0xFFFF (65535) as padding/sentinel indicators.
  */
-const SCOPE_CHAIN_SENTINEL_VALUES = new Set([0, 65535]);
+const SCOPE_CHAIN_SENTINEL_VALUES = new Set([512, 65535]);
 
 /**
  * Kamino Lending Program ID (mainnet)
@@ -128,9 +128,9 @@ function parseU8Like(v: unknown, fieldName: string): number {
  * Extracts scope price chain array from Reserve's TokenInfo configuration.
  * The priceChain is an array of Scope oracle indices that form a chain to compute
  * the final USD price via Scope.getPriceFromScopeChain (product of prices at each hop).
- * @returns Array of all price chain indices (1-511), excluding 0 and 65535 sentinels, or null if not configured
+ * @returns Array of all price chain indices (0-511), excluding 512 and 65535 sentinels, or null if not configured
  */
-function extractScopePriceChain(tokenInfo: {
+export function extractScopePriceChain(tokenInfo: {
   scopeConfiguration?: { 
     priceFeed?: { toString: () => string };
     priceChain?: number[];
@@ -151,23 +151,16 @@ function extractScopePriceChain(tokenInfo: {
   if (!priceChain || !Array.isArray(priceChain) || priceChain.length === 0) {
     return null;
   }
-  
-  // Filter and validate chain indices
-  const validChains: number[] = [];
-  for (const chainValue of priceChain) {
-    const chain = Number(chainValue);
-    
-    // Skip sentinel values (0 and 65535) which mean "not set"
-    if (SCOPE_CHAIN_SENTINEL_VALUES.has(chain)) {
-      continue;
-    }
-    
-    // Validate: chain should be in 1..511 (0 is sentinel, 512+ is out of range)
-    if (chain > 0 && chain < 512) {
-      validChains.push(chain);
-    }
+
+  const rawChains = priceChain.map((value) => Number(value));
+  const filteredChains = rawChains.filter((chain) => !SCOPE_CHAIN_SENTINEL_VALUES.has(chain));
+
+  // Treat unset chains as null (either empty after sentinel filtering, or all zeros)
+  if (filteredChains.length === 0 || filteredChains.every((chain) => chain === 0)) {
+    return null;
   }
-  
+
+  const validChains = filteredChains.filter((chain) => chain >= 0 && chain < 512);
   return validChains.length > 0 ? validChains : null;
 }
 
@@ -198,6 +191,11 @@ export function decodeReserve(
   
   // Extract scope price chain if configured
   const scopePriceChain = extractScopePriceChain(decoded.config?.tokenInfo);
+  const scopeFeed = decoded.config?.tokenInfo?.scopeConfiguration?.priceFeed?.toString();
+  const scopeOraclePubkey =
+    scopeFeed !== "11111111111111111111111111111111"
+      ? scopeFeed
+      : null;
 
   // Map to DecodedReserve type with BN-safe conversion
   // Use toBigIntSafe to handle potentially missing/undefined fields gracefully
@@ -219,6 +217,7 @@ export function decodeReserve(
     cumulativeBorrowRateBsfRaw: toBigIntSafe(decoded.liquidity?.cumulativeBorrowRateBsf, 0n).toString(),
     collateralMintTotalSupplyRaw: toBigIntSafe(decoded.collateral?.mintTotalSupply, 0n).toString(),
     scopePriceChain,
+    scopeOraclePubkey,
   };
 
   return result;

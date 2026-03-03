@@ -80,6 +80,7 @@ export interface ReserveCache {
  * Different reserves (mints) can share the same Scope oracle but use different chain arrays.
  */
 export const scopeMintChainMap = new Map<string, number[]>();
+export const scopeOracleMintChains = new Map<string, Map<string, number[]>>();
 
 /**
  * Computes the collateral exchange rate in UI units from reserve state.
@@ -195,6 +196,9 @@ export async function loadReserves(
   marketPubkey: PublicKey,
   allowlistLiquidityMints?: Set<string>
 ): Promise<ReserveCache> {
+  scopeOracleMintChains.clear();
+  scopeMintChainMap.clear();
+
   logger.info(
     { market: marketPubkey.toString() },
     "Loading reserves for market..."
@@ -509,28 +513,40 @@ export async function loadReserves(
     if (decoded.scopePriceChain !== null && decoded.scopePriceChain.length > 0) {
       const liquidityMint = decoded.liquidityMint;
       const collateralMint = decoded.collateralMint;
+      const scopeOraclePubkey = decoded.scopeOraclePubkey;
+      const scopePriceChain = [...decoded.scopePriceChain];
       
       // Map liquidity mint to chain array
-      scopeMintChainMap.set(liquidityMint, decoded.scopePriceChain);
+      scopeMintChainMap.set(liquidityMint, scopePriceChain);
       logger.debug(
         {
           reserve: pubkey.toString(),
           liquidityMint: liquidityMint,
-          priceChain: decoded.scopePriceChain,
+          priceChain: scopePriceChain,
         },
         "Mapped Scope liquidity mint to price chain array"
       );
       
       // Map collateral mint to same chain array
-      scopeMintChainMap.set(collateralMint, decoded.scopePriceChain);
+      scopeMintChainMap.set(collateralMint, scopePriceChain);
       logger.debug(
         {
           reserve: pubkey.toString(),
           collateralMint: collateralMint,
-          priceChain: decoded.scopePriceChain,
+          priceChain: scopePriceChain,
         },
         "Mapped Scope collateral mint to price chain array"
       );
+
+      if (scopeOraclePubkey) {
+        let mintChains = scopeOracleMintChains.get(scopeOraclePubkey);
+        if (!mintChains) {
+          mintChains = new Map<string, number[]>();
+          scopeOracleMintChains.set(scopeOraclePubkey, mintChains);
+        }
+        mintChains.set(liquidityMint, scopePriceChain);
+        mintChains.set(collateralMint, scopePriceChain);
+      }
     } else if (decoded.scopePriceChain !== null && decoded.scopePriceChain.length === 0) {
       logger.warn(
         { reserve: pubkey.toString(), liquidityMint: decoded.liquidityMint },
