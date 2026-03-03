@@ -139,6 +139,14 @@ interface Plan {
   liquidationEligible?: boolean;
 }
 
+function parsePredictedAtMs(plan: Plan): number | null {
+  if (typeof plan.predictedAtMs === 'number') return plan.predictedAtMs;
+  if (typeof plan.predictedLiquidationAtMs === 'number') return plan.predictedLiquidationAtMs;
+  if (typeof plan.predictedAtMs === 'string') return Number(plan.predictedAtMs);
+  if (typeof plan.predictedLiquidationAtMs === 'string') return Number(plan.predictedLiquidationAtMs);
+  return null;
+}
+
 /**
  * PR62: Validate plan has required fields and correct version
  * Fail-fast with clear error message if plan is outdated or incomplete
@@ -409,60 +417,85 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       accepted_normal: 0,
       skipped_too_early: 0,
     };
+    let earliestTooEarlyTtlMin: number | null = null;
+    let earliestTooEarlyPredictedAtMs: number | null = null;
 
     const candidates = plans
       .filter(p => {
-      // Force-include liquidatable if enabled
-      if (forceIncludeLiquidatable && p.liquidationEligible) {
-        filterReasons.accepted_liquidatable_forced++;
+        // Force-include liquidatable if enabled
+        if (forceIncludeLiquidatable && p.liquidationEligible) {
+          filterReasons.accepted_liquidatable_forced++;
+          return true;
+        }
+        
+        // EV filter
+        if (Number(p.ev ?? 0) <= minEv) {
+          filterReasons.rejected_ev++;
+          return false;
+        }
+        
+        // TTL filter with new logic
+        const ttlMin = p.ttlMin;
+        const predictedAtMs = parsePredictedAtMs(p);
+        
+        // Handle null/unknown TTL
+        if (ttlMin === null || ttlMin === undefined) {
+          if (!ttlUnknownPasses) {
+            filterReasons.rejected_ttl_expired++;
+            return false;
+          }
+          // Unknown TTL passes if allowed
+        } else {
+          const ttlMinNum = Number(ttlMin);
+          
+          // Check if negative (already expired)
+          if (ttlMinNum < 0) {
+            filterReasons.rejected_ttl_expired++;
+            return false;
+          }
+          
+          // Check if past predicted time + grace
+          if (predictedAtMs !== null && nowMs > predictedAtMs + ttlGraceMs) {
+            filterReasons.rejected_ttl_expired++;
+            return false;
+          }
+          
+          // Check if TTL too high
+          if (ttlMinNum > maxTtlMin) {
+            filterReasons.rejected_ttl_too_high++;
+            return false;
+          }
+
+          if (ttlMinNum > execReadyTtlMaxMin) {
+            filterReasons.skipped_too_early++;
+            if (earliestTooEarlyTtlMin === null || ttlMinNum < earliestTooEarlyTtlMin) {
+              earliestTooEarlyTtlMin = ttlMinNum;
+            }
+            if (predictedAtMs !== null && Number.isFinite(predictedAtMs)) {
+              if (earliestTooEarlyPredictedAtMs === null || predictedAtMs < earliestTooEarlyPredictedAtMs) {
+                earliestTooEarlyPredictedAtMs = predictedAtMs;
+              }
+            }
+            return false;
+          }
+        }
+
+        if (predictedAtMs !== null && Number.isFinite(predictedAtMs) && nowMs < predictedAtMs - execEarlyGraceMs) {
+          filterReasons.skipped_too_early++;
+          if (earliestTooEarlyPredictedAtMs === null || predictedAtMs < earliestTooEarlyPredictedAtMs) {
+            earliestTooEarlyPredictedAtMs = predictedAtMs;
+          }
+          const ttlMinNum = ttlMin !== null && ttlMin !== undefined ? Number(ttlMin) : null;
+          if (ttlMinNum !== null && Number.isFinite(ttlMinNum) && (earliestTooEarlyTtlMin === null || ttlMinNum < earliestTooEarlyTtlMin)) {
+            earliestTooEarlyTtlMin = ttlMinNum;
+          }
+          return false;
+        }
+
+        filterReasons.accepted_normal++;
         return true;
-      }
-      
-      // EV filter
-      if (Number(p.ev ?? 0) <= minEv) {
-        filterReasons.rejected_ev++;
-        return false;
-      }
-      
-      // TTL filter with new logic
-      const ttlMin = p.ttlMin;
-      const predictedAtMs = typeof p.predictedLiquidationAtMs === 'number' ? p.predictedLiquidationAtMs : (
-        typeof p.predictedLiquidationAtMs === 'string' ? Number(p.predictedLiquidationAtMs) : null
-      );
-      
-      // Handle null/unknown TTL
-      if (ttlMin === null || ttlMin === undefined) {
-        if (!ttlUnknownPasses) {
-          filterReasons.rejected_ttl_expired++;
-          return false;
-        }
-        // Unknown TTL passes if allowed
-      } else {
-        const ttlMinNum = Number(ttlMin);
-        
-        // Check if negative (already expired)
-        if (ttlMinNum < 0) {
-          filterReasons.rejected_ttl_expired++;
-          return false;
-        }
-        
-        // Check if past predicted time + grace
-        if (predictedAtMs !== null && nowMs > predictedAtMs + ttlGraceMs) {
-          filterReasons.rejected_ttl_expired++;
-          return false;
-        }
-        
-        // Check if TTL too high
-        if (ttlMinNum > maxTtlMin) {
-          filterReasons.rejected_ttl_too_high++;
-          return false;
-        }
-      }
-      
-      filterReasons.accepted_normal++;
-      return true;
-    })
-    .sort((a, b) => {
+      })
+      .sort((a, b) => {
       // Primary: liquidationEligible (true first)
       const liqDiff = (b.liquidationEligible ? 1 : 0) - (a.liquidationEligible ? 1 : 0);
       if (liqDiff !== 0) return liqDiff;
@@ -478,17 +511,23 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       if (ttlDiff !== 0) return ttlDiff;
       
       // Quaternary: hazard desc
-      return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
+        return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
       });
 
-  console.log('[Executor] Filter results:', filterReasons);
+    console.log('[Executor] Filter results:', filterReasons);
 
-  if (candidates.length === 0) {
-    console.log('[Executor] No eligible candidates based on EV/TTL thresholds.');
-    return { status: 'no-eligible' };
-  }
+    if (candidates.length === 0) {
+      if (filterReasons.skipped_too_early > 0) {
+        console.log(
+          `[Executor] No ready candidates yet (too-early=${filterReasons.skipped_too_early}) earliestTtlMin=${earliestTooEarlyTtlMin ?? 'n/a'} earliestPredictedAtMs=${earliestTooEarlyPredictedAtMs ?? 'n/a'}`
+        );
+        return { status: 'too-early' };
+      }
+      console.log('[Executor] No eligible candidates based on EV/TTL thresholds.');
+      return { status: 'no-eligible' };
+    }
 
-  if (presubmitEnabled) {
+    if (presubmitEnabled) {
     if (!presubmitterSingleton) {
       presubmitterSingleton = new Presubmitter({
         connection,
@@ -572,35 +611,6 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     if (minDelayMs > 0 && ageMs < minDelayMs) {
       console.log(`[Executor] Skipping due to SCHEDULED_MIN_LIQUIDATION_DELAY_MS (${minDelayMs}ms). Age: ${ageMs}ms`);
       continue; // Skip to next candidate
-    }
-
-    const targetPlan = target as Plan;
-    const targetTtlMin = targetPlan.ttlMin === null || targetPlan.ttlMin === undefined ? null : Number(targetPlan.ttlMin);
-    const targetPredictedAtMs =
-      typeof targetPlan.predictedAtMs === 'number'
-        ? targetPlan.predictedAtMs
-        : typeof targetPlan.predictedLiquidationAtMs === 'number'
-        ? targetPlan.predictedLiquidationAtMs
-        : typeof targetPlan.predictedAtMs === 'string'
-        ? Number(targetPlan.predictedAtMs)
-        : typeof targetPlan.predictedLiquidationAtMs === 'string'
-        ? Number(targetPlan.predictedLiquidationAtMs)
-        : null;
-
-    if (targetTtlMin !== null && Number.isFinite(targetTtlMin) && targetTtlMin > execReadyTtlMaxMin) {
-      filterReasons.skipped_too_early++;
-      console.log(
-        `[Executor] skip reason=too-early key=${planKey.slice(0, 8)} ttlMin=${targetTtlMin.toFixed(3)} > readyWindow=${execReadyTtlMaxMin}`
-      );
-      continue;
-    }
-
-    if (targetPredictedAtMs !== null && Number.isFinite(targetPredictedAtMs) && attemptNowMs < targetPredictedAtMs - execEarlyGraceMs) {
-      filterReasons.skipped_too_early++;
-      console.log(
-        `[Executor] skip reason=too-early key=${planKey.slice(0, 8)} now=${attemptNowMs} predictedAtMs=${targetPredictedAtMs} earlyGraceMs=${execEarlyGraceMs}`
-      );
-      continue;
     }
 
     // Execute this candidate (wrapped in try-catch for error handling)

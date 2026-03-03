@@ -41,7 +41,8 @@ const STABLECOIN_MINTS = new Set([
  */
 const PYTH_MAX_AGE_SEC = Number(process.env.LIQSOL_PYTH_MAX_AGE_SECONDS ?? 30);
 const SWITCHBOARD_MAX_AGE_SEC = Number(process.env.LIQSOL_SWITCHBOARD_MAX_AGE_SECONDS ?? 120);
-const SCOPE_MAX_AGE_SEC = Number(process.env.LIQSOL_SCOPE_MAX_AGE_SECONDS ?? 120);
+const SCOPE_MAX_AGE_SEC = Number(process.env.LIQSOL_SCOPE_MAX_AGE_SECONDS ?? 180);
+const lastScopeStaleWarnMs = new Map<string, number>();
 
 logger.info(
   { pythMaxAgeSec: PYTH_MAX_AGE_SEC, switchboardMaxAgeSec: SWITCHBOARD_MAX_AGE_SEC, scopeMaxAgeSec: SCOPE_MAX_AGE_SEC },
@@ -232,10 +233,21 @@ function decodeScopePrice(
   const buildPriceData = (uiPrice: number, timestampSec: number): OraclePriceData | null => {
     const ageSec = Date.now() / 1000 - timestampSec;
     if (ageSec > SCOPE_MAX_AGE_SEC) {
-      logger.warn(
-        { chain: chains, ageSec, threshold: SCOPE_MAX_AGE_SEC },
-        "[OracleCache] Scope chain price is stale"
-      );
+      const chainKey = chains.join(',');
+      const nowMs = Date.now();
+      const lastWarnMs = lastScopeStaleWarnMs.get(chainKey) ?? 0;
+      if (nowMs - lastWarnMs > 60_000) {
+        lastScopeStaleWarnMs.set(chainKey, nowMs);
+        logger.warn(
+          { chain: chains, ageSec, threshold: SCOPE_MAX_AGE_SEC },
+          "[OracleCache] Scope chain price is stale"
+        );
+      } else {
+        logger.debug(
+          { chain: chains, ageSec, threshold: SCOPE_MAX_AGE_SEC },
+          "[OracleCache] Scope chain price is stale (rate-limited)"
+        );
+      }
       return null;
     }
 
@@ -675,9 +687,9 @@ export async function loadOracles(
       for (const [mint, chains] of mintChains.entries()) {
         const priceData = decodeScopePrice(data, chains);
         if (!priceData) {
-          logger.warn(
+          logger.debug(
             { oracle: pubkeyStr, mint, chains },
-            "Failed to decode Scope price for mint"
+            "Scope decode returned null"
           );
           continue;
         }
@@ -825,35 +837,29 @@ export async function loadOracles(
       coverageSummary,
       "[OracleCache] Oracle coverage summary"
     );
-
-    for (const [reservePubkey, reserve] of reserveCache.byReserve.entries()) {
-      if (!unpricedRequiredMints.has(reserve.liquidityMint)) continue;
-      const scopeOraclePubkey =
-        reserve.oraclePubkeys.find((pk) => scopeOracleMintChains.get(pk.toString())?.has(reserve.liquidityMint))?.toString() ??
-        reserve.oraclePubkeys[0]?.toString() ??
-        null;
-      const scopePriceChainFiltered =
-        scopeOraclePubkey ? (scopeOracleMintChains.get(scopeOraclePubkey)?.get(reserve.liquidityMint) ?? null) : null;
-      const pythOraclePubkeys = reserve.oraclePubkeys
-        .filter((pk) => oracleProgramByPubkey.get(pk.toString()) === 'pyth')
-        .map((pk) => pk.toString());
-      const switchboardOraclePubkeys = reserve.oraclePubkeys
-        .filter((pk) => oracleProgramByPubkey.get(pk.toString()) === 'switchboard')
-        .map((pk) => pk.toString());
-      logger.debug(
-        {
-          reservePubkey,
-          liquidityMint: reserve.liquidityMint,
-          scopeOraclePubkey,
-          scopePriceChainRaw: reserve.scopePriceChain,
-          scopePriceChainFiltered,
-          pythOraclePubkeys,
-          switchboardOraclePubkeys,
-          oraclePubkeys: reserve.oraclePubkeys.map((pk) => pk.toString()),
-        },
-        "[OracleCache] Unpriced required mint reserve details"
-      );
-    }
+    const missingMints = Array.from(unpricedRequiredMints).slice(0, 5);
+    logger.warn(
+      {
+        missingMints,
+        missingMintDiagnostics: missingMints.map((mint) => {
+          const reserve = reserveCache.byMint.get(mint);
+          if (!reserve) return { mint, reserveFound: false };
+          const scopeOraclePubkey =
+            reserve.scopeOraclePubkey ??
+            reserve.oraclePubkeys.find((pk) => scopeOracleMintChains.get(pk.toString())?.has(mint))?.toString() ??
+            null;
+          return {
+            mint,
+            reserveFound: true,
+            reservePubkey: reserve.reservePubkey.toBase58(),
+            scopeOraclePubkey,
+            scopePriceChain: reserve.scopePriceChain,
+            oraclePubkeys: reserve.oraclePubkeys.map((pk) => pk.toString()),
+          };
+        }),
+      },
+      "[OracleCache] Unpriced required mint diagnostics"
+    );
   } else {
     logger.info(
       coverageSummary,

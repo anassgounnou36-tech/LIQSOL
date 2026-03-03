@@ -95,7 +95,10 @@ describe('refreshObligation referrer + farms-aware downshift guards', () => {
     expect(env).toContain("EXEC_EARLY_GRACE_MS: z.string().optional().default('3000')");
     expect(executor).toContain("const execReadyTtlMaxMin = Number(env.EXEC_READY_TTL_MAX_MIN ?? 0.25);");
     expect(executor).toContain("const execEarlyGraceMs = Number(env.EXEC_EARLY_GRACE_MS ?? 3_000);");
-    expect(executor).toContain('skip reason=too-early');
+    expect(executor).toContain('function parsePredictedAtMs(plan: Plan): number | null');
+    expect(executor).toContain('filterReasons.skipped_too_early++');
+    expect(executor).toContain("return { status: 'too-early' };");
+    expect(executor).toContain('No ready candidates yet (too-early=');
   });
 
   it('avoids using empty executor LUT during compilation', () => {
