@@ -566,9 +566,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       }
     }
     
-    const now = Date.now();
+    const attemptNowMs = Date.now();
     const createdAtMs = Number(target.createdAtMs ?? 0);
-    const ageMs = createdAtMs ? (now - createdAtMs) : Infinity;
+    const ageMs = createdAtMs ? (attemptNowMs - createdAtMs) : Infinity;
     if (minDelayMs > 0 && ageMs < minDelayMs) {
       console.log(`[Executor] Skipping due to SCHEDULED_MIN_LIQUIDATION_DELAY_MS (${minDelayMs}ms). Age: ${ageMs}ms`);
       continue; // Skip to next candidate
@@ -595,10 +595,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       continue;
     }
 
-    if (targetPredictedAtMs !== null && Number.isFinite(targetPredictedAtMs) && now < targetPredictedAtMs - execEarlyGraceMs) {
+    if (targetPredictedAtMs !== null && Number.isFinite(targetPredictedAtMs) && attemptNowMs < targetPredictedAtMs - execEarlyGraceMs) {
       filterReasons.skipped_too_early++;
       console.log(
-        `[Executor] skip reason=too-early key=${planKey.slice(0, 8)} now=${now} predictedAtMs=${targetPredictedAtMs} earlyGraceMs=${execEarlyGraceMs}`
+        `[Executor] skip reason=too-early key=${planKey.slice(0, 8)} now=${attemptNowMs} predictedAtMs=${targetPredictedAtMs} earlyGraceMs=${execEarlyGraceMs}`
       );
       continue;
     }
