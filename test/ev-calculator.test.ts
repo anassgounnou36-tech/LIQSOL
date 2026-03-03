@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { computeEV, computeEVBreakdown } from "../src/predict/evCalculator.js";
 
 describe("EV calculator", () => {
-  it("charges variable fees on repay value", () => {
+  it("applies variable fees to repay value in EV calculation", () => {
     const params = {
       closeFactor: 0.5,
       liquidationBonusPct: 0.05,

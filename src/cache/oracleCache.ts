@@ -228,6 +228,7 @@ function decodeScopePrice(
     return null;
   }
 
+  // Shared validation + conversion for Scope-decoded UI prices.
   const buildPriceData = (uiPrice: number, timestampSec: number): OraclePriceData | null => {
     const ageSec = Date.now() / 1000 - timestampSec;
     if (ageSec > SCOPE_MAX_AGE_SEC) {
@@ -277,6 +278,7 @@ function decodeScopePrice(
     const result = Scope.getPriceFromScopeChain(chains, oraclePrices);
     return buildPriceData(result.price.toNumber(), result.timestamp.toNumber());
   } catch (err) {
+    // Fallback for single-hop chains when SDK chain decode rejects but direct slot decoding is still usable.
     if (chains.length === 1) {
       const singleHop = oraclePrices.prices[chains[0]];
       const value = singleHop?.price?.value ? Number(singleHop.price.value.toString()) : NaN;

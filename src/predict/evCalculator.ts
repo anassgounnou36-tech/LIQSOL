@@ -43,6 +43,14 @@ export function computeEV(borrowValueUsd: number, hazard: number, p: EvParams): 
   return computeEVBreakdown(borrowValueUsd, hazard, p).ev;
 }
 
+/**
+ * Compute EV and its intermediate values for diagnostics and debugging.
+ *
+ * @param borrowValueUsd - Total borrow value in USD
+ * @param hazard - Hazard score from hazardScorer (0 to 1)
+ * @param p - EV parameters (fees, bonuses, etc.)
+ * @returns EV breakdown including repay value, profit, variable fees, total cost, and final EV
+ */
 export function computeEVBreakdown(borrowValueUsd: number, hazard: number, p: EvParams): EvBreakdown {
   const repayValueUsd = p.closeFactor * borrowValueUsd;
   const profit = p.liquidationBonusPct * repayValueUsd;
