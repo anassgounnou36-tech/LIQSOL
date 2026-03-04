@@ -123,14 +123,24 @@ describe("Scope Chain Pricing Tests", () => {
       expect(chain).toBeNull();
     });
 
-    it("parses [0, 65535, 65535, 65535] as null", () => {
+    it("parses [0, 65535, 65535, 65535] as [0]", () => {
       const chain = extractScopePriceChain({
         scopeConfiguration: {
           priceFeed: scopeFeed,
           priceChain: [0, 65535, 65535, 65535],
         },
       });
-      expect(chain).toBeNull();
+      expect(chain).toEqual([0]);
+    });
+
+    it("parses [0, 0, 0, 0] as [0]", () => {
+      const chain = extractScopePriceChain({
+        scopeConfiguration: {
+          priceFeed: scopeFeed,
+          priceChain: [0, 0, 0, 0],
+        },
+      });
+      expect(chain).toEqual([0]);
     });
   });
 

@@ -155,9 +155,14 @@ export function extractScopePriceChain(tokenInfo: {
   const rawChains = priceChain.map((value) => Number(value));
   const filteredChains = rawChains.filter((chain) => !SCOPE_CHAIN_SENTINEL_VALUES.has(chain));
 
-  // Treat unset chains as null (either empty after sentinel filtering, or all zeros)
-  if (filteredChains.length === 0 || filteredChains.every((chain) => chain === 0)) {
+  // Empty after sentinel filtering => unset
+  if (filteredChains.length === 0) {
     return null;
+  }
+
+  // All zeros should mean default Scope chain index [0], not unset
+  if (filteredChains.every((chain) => chain === 0)) {
+    return [0];
   }
 
   const validChains = filteredChains.filter((chain) => chain >= 0 && chain < 512);
