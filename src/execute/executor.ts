@@ -21,6 +21,7 @@ const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
 const SETUP_FEE_BUFFER_LAMPORTS = 2_000_000;
 const OBLIGATION_HEALTHY_COOLDOWN_MS = 5 * 60 * 1000;
+const DEFAULT_EXECUTOR_LUT_WARMUP_TOPK = 3;
 let lastUnderfundedWarnMs = 0;
 let startupFeePayerCheckDone = false;
 let cachedAtaRentLamports: number | undefined;
@@ -208,7 +209,7 @@ async function warmupExecutorLutFromQueue(args: {
   executorLut: AddressLookupTableAccount;
   topK: number;
 }): Promise<AddressLookupTableAccount> {
-  const selectedPlans = args.plans.slice(0, Math.max(0, args.topK));
+  const selectedPlans = args.plans.slice(0, args.topK);
   console.log(`[LUT] warmup start: plans=${selectedPlans.length} initialSize=${args.executorLut.state.addresses.length}`);
 
   const deduped = new Map<string, PublicKey>();
@@ -401,7 +402,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const presubmitTopK = Number(env.PRESUBMIT_TOPK ?? 5);
     const presubmitRefreshMs = Number(process.env.PRESUBMIT_REFRESH_MS ?? 3000);
     const warmupOnly = (env.EXECUTOR_LUT_WARMUP_ONLY ?? 'false') === 'true';
-    const warmupTopK = Math.max(0, Number(env.EXECUTOR_LUT_WARMUP_TOPK ?? 3) || 3);
+    const warmupTopKRaw = Number(env.EXECUTOR_LUT_WARMUP_TOPK ?? DEFAULT_EXECUTOR_LUT_WARMUP_TOPK);
+    const warmupTopK = Number.isFinite(warmupTopKRaw) && warmupTopKRaw >= 0 ? warmupTopKRaw : DEFAULT_EXECUTOR_LUT_WARMUP_TOPK;
 
     console.log('[Executor] Filter thresholds:');
     console.log(`  EXEC_MIN_EV: ${minEv}`);

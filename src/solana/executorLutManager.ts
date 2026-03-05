@@ -85,7 +85,7 @@ export async function extendExecutorLut(
   const current = new Set(lut.state.addresses.map((a) => a.toBase58()));
   const remaining = MAX_LUT_ADDRESSES - lut.state.addresses.length;
   if (remaining <= 0) {
-    console.log(`[LUT] capacity reached: size=${lut.state.addresses.length}, skipping extension`);
+    console.log(`[LUT] capacity reached/overfilled (${lut.state.addresses.length}/${MAX_LUT_ADDRESSES}): skipping extension`);
     return lut;
   }
 
