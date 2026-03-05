@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { AddressLookupTableAccount, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
+import { AddressLookupTableAccount, Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { getConnection } from '../solana/connection.js';
 import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
@@ -27,6 +27,7 @@ let cachedAtaRentLamports: number | undefined;
 const dryRunSetupRequiredCache = new Map<string, number>();
 const obligationHealthyCooldown = new Map<string, number>(); // planKey -> absolute expiry timestamp (ms)
 let presubmitterSingleton: Presubmitter | undefined;
+let executorLutWarmupAttempted = false;
 
 function dedupeLookupTables(
   lookupTables: Array<AddressLookupTableAccount | undefined>
@@ -187,6 +188,65 @@ function loadPlans(): Plan[] {
   return [];
 }
 
+function hasNonEmptyTxQueue(): boolean {
+  const qPath = path.join(process.cwd(), 'data', 'tx_queue.json');
+  if (!fs.existsSync(qPath)) return false;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(qPath, 'utf8'));
+    return Array.isArray(parsed) && parsed.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function warmupExecutorLutFromQueue(args: {
+  connection: Connection;
+  signer: Keypair;
+  market: PublicKey;
+  programId: PublicKey;
+  plans: Plan[];
+  executorLut: AddressLookupTableAccount;
+  topK: number;
+}): Promise<AddressLookupTableAccount> {
+  const selectedPlans = args.plans.slice(0, Math.max(0, args.topK));
+  console.log(`[LUT] warmup start: plans=${selectedPlans.length} initialSize=${args.executorLut.state.addresses.length}`);
+
+  const deduped = new Map<string, PublicKey>();
+  for (const plan of selectedPlans) {
+    try {
+      validatePlanVersion(plan);
+      if (!isPlanComplete(plan)) continue;
+      const built = await buildFullTransaction(plan as FlashloanPlan, args.signer, args.market, args.programId, {
+        includeSwap: false,
+        useRealSwapSizing: false,
+        dry: false,
+        preReserveRefreshModeOverride: (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto',
+        disableFarmsRefresh: false,
+        disablePostFarmsRefresh: false,
+        omitComputeBudgetIxs: false,
+      });
+      const ixsForLut = [...built.setupIxs, ...built.ixs];
+      const addrs = collectLutCandidateAddresses(ixsForLut, args.signer.publicKey);
+      for (const addr of addrs) {
+        deduped.set(addr.toBase58(), addr);
+      }
+    } catch (err) {
+      console.warn(`[LUT] warmup skip plan ${String(plan.key).slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const combinedAddresses = Array.from(deduped.values());
+  console.log(`[LUT] warmup collected addresses: total=${combinedAddresses.length}`);
+  if (combinedAddresses.length === 0) {
+    console.log(`[LUT] warmup done: size=${args.executorLut.state.addresses.length}`);
+    return args.executorLut;
+  }
+
+  const updated = await extendExecutorLut(args.connection, args.signer, args.executorLut, combinedAddresses);
+  console.log(`[LUT] warmup done: size=${updated.state.addresses.length}`);
+  return updated;
+}
+
 function shouldWarnUnderfundedDryRun(nowMs: number): boolean {
   if ((nowMs - lastUnderfundedWarnMs) < 60_000) return false;
   lastUnderfundedWarnMs = nowMs;
@@ -340,6 +400,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const presubmitEnabled = (env.PRESUBMIT_ENABLED ?? 'false') === 'true';
     const presubmitTopK = Number(env.PRESUBMIT_TOPK ?? 5);
     const presubmitRefreshMs = Number(process.env.PRESUBMIT_REFRESH_MS ?? 3000);
+    const warmupOnly = (env.EXECUTOR_LUT_WARMUP_ONLY ?? 'false') === 'true';
+    const warmupTopK = Math.max(0, Number(env.EXECUTOR_LUT_WARMUP_TOPK ?? 3) || 3);
 
     console.log('[Executor] Filter thresholds:');
     console.log(`  EXEC_MIN_EV: ${minEv}`);
@@ -383,7 +445,32 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       executorLut = await loadExecutorLut(connection, new PublicKey(executorLutAddress));
       if (executorLut) {
         console.log(`[LUT] executor LUT loaded: ${executorLut.key.toBase58()} size=${executorLut.state.addresses.length}`);
-        if (executorLut.state.addresses.length === 0) {
+        if (
+          !executorLutWarmupAttempted &&
+          lutManageEnabled &&
+          broadcast &&
+          executorLut.state.addresses.length === 0 &&
+          hasNonEmptyTxQueue()
+        ) {
+          executorLutWarmupAttempted = true;
+          try {
+            executorLut = await warmupExecutorLutFromQueue({
+              connection,
+              signer,
+              market,
+              programId,
+              plans,
+              executorLut,
+              topK: warmupTopK,
+            });
+            if (warmupOnly) {
+              console.log('[LUT] warmup-only enabled; exiting tick without attempting liquidations');
+              return { status: 'lut-warmup-only' };
+            }
+          } catch (err) {
+            console.warn(`[LUT] warmup failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        } else if (executorLut.state.addresses.length === 0) {
           console.log('[LUT] executor LUT is empty; skipping LUT usage until populated');
         }
       } else {

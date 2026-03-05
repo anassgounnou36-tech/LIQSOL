@@ -94,6 +94,8 @@ export const EnvSchema = z.object({
   EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).optional().default(300),
   EXECUTOR_LUT_ADDRESS: z.string().optional(),
   EXECUTOR_LUT_MANAGE: z.string().optional().default('false'),
+  EXECUTOR_LUT_WARMUP_ONLY: z.string().optional().default('false'),
+  EXECUTOR_LUT_WARMUP_TOPK: z.string().optional().default('3'),
   SCHEDULED_MIN_LIQUIDATION_DELAY_MS: z.string().optional().default('0'),
 
   // Candidate selection tuning
