@@ -56,6 +56,10 @@ export interface ReserveCacheEntry {
   scopePriceChain: number[] | null;
   /** Scope oracle pubkey if reserve declares one */
   scopeOraclePubkey?: string | null;
+  /** Reserve-configured max oracle age (price feed) in seconds */
+  maxAgePriceSeconds: number | null;
+  /** Reserve-configured max oracle age (TWAP feed) in seconds */
+  maxAgeTwapSeconds: number | null;
   /** 
    * Collateral exchange rate in UI units (computed from reserve state)
    * Used to convert deposit notes (collateral tokens) to underlying liquidity tokens
@@ -573,6 +577,8 @@ export async function loadReserves(
       collateralDecimals: decoded.collateralDecimals,
       scopePriceChain: decoded.scopePriceChain,
       scopeOraclePubkey: decoded.scopeOraclePubkey ?? null,
+      maxAgePriceSeconds: decoded.maxAgePriceSeconds,
+      maxAgeTwapSeconds: decoded.maxAgeTwapSeconds,
       collateralExchangeRateUi: computeExchangeRateUi(decoded),
     };
 

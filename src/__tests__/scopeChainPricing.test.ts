@@ -55,7 +55,8 @@ function makeReserveEntry(
   reservePubkey: PublicKey,
   mint: string,
   oraclePubkey: PublicKey,
-  scopePriceChain: number[] | null
+  scopePriceChain: number[] | null,
+  maxAgePriceSeconds: number | null = null
 ) {
   return {
     reservePubkey,
@@ -66,6 +67,8 @@ function makeReserveEntry(
     collateralMint: "mock-collateral-mint",
     collateralExchangeRateUi: 1.0,
     scopePriceChain,
+    maxAgePriceSeconds,
+    maxAgeTwapSeconds: null,
     loanToValue: 75,
     liquidationThreshold: 80,
     liquidationBonus: 500,
@@ -299,7 +302,7 @@ describe("Scope Chain Pricing Tests", () => {
         { data: scopeData, owner: SCOPE_PROGRAM_ID },
       ]);
 
-      const reserveEntry = makeReserveEntry(reservePubkey, mint, oraclePubkey, [1]);
+      const reserveEntry = makeReserveEntry(reservePubkey, mint, oraclePubkey, [1], 120);
       const reserveCache: ReserveCache = {
         byMint: new Map([[mint, reserveEntry]]),
         byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
@@ -333,7 +336,7 @@ describe("Scope Chain Pricing Tests", () => {
         { data: scopeData, owner: SCOPE_PROGRAM_ID },
       ]);
 
-      const reserveEntry = makeReserveEntry(reservePubkey, mint, oraclePubkey, [1]);
+      const reserveEntry = makeReserveEntry(reservePubkey, mint, oraclePubkey, [1], 120);
       const reserveCache: ReserveCache = {
         byMint: new Map([[mint, reserveEntry]]),
         byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
@@ -368,7 +371,7 @@ describe("Scope Chain Pricing Tests", () => {
         { data: scopeData, owner: SCOPE_PROGRAM_ID },
       ]);
 
-      const reserveEntry = makeReserveEntry(reservePubkey, mint, oraclePubkey, [0, 1]);
+      const reserveEntry = makeReserveEntry(reservePubkey, mint, oraclePubkey, [0, 1], 120);
       const reserveCache: ReserveCache = {
         byMint: new Map([[mint, reserveEntry]]),
         byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),

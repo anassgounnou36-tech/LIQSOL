@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { Buffer } from "buffer";
-import { loadOracles } from "../cache/oracleCache.js";
+import { applyOracleAccountUpdate, loadOracles } from "../cache/oracleCache.js";
 import type { ReserveCache } from "../cache/reserveCache.js";
 
 // Mock the dependencies
@@ -44,6 +44,8 @@ describe("Oracle Cache Tests", () => {
         collateralMint: "mock-collateral-mint",
         collateralExchangeRateUi: 1.0,
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
         loanToValue: 75,
         liquidationThreshold: 80,
         liquidationBonus: 500,
@@ -62,6 +64,8 @@ describe("Oracle Cache Tests", () => {
         collateralMint: "mock-collateral-mint",
         collateralExchangeRateUi: 1.0,
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
         loanToValue: 70,
         liquidationThreshold: 75,
         liquidationBonus: 450,
@@ -151,6 +155,129 @@ describe("Oracle Cache Tests", () => {
       expect(mockConnection.getMultipleAccountsInfo).not.toHaveBeenCalled();
     });
 
+    it("applies reserve maxAgePriceSeconds per mint when one oracle is shared", async () => {
+      const sharedOracle = new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix");
+      const strictMint = "So11111111111111111111111111111111111111112";
+      const lenientMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+      const strictReservePubkey = PublicKey.unique();
+      const lenientReservePubkey = PublicKey.unique();
+      const staleBy30Sec = Math.floor(Date.now() / 1000) - 30;
+
+      const mkReserve = (
+        reservePubkey: PublicKey,
+        mint: string,
+        maxAgePriceSeconds: number | null
+      ) => ({
+        reservePubkey,
+        liquidityMint: mint,
+        availableAmount: 1000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: `${mint}-collateral`,
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        maxAgePriceSeconds,
+        maxAgeTwapSeconds: null,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [sharedOracle],
+      });
+      const strictEntry = mkReserve(strictReservePubkey, strictMint, 5);
+      const lenientEntry = mkReserve(lenientReservePubkey, lenientMint, 120);
+      const reserveCache: ReserveCache = {
+        byMint: new Map([
+          [strictMint, strictEntry],
+          [lenientMint, lenientEntry],
+        ]),
+        byReserve: new Map([
+          [strictReservePubkey.toString(), strictEntry],
+          [lenientReservePubkey.toString(), lenientEntry],
+        ]),
+      };
+
+      const switchboardData = Buffer.alloc(500);
+      switchboardData.writeBigInt64LE(200000000n, 217);
+      switchboardData.writeUInt32LE(8, 225);
+      switchboardData.writeBigInt64LE(100000n, 249);
+      switchboardData.writeBigInt64LE(BigInt(staleBy30Sec), 129);
+
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: switchboardData, owner: new PublicKey("SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f") },
+      ]);
+
+      const cache = await loadOracles(mockConnection, reserveCache);
+      expect(cache.has(strictMint)).toBe(false);
+      expect(cache.has(lenientMint)).toBe(true);
+    });
+
+    it("applies per-mint max age in applyOracleAccountUpdate", () => {
+      const sharedOracle = new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix");
+      const strictMint = "So11111111111111111111111111111111111111112";
+      const lenientMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+      const strictReservePubkey = PublicKey.unique();
+      const lenientReservePubkey = PublicKey.unique();
+      const staleBy30Sec = Math.floor(Date.now() / 1000) - 30;
+
+      const mkReserve = (
+        reservePubkey: PublicKey,
+        mint: string,
+        maxAgePriceSeconds: number | null
+      ) => ({
+        reservePubkey,
+        liquidityMint: mint,
+        availableAmount: 1000000n,
+        cumulativeBorrowRate: 0n,
+        cumulativeBorrowRateBsfRaw: 1000000000000000000n,
+        collateralMint: `${mint}-collateral`,
+        collateralExchangeRateUi: 1.0,
+        scopePriceChain: null,
+        maxAgePriceSeconds,
+        maxAgeTwapSeconds: null,
+        loanToValue: 75,
+        liquidationThreshold: 80,
+        liquidationBonus: 500,
+        borrowFactor: 100,
+        liquidityDecimals: 6,
+        collateralDecimals: 6,
+        oraclePubkeys: [sharedOracle],
+      });
+      const strictEntry = mkReserve(strictReservePubkey, strictMint, 5);
+      const lenientEntry = mkReserve(lenientReservePubkey, lenientMint, 120);
+      const reserveCache: ReserveCache = {
+        byMint: new Map([
+          [strictMint, strictEntry],
+          [lenientMint, lenientEntry],
+        ]),
+        byReserve: new Map([
+          [strictReservePubkey.toString(), strictEntry],
+          [lenientReservePubkey.toString(), lenientEntry],
+        ]),
+      };
+      const switchboardData = Buffer.alloc(500);
+      switchboardData.writeBigInt64LE(200000000n, 217);
+      switchboardData.writeUInt32LE(8, 225);
+      switchboardData.writeBigInt64LE(100000n, 249);
+      switchboardData.writeBigInt64LE(BigInt(staleBy30Sec), 129);
+
+      const oracleCache = new Map();
+      const result = applyOracleAccountUpdate({
+        oraclePubkey: sharedOracle.toString(),
+        owner: new PublicKey("SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f"),
+        data: switchboardData,
+        reserveCache,
+        oracleCache,
+      });
+
+      expect(result.updatedMints).toContain(lenientMint);
+      expect(result.updatedMints).not.toContain(strictMint);
+      expect(oracleCache.has(lenientMint)).toBe(true);
+      expect(oracleCache.has(strictMint)).toBe(false);
+    });
+
     it("should keep the freshest oracle price when multiple pubkeys map to one mint", async () => {
       const mint = "So11111111111111111111111111111111111111112";
       const newerOracle = new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix");
@@ -166,6 +293,8 @@ describe("Oracle Cache Tests", () => {
         collateralMint: "mock-collateral-mint",
         collateralExchangeRateUi: 1.0,
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
         loanToValue: 75,
         liquidationThreshold: 80,
         liquidationBonus: 500,
@@ -221,6 +350,8 @@ describe("Oracle Cache Tests", () => {
         collateralMint: "mock-collateral-mint",
         collateralExchangeRateUi: 1.0,
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
         loanToValue: 75,
         liquidationThreshold: 80,
         liquidationBonus: 500,
@@ -261,6 +392,8 @@ describe("Oracle Cache Tests", () => {
         collateralMint: "mock-collateral-mint",
         collateralExchangeRateUi: 1.0,
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
         loanToValue: 75,
         liquidationThreshold: 80,
         liquidationBonus: 500,
@@ -279,6 +412,8 @@ describe("Oracle Cache Tests", () => {
         collateralMint: "mock-collateral-mint",
         collateralExchangeRateUi: 1.0,
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
         loanToValue: 70,
         liquidationThreshold: 75,
         liquidationBonus: 450,
@@ -346,6 +481,8 @@ describe("Oracle Cache Tests", () => {
         collateralMint: "mock-collateral-mint",
         collateralExchangeRateUi: 1.0,
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
         loanToValue: 75,
         liquidationThreshold: 80,
         liquidationBonus: 500,
@@ -412,6 +549,8 @@ describe("Oracle Cache Tests", () => {
         collateralMint: "mock-collateral-mint",
         collateralExchangeRateUi: 1.0,
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
         loanToValue: 75,
         liquidationThreshold: 80,
         liquidationBonus: 500,
@@ -454,6 +593,8 @@ describe("Oracle Cache Tests", () => {
           collateralMint: "mock-collateral-mint",
           collateralExchangeRateUi: 1.0,
           scopePriceChain: null,
+          maxAgePriceSeconds: null,
+          maxAgeTwapSeconds: null,
           loanToValue: 75,
           liquidationThreshold: 80,
           liquidationBonus: 500,
@@ -511,6 +652,8 @@ describe("Oracle Cache Tests", () => {
         collateralMint: "mock-collateral-mint",
         collateralExchangeRateUi: 1.0,
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
         loanToValue: 75,
         liquidationThreshold: 80,
         liquidationBonus: 500,

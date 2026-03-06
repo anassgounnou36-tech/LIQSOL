@@ -130,6 +130,7 @@ export interface PresubmitterConfig {
   programId: PublicKey;
   topK: number; // number of top plans to prebuild
   refreshMs: number; // minimum refresh interval per obligation
+  preReserveRefreshMode: 'all' | 'primary' | 'auto';
 }
 
 /**
@@ -193,7 +194,7 @@ export class Presubmitter {
    */
   private async buildEntry(plan: FlashloanPlan): Promise<PresubmitEntry> {
     const executorLut = await this.getExecutorLutIfConfigured();
-    const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
+    const envPreReserveRefreshMode = this.config.preReserveRefreshMode;
     const buildProfiles: Array<{ disableFarmsRefresh: boolean; disablePostFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto'; omitComputeBudgetIxs: boolean }> = [
       { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
     ];
@@ -223,8 +224,10 @@ export class Presubmitter {
         omitComputeBudgetIxs: profile.omitComputeBudgetIxs,
       });
 
-      const swapRequired = !candidate.collateralMint.equals(candidate.repayMint);
-      const skippedBecauseSetup = candidate.setupIxs.length > 0 && swapRequired && candidate.swapIxs.length === 0;
+      const skippedBecauseSetup = candidate.setupIxs.length > 0 && candidate.swapRequired && !candidate.swapReady;
+      if (candidate.swapRequired && !candidate.swapReady && !skippedBecauseSetup) {
+        throw new Error(`[Presubmit] swap-required-missing for ${plan.obligationPubkey}`);
+      }
       const bh = await this.config.connection.getLatestBlockhash();
       let candidateTx: VersionedTransaction | undefined;
       let candidateMode: PresubmitEntry['mode'] = 'partial';

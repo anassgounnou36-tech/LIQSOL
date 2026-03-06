@@ -16,6 +16,7 @@ import { buildComputeBudgetIxs } from '../execution/computeBudget.js';
 import { Presubmitter } from '../presubmit/presubmitter.js';
 import { isTxTooLarge } from './txSize.js';
 import { collectLutCandidateAddresses, createExecutorLut, extendExecutorLut, loadExecutorLut } from '../solana/executorLutManager.js';
+import { verifyPlanAfterRefresh } from './refreshVerifier.js';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
@@ -167,6 +168,61 @@ export function computeTtlRemainingMin(plan: Pick<Plan, 'ttlMin' | 'ttlComputedA
   return Math.max(0, ttlComputedMin - elapsedMin);
 }
 
+export function selectTopNearReadyForRefreshVerify(
+  plans: Plan[],
+  nowMs: number,
+  ttlWindowMin: number,
+  topK: number
+): Array<{ plan: Plan; ttlRemainingMin: number }> {
+  return plans
+    .map((plan) => ({ plan, ttlRemainingMin: computeTtlRemainingMin(plan, nowMs) }))
+    .filter((entry) => entry.ttlRemainingMin !== null && entry.ttlRemainingMin <= ttlWindowMin)
+    .sort((a, b) => Number(b.plan.ev ?? 0) - Number(a.plan.ev ?? 0))
+    .slice(0, Math.max(0, topK)) as Array<{ plan: Plan; ttlRemainingMin: number }>;
+}
+
+export async function applyRefreshVerifierGate(args: {
+  candidates: Plan[];
+  tooEarlyNearReadyCandidates: Array<{ plan: Plan; ttlRemainingMin: number }>;
+  refreshVerifyEnabled: boolean;
+  refreshVerifyWindowMin: number;
+  refreshVerifyTopK: number;
+  verifyFn: (entry: { plan: Plan; ttlRemainingMin: number }) => Promise<{ eligible: boolean; reason: string; healthRatioAfterRefresh: number | null }>;
+}): Promise<Plan[]> {
+  const {
+    candidates,
+    tooEarlyNearReadyCandidates,
+    refreshVerifyEnabled,
+    refreshVerifyWindowMin,
+    refreshVerifyTopK,
+    verifyFn,
+  } = args;
+  if (!refreshVerifyEnabled || tooEarlyNearReadyCandidates.length === 0) {
+    return candidates;
+  }
+  const verifyTargets = tooEarlyNearReadyCandidates
+    .filter((entry) => entry.ttlRemainingMin <= refreshVerifyWindowMin)
+    .sort((a, b) => Number(b.plan.ev ?? 0) - Number(a.plan.ev ?? 0))
+    .slice(0, Math.max(0, refreshVerifyTopK));
+  for (const targetToVerify of verifyTargets) {
+    const verifyResult = await verifyFn(targetToVerify);
+    if (verifyResult.eligible) {
+      candidates.push(targetToVerify.plan);
+    }
+  }
+  return candidates.sort((a, b) => {
+    const liqDiff = (b.liquidationEligible ? 1 : 0) - (a.liquidationEligible ? 1 : 0);
+    if (liqDiff !== 0) return liqDiff;
+    const evDiff = Number(b.ev ?? 0) - Number(a.ev ?? 0);
+    if (evDiff !== 0) return evDiff;
+    const aTtl = a.ttlMin !== null && a.ttlMin !== undefined ? Number(a.ttlMin) : Infinity;
+    const bTtl = b.ttlMin !== null && b.ttlMin !== undefined ? Number(b.ttlMin) : Infinity;
+    const ttlDiff = aTtl - bTtl;
+    if (ttlDiff !== 0) return ttlDiff;
+    return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
+  });
+}
+
 /**
  * PR62: Validate plan has required fields and correct version
  * Fail-fast with clear error message if plan is outdated or incomplete
@@ -226,6 +282,7 @@ async function warmupExecutorLutFromQueue(args: {
   plans: Plan[];
   executorLut: AddressLookupTableAccount;
   topK: number;
+  preReserveRefreshMode: 'all' | 'primary' | 'auto';
 }): Promise<AddressLookupTableAccount> {
   const selectedPlans = args.plans.slice(0, args.topK);
   console.log(`[LUT] warmup start: plans=${selectedPlans.length} initialSize=${args.executorLut.state.addresses.length}`);
@@ -239,7 +296,7 @@ async function warmupExecutorLutFromQueue(args: {
         includeSwap: false,
         useRealSwapSizing: false,
         dry: false,
-        preReserveRefreshModeOverride: (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto',
+        preReserveRefreshModeOverride: args.preReserveRefreshMode,
         disableFarmsRefresh: false,
         disablePostFarmsRefresh: false,
         omitComputeBudgetIxs: false,
@@ -330,6 +387,8 @@ async function buildFullTransaction(
       hasFarmsRefresh: boolean;
       hasPostFarmsRefresh: boolean;
       farmRequiredModes: number[];
+      swapRequired: boolean;
+      swapReady: boolean;
     };
   }> {
   const built = await buildPlanTransactions({
@@ -365,6 +424,8 @@ async function buildFullTransaction(
       hasFarmsRefresh: built.hasFarmsRefresh,
       hasPostFarmsRefresh: built.hasPostFarmsRefresh,
       farmRequiredModes: built.farmRequiredModes,
+      swapRequired: built.swapRequired,
+      swapReady: built.swapReady,
     },
   };
 }
@@ -482,6 +543,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
               plans,
               executorLut,
               topK: warmupTopK,
+              preReserveRefreshMode: env.PRE_RESERVE_REFRESH_MODE,
             });
             if (warmupOnly) {
               console.log('[LUT] warmup-only enabled; exiting tick without attempting liquidations');
@@ -526,6 +588,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     };
     let earliestTooEarlyTtlRemainingMin: number | null = null;
     let earliestTooEarlyPredictedAtMs: number | null = null;
+    const tooEarlyNearReadyCandidates: Array<{ plan: Plan; ttlRemainingMin: number }> = [];
 
     const candidates = plans
       .filter(p => {
@@ -576,6 +639,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
           if (ttlRemainingMin !== null && ttlRemainingMin > execReadyTtlMaxMin) {
             filterReasons.skipped_too_early++;
+            const verifyWindowMin = Number(env.EXEC_REFRESH_VERIFY_TTL_WINDOW_MIN ?? 5);
+            if (ttlRemainingMin <= verifyWindowMin) {
+              tooEarlyNearReadyCandidates.push({ plan: p, ttlRemainingMin });
+            }
             if (earliestTooEarlyTtlRemainingMin === null || ttlRemainingMin < earliestTooEarlyTtlRemainingMin) {
               earliestTooEarlyTtlRemainingMin = ttlRemainingMin;
             }
@@ -627,6 +694,33 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
     console.log('[Executor] Filter results:', filterReasons);
 
+    const refreshVerifyEnabled = (env.EXEC_REFRESH_VERIFY_ENABLED ?? 'true') === 'true';
+    const refreshVerifyWindowMin = Number(env.EXEC_REFRESH_VERIFY_TTL_WINDOW_MIN ?? 5);
+    const refreshVerifyTopK = Number(env.EXEC_REFRESH_VERIFY_TOPK ?? 3);
+    await applyRefreshVerifierGate({
+      candidates,
+      tooEarlyNearReadyCandidates,
+      refreshVerifyEnabled,
+      refreshVerifyWindowMin,
+      refreshVerifyTopK,
+      verifyFn: async (targetToVerify) => {
+        const verifyResult = await verifyPlanAfterRefresh({
+          connection,
+          signer,
+          market,
+          programId,
+          plan: targetToVerify.plan as FlashloanPlan,
+          env,
+        });
+        console.log(
+          `[Executor] refresh-verify obligation=${targetToVerify.plan.obligationPubkey} ttlRemainingMin=${targetToVerify.ttlRemainingMin.toFixed(3)} eligible=${verifyResult.eligible} reason=${verifyResult.reason} hr=${verifyResult.healthRatioAfterRefresh ?? 'n/a'}`
+        );
+        return verifyResult;
+      },
+    }).catch((err) => {
+      console.warn(`[Executor] refresh-verify failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+
     if (candidates.length === 0) {
       if (filterReasons.skipped_too_early > 0) {
         console.log(
@@ -647,6 +741,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         programId,
         topK: presubmitTopK,
         refreshMs: presubmitRefreshMs,
+        preReserveRefreshMode: env.PRE_RESERVE_REFRESH_MODE,
       });
     }
     try {
@@ -739,21 +834,22 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   let missingAtas: Array<{ mint: string; ataAddress: string; purpose: 'repay' | 'collateral' | 'withdrawLiq' }> = [];
   let ixs: TransactionInstruction[] = [];
   let labels: string[] = [];
-  let swapIxs: TransactionInstruction[] = [];
   let swapLookupTables: AddressLookupTableAccount[] = [];
   let atomicIxs: TransactionInstruction[] = [];
   let atomicLabels: string[] = [];
   let atomicLookupTables: AddressLookupTableAccount[] = [];
-  let metadata: { hasFarmsRefresh: boolean; hasPostFarmsRefresh: boolean; farmRequiredModes: number[]; repayMint: PublicKey; collateralMint: PublicKey; withdrawCollateralMint: PublicKey } = {
+  let metadata: { hasFarmsRefresh: boolean; hasPostFarmsRefresh: boolean; farmRequiredModes: number[]; repayMint: PublicKey; collateralMint: PublicKey; withdrawCollateralMint: PublicKey; swapRequired: boolean; swapReady: boolean } = {
     hasFarmsRefresh: false,
     hasPostFarmsRefresh: false,
     farmRequiredModes: [],
     repayMint: PublicKey.default,
     collateralMint: PublicKey.default,
     withdrawCollateralMint: PublicKey.default,
+    swapRequired: false,
+    swapReady: true,
   };
   let presubmittedTx: VersionedTransaction | undefined;
-  const envPreReserveRefreshMode = (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
+  const envPreReserveRefreshMode = env.PRE_RESERVE_REFRESH_MODE;
   const buildProfiles: Array<{ disableFarmsRefresh: boolean; disablePostFarmsRefresh: boolean; preReserveRefreshMode: 'all' | 'primary' | 'auto'; omitComputeBudgetIxs: boolean }> = [
     { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
   ];
@@ -869,7 +965,6 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       missingAtas = result.missingAtas;
       ixs = result.ixs;
       labels = result.labels;
-      swapIxs = result.swapIxs;
       swapLookupTables = result.swapLookupTables;
       atomicIxs = result.atomicIxs;
       atomicLabels = result.atomicLabels;
@@ -899,6 +994,11 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   
   const buildMs = Date.now() - buildStart;
   console.log(`[Executor] Built ${ixs.length} liquidation instructions in ${buildMs}ms`);
+
+  if (metadata.swapRequired && !metadata.swapReady && setupIxs.length === 0) {
+    console.warn('[Executor] swap-required-missing: cross-mint liquidation has no swap instructions');
+    return { status: 'swap-required-missing' };
+  }
   
   // TX Size Fix: Handle setup transaction if needed
   if (setupIxs.length > 0) {
@@ -967,7 +1067,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         return { status: 'obligation-healthy' };
       }
 
-      const swapWasSkippedForSetup = swapIxs.length === 0 && !metadata.collateralMint.equals(metadata.repayMint);
+      const swapWasSkippedForSetup = metadata.swapRequired && !metadata.swapReady;
       if (
         broadcast &&
         swapWasSkippedForSetup &&

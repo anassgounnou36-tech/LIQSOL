@@ -84,6 +84,8 @@ describe("Reserve Cache Tests", () => {
             cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
             collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
+            maxAgePriceSeconds: 45,
+            maxAgeTwapSeconds: null,
           };
         } else {
           return {
@@ -103,6 +105,8 @@ describe("Reserve Cache Tests", () => {
             cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
             collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
+            maxAgePriceSeconds: null,
+            maxAgeTwapSeconds: null,
           };
         }
       });
@@ -141,6 +145,7 @@ describe("Reserve Cache Tests", () => {
       expect(entry1!.liquidationBonus).toBe(500);
       expect(entry1!.oraclePubkeys.length).toBe(1);
       expect(entry1!.oraclePubkeys[0].toString()).toBe(oracle1);
+      expect(entry1!.maxAgePriceSeconds).toBe(45);
 
       // Verify reserve 2 via byMint
       const entry2 = cache.byMint.get(mint2);
@@ -152,6 +157,7 @@ describe("Reserve Cache Tests", () => {
       expect(entry2!.liquidationBonus).toBe(450);
       expect(entry2!.oraclePubkeys.length).toBe(1);
       expect(entry2!.oraclePubkeys[0].toString()).toBe(oracle2);
+      expect(entry2!.maxAgePriceSeconds).toBeNull();
       
       // Verify byReserve lookups return same entries
       expect(cache.byReserve.get(reserve1Pubkey.toString())).toBe(entry1);
@@ -216,6 +222,8 @@ describe("Reserve Cache Tests", () => {
             cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
             collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
+            maxAgePriceSeconds: null,
+            maxAgeTwapSeconds: null,
           };
         } else {
           return {
@@ -235,6 +243,8 @@ describe("Reserve Cache Tests", () => {
             cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
             collateralMintTotalSupplyRaw: "1000000",
             scopePriceChain: null,
+            maxAgePriceSeconds: null,
+            maxAgeTwapSeconds: null,
           };
         }
       });
@@ -372,6 +382,8 @@ describe("Reserve Cache Tests", () => {
           cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
           collateralMintTotalSupplyRaw: "1000000",
           scopePriceChain: null,
+          maxAgePriceSeconds: null,
+          maxAgeTwapSeconds: null,
         };
       });
 
@@ -455,6 +467,8 @@ describe("Reserve Cache Tests", () => {
         cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
         collateralMintTotalSupplyRaw: "1000000",
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
       }));
 
       vi.spyOn(decoder, "setReserveMintCache");
@@ -528,6 +542,8 @@ describe("Reserve Cache Tests", () => {
         cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
         collateralMintTotalSupplyRaw: "1000000",
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
       }));
 
       vi.spyOn(decoder, "setReserveMintCache");
@@ -583,6 +599,8 @@ describe("Reserve Cache Tests", () => {
         cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
         collateralMintTotalSupplyRaw: "1500000000", // 1500 collateral tokens
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
       });
 
       vi.spyOn(decoder, "setReserveMintCache");
@@ -641,6 +659,8 @@ describe("Reserve Cache Tests", () => {
         cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
         collateralMintTotalSupplyRaw: "1200000000", // 1200 collateral tokens
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
       });
 
       vi.spyOn(decoder, "setReserveMintCache");
@@ -709,6 +729,8 @@ describe("Reserve Cache Tests", () => {
           cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
           collateralMintTotalSupplyRaw: "1000000000",
           scopePriceChain: null,
+          maxAgePriceSeconds: null,
+          maxAgeTwapSeconds: null,
         };
       });
 
@@ -767,6 +789,8 @@ describe("Reserve Cache Tests", () => {
         cumulativeBorrowRateBsfRaw: oneRateBsfRaw,
         collateralMintTotalSupplyRaw: "1000000000",
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
       }));
 
       vi.spyOn(decoder, "setReserveMintCache");
@@ -808,6 +832,8 @@ describe("Reserve Cache Tests", () => {
         cumulativeBorrowRateBsfRaw: ((SF_SCALE * 13025n) / 10000n).toString(), // 1.3025 × SF_SCALE should NOT inflate borrow again
         collateralMintTotalSupplyRaw: "1000000000", // 1000 * 1e6
         scopePriceChain: null,
+        maxAgePriceSeconds: null,
+        maxAgeTwapSeconds: null,
       });
 
       mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([

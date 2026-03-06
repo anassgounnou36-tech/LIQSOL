@@ -37,6 +37,10 @@ export interface DecodedReserve {
   scopePriceChain: number[] | null;
   /** Scope oracle account pubkey for this reserve, null/undefined if not using Scope */
   scopeOraclePubkey?: string | null;
+  /** Reserve-configured max oracle age for price feeds in seconds */
+  maxAgePriceSeconds: number | null;
+  /** Reserve-configured max oracle age for TWAP feeds in seconds */
+  maxAgeTwapSeconds: number | null;
 }
 
 /**

@@ -223,6 +223,16 @@ export function decodeReserve(
     collateralMintTotalSupplyRaw: toBigIntSafe(decoded.collateral?.mintTotalSupply, 0n).toString(),
     scopePriceChain,
     scopeOraclePubkey,
+    maxAgePriceSeconds:
+      decoded.config?.tokenInfo?.maxAgePriceSeconds !== undefined &&
+      decoded.config?.tokenInfo?.maxAgePriceSeconds !== null
+        ? Number(decoded.config.tokenInfo.maxAgePriceSeconds)
+        : null,
+    maxAgeTwapSeconds:
+      decoded.config?.tokenInfo?.maxAgeTwapSeconds !== undefined &&
+      decoded.config?.tokenInfo?.maxAgeTwapSeconds !== null
+        ? Number(decoded.config.tokenInfo.maxAgeTwapSeconds)
+        : null,
   };
 
   return result;

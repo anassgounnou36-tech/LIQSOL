@@ -89,6 +89,10 @@ export const EnvSchema = z.object({
   EXEC_MIN_EV: z.string().optional().default('0'),
   EXEC_MAX_TTL_MIN: z.string().optional().default('10'),
   EXEC_READY_TTL_MAX_MIN: z.string().optional().default('0.25'),
+  EXEC_REFRESH_VERIFY_ENABLED: z.string().optional().default('true'),
+  EXEC_REFRESH_VERIFY_TOPK: z.string().optional().default('3'),
+  EXEC_REFRESH_VERIFY_TTL_WINDOW_MIN: z.string().optional().default('5'),
+  EXEC_REFRESH_VERIFY_CACHE_MS: z.string().optional().default('750'),
   EXEC_EARLY_GRACE_MS: z.string().optional().default('3000'),
   EXEC_MIN_FEE_PAYER_SOL: z.string().optional().default('0.05'),
   EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).optional().default(300),
@@ -114,6 +118,8 @@ export const EnvSchema = z.object({
   PRESUBMIT_ENABLED: z.string().optional().default('false'),
   PRESUBMIT_TOPK: z.string().optional().default('5'),
   PRESUBMIT_TTL_MS: z.string().optional().default('60000'),
+  PRE_RESERVE_REFRESH_MODE: z.enum(['all', 'primary', 'auto']).optional().default('auto'),
+  ALLOW_UNSAFE_PRIMARY_REFRESH: z.string().optional().default('false'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -159,6 +165,16 @@ export function loadEnv(injectedEnv?: Record<string, string | undefined>): Env {
     if (!fs.existsSync(resolved)) {
       throw new Error(`BOT_KEYPAIR_PATH does not exist: ${resolved}`);
     }
+  }
+
+  if (
+    parsed.data.NODE_ENV === "production" &&
+    parsed.data.PRE_RESERVE_REFRESH_MODE === "primary" &&
+    parsed.data.ALLOW_UNSAFE_PRIMARY_REFRESH !== "true"
+  ) {
+    throw new Error(
+      "Unsafe configuration: PRE_RESERVE_REFRESH_MODE=primary is blocked in production. Set ALLOW_UNSAFE_PRIMARY_REFRESH=true to explicitly override."
+    );
   }
 
   return parsed.data;

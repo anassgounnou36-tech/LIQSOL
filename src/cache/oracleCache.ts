@@ -76,6 +76,29 @@ export interface OraclePriceData {
  */
 export type OracleCache = Map<string, OraclePriceData>;
 
+function getReserveMaxAgePriceSeconds(reserveCache: ReserveCache, mint: string): number | null {
+  return reserveCache.byMint.get(mint)?.maxAgePriceSeconds ?? null;
+}
+
+function computeAgeSeconds(slotTimestamp: bigint): number | null {
+  if (slotTimestamp <= 0n) {
+    return null;
+  }
+  const currentTime = BigInt(Math.floor(Date.now() / 1000));
+  return Number(currentTime - slotTimestamp);
+}
+
+function isFreshForMint(
+  decoded: OraclePriceData,
+  effectiveMaxAgeSec: number
+): { fresh: boolean; ageSeconds: number | null } {
+  const ageSeconds = computeAgeSeconds(decoded.slot);
+  if (ageSeconds === null) {
+    return { fresh: true, ageSeconds: null };
+  }
+  return { fresh: ageSeconds <= effectiveMaxAgeSec, ageSeconds };
+}
+
 function maybeSetMintPrice(cache: OracleCache, mint: string, next: OraclePriceData): void {
   const prev = cache.get(mint);
   if (!prev || next.slot > prev.slot) {
@@ -106,18 +129,8 @@ function decodePythPriceWithSdk(data: Buffer): OraclePriceData | null {
       return null;
     }
 
-    // Use publishTime for freshness (unix timestamp)
+    // Keep timestamp for freshness checks during per-mint mapping
     const publishTime = BigInt(parsed.timestamp || 0);
-    const currentTime = BigInt(Math.floor(Date.now() / 1000));
-    const ageSeconds = Number(currentTime - publishTime);
-    
-    if (ageSeconds > PYTH_MAX_AGE_SEC) {
-      logger.debug(
-        { ageSeconds, threshold: PYTH_MAX_AGE_SEC },
-        "Pyth price is stale, skipping"
-      );
-      return null;
-    }
 
     return {
       price: BigInt(Math.trunc(parsed.price)),
@@ -163,20 +176,8 @@ function decodeSwitchboardPriceWithSdk(data: Buffer): OraclePriceData | null {
     // Last update timestamp: i64 at offset 129
     const lastUpdate = data.readBigInt64LE(129);
 
-    // Staleness check
+    // Keep timestamp for freshness checks during per-mint mapping
     const updateTime = lastUpdate > 0n ? lastUpdate : 0n;
-    if (updateTime > 0n) {
-      const currentTime = BigInt(Math.floor(Date.now() / 1000));
-      const ageSeconds = Number(currentTime - updateTime);
-      
-      if (ageSeconds > SWITCHBOARD_MAX_AGE_SEC) {
-        logger.debug(
-          { ageSeconds, threshold: SWITCHBOARD_MAX_AGE_SEC },
-          "Switchboard price is stale, skipping"
-        );
-        return null;
-      }
-    }
 
     // Convert scale to exponent
     const exponent = -Number(scale);
@@ -231,26 +232,6 @@ function decodeScopePrice(
 
   // Shared validation + conversion for Scope-decoded UI prices.
   const buildPriceData = (uiPrice: number, timestampSec: number): OraclePriceData | null => {
-    const ageSec = Date.now() / 1000 - timestampSec;
-    if (ageSec > SCOPE_MAX_AGE_SEC) {
-      const chainKey = chains.join(',');
-      const nowMs = Date.now();
-      const lastWarnMs = lastScopeStaleWarnMs.get(chainKey) ?? 0;
-      if (nowMs - lastWarnMs > 60_000) {
-        lastScopeStaleWarnMs.set(chainKey, nowMs);
-        logger.warn(
-          { chain: chains, ageSec, threshold: SCOPE_MAX_AGE_SEC },
-          "[OracleCache] Scope chain price is stale"
-        );
-      } else {
-        logger.debug(
-          { chain: chains, ageSec, threshold: SCOPE_MAX_AGE_SEC },
-          "[OracleCache] Scope chain price is stale (rate-limited)"
-        );
-      }
-      return null;
-    }
-
     if (!Number.isFinite(uiPrice) || uiPrice <= 0) {
       logger.warn({ chain: chains, uiPrice }, "[OracleCache] Scope chain returned invalid price");
       return null;
@@ -272,7 +253,7 @@ function decodeScopePrice(
     }
 
     logger.debug(
-      { chain: chains, uiPrice, exponent, timestampSec, ageSec },
+      { chain: chains, uiPrice, exponent, timestampSec },
       "[OracleCache] Scope chain priced"
     );
 
@@ -346,6 +327,33 @@ function applyStablecoinClamp(price: bigint, exponent: number, mint: string): bi
   return clampedPrice;
 }
 
+function maybeAssignMintPrice(args: {
+  cache: OracleCache;
+  reserveCache: ReserveCache;
+  mint: string;
+  decoded: OraclePriceData;
+  defaultMaxAgeSec: number;
+  staleLogLabel: string;
+}): boolean {
+  const reserveMaxAge = getReserveMaxAgePriceSeconds(args.reserveCache, args.mint);
+  const effectiveMaxAge = reserveMaxAge ?? args.defaultMaxAgeSec;
+  const freshness = isFreshForMint(args.decoded, effectiveMaxAge);
+  if (!freshness.fresh) {
+    logger.debug(
+      {
+        mint: args.mint,
+        ageSeconds: freshness.ageSeconds,
+        threshold: effectiveMaxAge,
+      },
+      args.staleLogLabel
+    );
+    return false;
+  }
+  const adjustedPrice = applyStablecoinClamp(args.decoded.price, args.decoded.exponent, args.mint);
+  maybeSetMintPrice(args.cache, args.mint, { ...args.decoded, price: adjustedPrice });
+  return true;
+}
+
 export function applyOracleAccountUpdate(args: {
   oraclePubkey: string;
   owner: PublicKey;
@@ -388,6 +396,27 @@ export function applyOracleAccountUpdate(args: {
     for (const [mint, chains] of mintChains.entries()) {
       const decoded = decodeScopePrice(data, chains);
       if (!decoded) continue;
+      const reserveMaxAge = getReserveMaxAgePriceSeconds(reserveCache, mint);
+      const effectiveMaxAge = reserveMaxAge ?? SCOPE_MAX_AGE_SEC;
+      const freshness = isFreshForMint(decoded, effectiveMaxAge);
+      if (!freshness.fresh) {
+        const chainKey = `${mint}:${chains.join(',')}:${effectiveMaxAge}`;
+        const nowMs = Date.now();
+        const lastWarnMs = lastScopeStaleWarnMs.get(chainKey) ?? 0;
+        if (nowMs - lastWarnMs > 60_000) {
+          lastScopeStaleWarnMs.set(chainKey, nowMs);
+          logger.warn(
+            { mint, chain: chains, ageSec: freshness.ageSeconds, threshold: effectiveMaxAge },
+            "[OracleCache] Scope chain price is stale"
+          );
+        } else {
+          logger.debug(
+            { mint, chain: chains, ageSec: freshness.ageSeconds, threshold: effectiveMaxAge },
+            "[OracleCache] Scope chain price is stale (rate-limited)"
+          );
+        }
+        continue;
+      }
       const adjustedPrice = applyStablecoinClamp(decoded.price, decoded.exponent, mint);
       maybeSetMintPrice(oracleCache, mint, { ...decoded, price: adjustedPrice });
       updatedMints.add(mint);
@@ -405,9 +434,17 @@ export function applyOracleAccountUpdate(args: {
 
   oracleCache.set(oraclePubkey, decoded);
   for (const mint of allMints) {
-    const adjustedPrice = applyStablecoinClamp(decoded.price, decoded.exponent, mint);
-    maybeSetMintPrice(oracleCache, mint, { ...decoded, price: adjustedPrice });
-    updatedMints.add(mint);
+    const assigned = maybeAssignMintPrice({
+      cache: oracleCache,
+      reserveCache,
+      mint,
+      decoded,
+      defaultMaxAgeSec: oracleType === 'pyth' ? PYTH_MAX_AGE_SEC : SWITCHBOARD_MAX_AGE_SEC,
+      staleLogLabel: oracleType === 'pyth' ? "Pyth price is stale, skipping" : "Switchboard price is stale, skipping",
+    });
+    if (assigned) {
+      updatedMints.add(mint);
+    }
   }
 
   return { updatedMints: Array.from(updatedMints), oracleType };
@@ -693,11 +730,33 @@ export async function loadOracles(
           );
           continue;
         }
-        
+
+        const reserveMaxAge = getReserveMaxAgePriceSeconds(reserveCache, mint);
+        const effectiveMaxAge = reserveMaxAge ?? SCOPE_MAX_AGE_SEC;
+        const freshness = isFreshForMint(priceData, effectiveMaxAge);
+        if (!freshness.fresh) {
+          const chainKey = `${mint}:${chains.join(',')}:${effectiveMaxAge}`;
+          const nowMs = Date.now();
+          const lastWarnMs = lastScopeStaleWarnMs.get(chainKey) ?? 0;
+          if (nowMs - lastWarnMs > 60_000) {
+            lastScopeStaleWarnMs.set(chainKey, nowMs);
+            logger.warn(
+              { mint, chain: chains, ageSec: freshness.ageSeconds, threshold: effectiveMaxAge },
+              "[OracleCache] Scope chain price is stale"
+            );
+          } else {
+            logger.debug(
+              { mint, chain: chains, ageSec: freshness.ageSeconds, threshold: effectiveMaxAge },
+              "[OracleCache] Scope chain price is stale (rate-limited)"
+            );
+          }
+          continue;
+        }
+
         // Apply stablecoin price clamping per mint
         const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
         const adjustedPriceData = { ...priceData, price: clampedPrice };
-        
+
         // Store price under mint
         maybeSetMintPrice(cache, mint, adjustedPriceData);
         scopeCount++;
@@ -759,18 +818,24 @@ export async function loadOracles(
     let assigned = 0;
     
     for (const mint of assignedMints) {
-      // Apply stablecoin price clamping per mint
-      const clampedPrice = applyStablecoinClamp(priceData.price, priceData.exponent, mint);
-      const adjustedPriceData = { ...priceData, price: clampedPrice };
-      
-      maybeSetMintPrice(cache, mint, adjustedPriceData);
+      const accepted = maybeAssignMintPrice({
+        cache,
+        reserveCache,
+        mint,
+        decoded: priceData,
+        defaultMaxAgeSec: priceData.oracleType === 'pyth' ? PYTH_MAX_AGE_SEC : SWITCHBOARD_MAX_AGE_SEC,
+        staleLogLabel: priceData.oracleType === 'pyth' ? "Pyth price is stale, skipping" : "Switchboard price is stale, skipping",
+      });
+      if (!accepted) {
+        continue;
+      }
       assigned++;
       
       logger.debug(
         {
           oracle: pubkeyStr,
           mint,
-          price: adjustedPriceData.price.toString(),
+          price: cache.get(mint)?.price?.toString(),
           type: priceData.oracleType,
         },
         `Mapped ${priceData.oracleType} oracle price to mint`
