@@ -25,6 +25,8 @@ function makePlan(key: string, ev: number): FlashloanPlan {
     ttlMin: 10,
     ttlStr: '10m00s',
     createdAtMs: 1,
+    ttlComputedAtMs: 1,
+    ttlComputedMin: 10,
     predictedLiquidationAtMs: null,
     liquidationEligible: false,
     assets: ['mint-a'],
@@ -64,9 +66,12 @@ describe('forecastManager refreshSubset batch update', () => {
     const k2 = queue.find(p => p.key === 'k2');
     const k3 = queue.find(p => p.key === 'k3');
 
-    expect(k1?.createdAtMs).toBeGreaterThan(1);
-    expect(k2?.createdAtMs).toBeGreaterThan(1);
+    expect(k1?.createdAtMs).toBe(1);
+    expect(k2?.createdAtMs).toBe(1);
+    expect(k1?.ttlComputedAtMs).toBeGreaterThan(1);
+    expect(k2?.ttlComputedAtMs).toBeGreaterThan(1);
     expect(k3?.ev).toBe(7);
     expect(k3?.createdAtMs).toBe(1);
+    expect(k3?.ttlComputedAtMs).toBe(1);
   });
 });

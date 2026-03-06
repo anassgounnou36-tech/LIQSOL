@@ -32,7 +32,7 @@ function getEnvNum(key: string, def: number): number {
     ttlStr: q.ttl ?? q.ttlStr,
     ttlMin: q.ttlMin ?? parseTtlMinutes(q.ttl ?? q.ttlStr),
     predictedLiquidationAtMs: q.predictedLiquidationAtMs ?? null,
-    forecastUpdatedAtMs: Number(q.createdAtMs ?? q.forecastUpdatedAtMs ?? 0),
+    forecastUpdatedAtMs: Number(q.ttlComputedAtMs ?? q.createdAtMs ?? 0),
     liquidationEligible: q.liquidationEligible ?? false,
     healthRatioRaw: q.healthRatioRaw ?? q.healthRatio ?? undefined,
   }));

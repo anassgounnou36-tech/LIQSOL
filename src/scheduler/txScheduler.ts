@@ -166,7 +166,7 @@ export function refreshQueue(params: TtlManagerParams, candidateSource?: any[]):
     hazard: Number(q.hazard ?? 0),
     ttlStr: q.ttlStr,
     ttlMin: q.ttlMin ?? parseTtlMinutes(q.ttlStr),
-    forecastUpdatedAtMs: Number(q.createdAtMs ?? 0),
+    forecastUpdatedAtMs: Number(q.ttlComputedAtMs ?? q.createdAtMs ?? 0),
   }));
 
   const prevEvByKey = new Map<string, number>();

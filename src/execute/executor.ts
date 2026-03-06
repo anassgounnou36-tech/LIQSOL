@@ -131,6 +131,8 @@ interface Plan {
   hazard?: number | string;
   ttlStr?: string;
   ttlMin?: number | string | null; // Can be null for unknown
+  ttlComputedAtMs?: number | string | null;
+  ttlComputedMin?: number | string | null;
   predictedAtMs?: number | string | null; // Optional alternate timestamp key
   predictedLiquidationAtMs?: number | string | null; // Absolute timestamp
   createdAtMs?: number | string;
@@ -147,6 +149,22 @@ function parsePredictedAtMs(plan: Plan): number | null {
   if (typeof plan.predictedAtMs === 'string') return Number(plan.predictedAtMs);
   if (typeof plan.predictedLiquidationAtMs === 'string') return Number(plan.predictedLiquidationAtMs);
   return null;
+}
+
+export function computeTtlRemainingMin(plan: Pick<Plan, 'ttlMin' | 'ttlComputedAtMs' | 'ttlComputedMin' | 'createdAtMs'>, nowMs = Date.now()): number | null {
+  const ttlComputedMinRaw = plan.ttlComputedMin ?? plan.ttlMin;
+  if (ttlComputedMinRaw === null || ttlComputedMinRaw === undefined) return null;
+  const ttlComputedMin = Number(ttlComputedMinRaw);
+  if (!Number.isFinite(ttlComputedMin)) return null;
+
+  const ttlComputedAtRaw = plan.ttlComputedAtMs ?? plan.createdAtMs;
+  const ttlComputedAtMs = Number(ttlComputedAtRaw);
+  if (!Number.isFinite(ttlComputedAtMs) || ttlComputedAtMs <= 0) {
+    return Math.max(0, ttlComputedMin);
+  }
+
+  const elapsedMin = (nowMs - ttlComputedAtMs) / 60_000;
+  return Math.max(0, ttlComputedMin - elapsedMin);
 }
 
 /**
@@ -506,7 +524,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       accepted_normal: 0,
       skipped_too_early: 0,
     };
-    let earliestTooEarlyTtlMin: number | null = null;
+    let earliestTooEarlyTtlRemainingMin: number | null = null;
     let earliestTooEarlyPredictedAtMs: number | null = null;
 
     const candidates = plans
@@ -526,6 +544,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         // TTL filter with new logic
         const ttlMin = p.ttlMin;
         const predictedAtMs = parsePredictedAtMs(p);
+        const ttlRemainingMin = computeTtlRemainingMin(p, nowMs);
         
         // Handle null/unknown TTL
         if (ttlMin === null || ttlMin === undefined) {
@@ -555,10 +574,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
             return false;
           }
 
-          if (ttlMinNum > execReadyTtlMaxMin) {
+          if (ttlRemainingMin !== null && ttlRemainingMin > execReadyTtlMaxMin) {
             filterReasons.skipped_too_early++;
-            if (earliestTooEarlyTtlMin === null || ttlMinNum < earliestTooEarlyTtlMin) {
-              earliestTooEarlyTtlMin = ttlMinNum;
+            if (earliestTooEarlyTtlRemainingMin === null || ttlRemainingMin < earliestTooEarlyTtlRemainingMin) {
+              earliestTooEarlyTtlRemainingMin = ttlRemainingMin;
             }
             if (predictedAtMs !== null && Number.isFinite(predictedAtMs)) {
               if (earliestTooEarlyPredictedAtMs === null || predictedAtMs < earliestTooEarlyPredictedAtMs) {
@@ -574,9 +593,12 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           if (earliestTooEarlyPredictedAtMs === null || predictedAtMs < earliestTooEarlyPredictedAtMs) {
             earliestTooEarlyPredictedAtMs = predictedAtMs;
           }
-          const ttlMinNum = ttlMin !== null && ttlMin !== undefined ? Number(ttlMin) : null;
-          if (ttlMinNum !== null && Number.isFinite(ttlMinNum) && (earliestTooEarlyTtlMin === null || ttlMinNum < earliestTooEarlyTtlMin)) {
-            earliestTooEarlyTtlMin = ttlMinNum;
+          if (
+            ttlRemainingMin !== null &&
+            Number.isFinite(ttlRemainingMin) &&
+            (earliestTooEarlyTtlRemainingMin === null || ttlRemainingMin < earliestTooEarlyTtlRemainingMin)
+          ) {
+            earliestTooEarlyTtlRemainingMin = ttlRemainingMin;
           }
           return false;
         }
@@ -608,7 +630,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     if (candidates.length === 0) {
       if (filterReasons.skipped_too_early > 0) {
         console.log(
-          `[Executor] No ready candidates yet (too-early=${filterReasons.skipped_too_early}) earliestTtlMin=${earliestTooEarlyTtlMin ?? 'n/a'} earliestPredictedAtMs=${earliestTooEarlyPredictedAtMs ?? 'n/a'}`
+          `[Executor] No ready candidates yet (too-early=${filterReasons.skipped_too_early}) earliestTtlRemainingMin=${earliestTooEarlyTtlRemainingMin ?? 'n/a'} earliestTooEarlyPredictedAtMs=${earliestTooEarlyPredictedAtMs ?? 'n/a'}`
         );
         return { status: 'too-early' };
       }
@@ -830,8 +852,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
             );
           } else {
             buildProfiles.push(
-              { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
-              { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary', omitComputeBudgetIxs: false },
+              { disableFarmsRefresh: true, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
+              { disableFarmsRefresh: true, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true },
             );
           }
         }
@@ -965,7 +987,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           repayAmountUi: target.amountUi,
           expectedRepayReservePubkey: target.repayReservePubkey ? new PublicKey(target.repayReservePubkey) : undefined,
           expectedCollateralReservePubkey: target.collateralReservePubkey ? new PublicKey(target.collateralReservePubkey) : undefined,
-          preReserveRefreshMode: 'primary',
+          preReserveRefreshMode: envPreReserveRefreshMode,
         });
         const healthCheckIxs = [...setupIxs, ...healthCheckCanonical.instructions];
         const healthCheckBh = await connection.getLatestBlockhash();

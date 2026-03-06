@@ -249,8 +249,8 @@ export class Presubmitter {
               buildProfiles.push({ disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true });
             } else {
               buildProfiles.push(
-                { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
-                { disableFarmsRefresh: true, disablePostFarmsRefresh: false, preReserveRefreshMode: 'primary', omitComputeBudgetIxs: false },
+                { disableFarmsRefresh: true, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: false },
+                { disableFarmsRefresh: true, disablePostFarmsRefresh: true, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true },
               );
             }
           }
