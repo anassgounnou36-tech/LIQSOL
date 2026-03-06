@@ -16,7 +16,7 @@ import { buildComputeBudgetIxs } from '../execution/computeBudget.js';
 import { Presubmitter } from '../presubmit/presubmitter.js';
 import { isTxTooLarge } from './txSize.js';
 import { collectLutCandidateAddresses, createExecutorLut, extendExecutorLut, loadExecutorLut } from '../solana/executorLutManager.js';
-import { verifyPlanAfterRefresh } from './refreshVerifier.js';
+import { getKlendSdkVerifier } from '../engine/klendSdkVerifier.js';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
@@ -124,6 +124,7 @@ function formatWindowEndingAtLiquidation(tx: VersionedTransaction, liquidateIdx:
 interface Plan {
   planVersion?: number;
   key: string;
+  ownerPubkey?: string;
   obligationPubkey?: string;
   mint?: string;
   amountUi?: string;
@@ -168,45 +169,36 @@ export function computeTtlRemainingMin(plan: Pick<Plan, 'ttlMin' | 'ttlComputedA
   return Math.max(0, ttlComputedMin - elapsedMin);
 }
 
-export function selectTopNearReadyForRefreshVerify(
-  plans: Plan[],
-  nowMs: number,
-  ttlWindowMin: number,
-  topK: number
-): Array<{ plan: Plan; ttlRemainingMin: number }> {
-  return plans
-    .map((plan) => ({ plan, ttlRemainingMin: computeTtlRemainingMin(plan, nowMs) }))
-    .filter((entry) => entry.ttlRemainingMin !== null && entry.ttlRemainingMin <= ttlWindowMin)
-    .sort((a, b) => Number(b.plan.ev ?? 0) - Number(a.plan.ev ?? 0))
-    .slice(0, Math.max(0, topK)) as Array<{ plan: Plan; ttlRemainingMin: number }>;
-}
-
-export async function applyRefreshVerifierGate(args: {
+export async function applyKlendSdkNearReadyGate(args: {
   candidates: Plan[];
   tooEarlyNearReadyCandidates: Array<{ plan: Plan; ttlRemainingMin: number }>;
-  refreshVerifyEnabled: boolean;
-  refreshVerifyWindowMin: number;
-  refreshVerifyTopK: number;
-  verifyFn: (entry: { plan: Plan; ttlRemainingMin: number }) => Promise<{ eligible: boolean; reason: string; healthRatioAfterRefresh: number | null }>;
+  gateEnabled: boolean;
+  verifyWindowMin: number;
+  verifyTopK: number;
+  verifyFn: (entry: { plan: Plan; ttlRemainingMin: number }) => Promise<{
+    promoted: boolean;
+    reason: string;
+    healthRatioSdk: number | null;
+  }>;
 }): Promise<Plan[]> {
   const {
     candidates,
     tooEarlyNearReadyCandidates,
-    refreshVerifyEnabled,
-    refreshVerifyWindowMin,
-    refreshVerifyTopK,
+    gateEnabled,
+    verifyWindowMin,
+    verifyTopK,
     verifyFn,
   } = args;
-  if (!refreshVerifyEnabled || tooEarlyNearReadyCandidates.length === 0) {
+  if (!gateEnabled || tooEarlyNearReadyCandidates.length === 0) {
     return candidates;
   }
   const verifyTargets = tooEarlyNearReadyCandidates
-    .filter((entry) => entry.ttlRemainingMin <= refreshVerifyWindowMin)
+    .filter((entry) => entry.ttlRemainingMin <= verifyWindowMin)
     .sort((a, b) => Number(b.plan.ev ?? 0) - Number(a.plan.ev ?? 0))
-    .slice(0, Math.max(0, refreshVerifyTopK));
+    .slice(0, Math.max(0, verifyTopK));
   for (const targetToVerify of verifyTargets) {
     const verifyResult = await verifyFn(targetToVerify);
-    if (verifyResult.eligible) {
+    if (verifyResult.promoted) {
       candidates.push(targetToVerify.plan);
     }
   }
@@ -639,10 +631,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
           if (ttlRemainingMin !== null && ttlRemainingMin > execReadyTtlMaxMin) {
             filterReasons.skipped_too_early++;
-            const verifyWindowMin = Number(env.EXEC_REFRESH_VERIFY_TTL_WINDOW_MIN ?? 5);
-            if (ttlRemainingMin <= verifyWindowMin) {
-              tooEarlyNearReadyCandidates.push({ plan: p, ttlRemainingMin });
-            }
+            tooEarlyNearReadyCandidates.push({ plan: p, ttlRemainingMin });
             if (earliestTooEarlyTtlRemainingMin === null || ttlRemainingMin < earliestTooEarlyTtlRemainingMin) {
               earliestTooEarlyTtlRemainingMin = ttlRemainingMin;
             }
@@ -694,31 +683,62 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
     console.log('[Executor] Filter results:', filterReasons);
 
-    const refreshVerifyEnabled = (env.EXEC_REFRESH_VERIFY_ENABLED ?? 'true') === 'true';
-    const refreshVerifyWindowMin = Number(env.EXEC_REFRESH_VERIFY_TTL_WINDOW_MIN ?? 5);
-    const refreshVerifyTopK = Number(env.EXEC_REFRESH_VERIFY_TOPK ?? 3);
-    await applyRefreshVerifierGate({
+    const klendGateEnabled =
+      env.LIQSOL_HEALTH_SOURCE === 'recomputed' &&
+      env.LIQSOL_RECOMPUTED_VERIFY_BACKEND === 'klend-sdk' &&
+      env.EXEC_KLEND_VERIFY_ENABLED === 'true';
+    const klendVerifyWindowMin = Number(env.EXEC_KLEND_VERIFY_TTL_WINDOW_MIN ?? 2);
+    const klendVerifyTopK = Number(env.EXEC_KLEND_VERIFY_TOPK ?? 3);
+    await applyKlendSdkNearReadyGate({
       candidates,
       tooEarlyNearReadyCandidates,
-      refreshVerifyEnabled,
-      refreshVerifyWindowMin,
-      refreshVerifyTopK,
+      gateEnabled: klendGateEnabled,
+      verifyWindowMin: klendVerifyWindowMin,
+      verifyTopK: klendVerifyTopK,
       verifyFn: async (targetToVerify) => {
-        const verifyResult = await verifyPlanAfterRefresh({
-          connection,
-          signer,
-          market,
+        if (!targetToVerify.plan.ownerPubkey || !targetToVerify.plan.obligationPubkey) {
+          console.log(
+            `[Executor] klend-verify obligation=${targetToVerify.plan.obligationPubkey ?? 'unknown'} ttlRemainingMin=${targetToVerify.ttlRemainingMin.toFixed(3)} hr=n/a promoted=false reason=missing-plan-keys`
+          );
+          return {
+            promoted: false,
+            reason: 'missing-plan-keys',
+            healthRatioSdk: null,
+          };
+        }
+
+        const verifier = getKlendSdkVerifier({
+          rpcUrl: env.RPC_PRIMARY,
+          marketPubkey: market,
           programId,
-          plan: targetToVerify.plan as FlashloanPlan,
-          env,
+          cacheTtlMs: Math.max(1, Number(env.LIQSOL_RECOMPUTED_VERIFY_TTL_MS)),
         });
+        const verification = await verifier.verify({
+          obligationPubkey: targetToVerify.plan.obligationPubkey,
+          ownerPubkey: targetToVerify.plan.ownerPubkey,
+        });
+        if (!verification.ok) {
+          console.log(
+            `[Executor] klend-verify obligation=${targetToVerify.plan.obligationPubkey} ttlRemainingMin=${targetToVerify.ttlRemainingMin.toFixed(3)} hr=n/a promoted=false reason=${verification.reason}`
+          );
+          return {
+            promoted: false,
+            reason: verification.reason,
+            healthRatioSdk: null,
+          };
+        }
+        const promoted = verification.healthRatioSdk < 1;
         console.log(
-          `[Executor] refresh-verify obligation=${targetToVerify.plan.obligationPubkey} ttlRemainingMin=${targetToVerify.ttlRemainingMin.toFixed(3)} eligible=${verifyResult.eligible} reason=${verifyResult.reason} hr=${verifyResult.healthRatioAfterRefresh ?? 'n/a'}`
+          `[Executor] klend-verify obligation=${targetToVerify.plan.obligationPubkey} ttlRemainingMin=${targetToVerify.ttlRemainingMin.toFixed(3)} hr=${verification.healthRatioSdk.toFixed(6)} promoted=${promoted} reason=${promoted ? 'eligible' : 'healthy'}`
         );
-        return verifyResult;
+        return {
+          promoted,
+          reason: promoted ? 'eligible' : 'healthy',
+          healthRatioSdk: verification.healthRatioSdk,
+        };
       },
     }).catch((err) => {
-      console.warn(`[Executor] refresh-verify failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[Executor] klend-verify gate failed: ${err instanceof Error ? err.message : String(err)}`);
     });
 
     if (candidates.length === 0) {

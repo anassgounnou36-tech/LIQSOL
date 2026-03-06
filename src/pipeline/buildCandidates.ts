@@ -2,12 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import { PublicKey } from '@solana/web3.js';
 import { getConnection } from '../solana/connection.js';
+import { loadReadonlyEnv, type ReadonlyEnv } from '../config/env.js';
 import { loadReserves } from '../cache/reserveCache.js';
 import { loadOracles } from '../cache/oracleCache.js';
 import { LiveObligationIndexer } from '../engine/liveObligationIndexer.js';
-import { selectCandidates, type ScoredObligation } from '../strategy/candidateSelector.js';
+import { selectCandidates, type Candidate, type ScoredObligation } from '../strategy/candidateSelector.js';
 import { SOL_MINT, USDC_MINT } from '../constants/mints.js';
 import { logger } from '../observability/logger.js';
+import { applyKlendSdkVerificationToCandidates } from '../engine/applyKlendSdkVerification.js';
 
 export interface BuildCandidatesOptions {
   marketPubkey: PublicKey;
@@ -16,6 +18,33 @@ export interface BuildCandidatesOptions {
   topN?: number;
   nearThreshold?: number;
   outputPath?: string;
+}
+
+export async function rankCandidatesWithBoundedKlendVerification(args: {
+  candidatesWithBothLegs: ScoredObligation[];
+  nearThreshold: number;
+  topN: number;
+  env: ReadonlyEnv;
+  marketPubkey: PublicKey;
+  programId: PublicKey;
+  rpcUrl: string;
+}): Promise<Candidate[]> {
+  const initialCandidates = selectCandidates(args.candidatesWithBothLegs, {
+    nearThreshold: args.nearThreshold,
+  });
+
+  await applyKlendSdkVerificationToCandidates({
+    candidates: initialCandidates,
+    env: args.env,
+    marketPubkey: args.marketPubkey,
+    programId: args.programId,
+    rpcUrl: args.rpcUrl,
+  });
+
+  const rerankedCandidates = selectCandidates(initialCandidates, {
+    nearThreshold: args.nearThreshold,
+  });
+  return rerankedCandidates.slice(0, args.topN);
 }
 
 /**
@@ -34,9 +63,10 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
 
   // Get connection from config
   const connection = getConnection();
-  const rpcUrl = process.env.RPC_PRIMARY || '';
-  const yellowstoneUrl = process.env.YELLOWSTONE_GRPC_URL || '';
-  const yellowstoneToken = process.env.YELLOWSTONE_X_TOKEN || '';
+  const env = loadReadonlyEnv();
+  const rpcUrl = env.RPC_PRIMARY;
+  const yellowstoneUrl = env.YELLOWSTONE_GRPC_URL;
+  const yellowstoneToken = env.YELLOWSTONE_X_TOKEN;
 
   // Parse allowlist mints (execution-only filter)
   const allowedLiquidityMints = execAllowlistMints && execAllowlistMints.length > 0
@@ -225,8 +255,16 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
 
   // Select and rank candidates
   logger.info('Selecting and ranking candidates...');
-  const candidates = selectCandidates(candidatesWithBothLegs, { nearThreshold });
-  const topCandidates = candidates.slice(0, topN);
+  const topCandidates = await rankCandidatesWithBoundedKlendVerification({
+    candidatesWithBothLegs,
+    nearThreshold,
+    topN,
+    env,
+    marketPubkey,
+    programId,
+    rpcUrl,
+  });
+  const candidates = topCandidates;
 
   // Report statistics
   const candLiquidatable = candidates.filter(c => c.liquidationEligible).length;
