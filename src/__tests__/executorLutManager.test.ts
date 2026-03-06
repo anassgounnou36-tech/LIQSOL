@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Keypair, TransactionInstruction } from '@solana/web3.js';
-import { collectLutCandidateAddresses } from '../solana/executorLutManager.js';
+import { collectLutCandidateAddresses, extendExecutorLut } from '../solana/executorLutManager.js';
 
 describe('collectLutCandidateAddresses', () => {
   it('includes program ids, excludes payer/signers, and dedupes in stable order', () => {
@@ -49,5 +49,24 @@ describe('collectLutCandidateAddresses', () => {
     ]);
     expect(result).not.toContain(payer.toBase58());
     expect(result).not.toContain(signer.toBase58());
+  });
+
+  it('skips extension when LUT is already at max capacity', async () => {
+    const signer = Keypair.generate();
+    const lut = {
+      key: Keypair.generate().publicKey,
+      state: {
+        addresses: Array.from({ length: 256 }, () => Keypair.generate().publicKey),
+      },
+    } as any;
+    const connection = {
+      getLatestBlockhash: vi.fn(),
+      sendTransaction: vi.fn(),
+      getAddressLookupTable: vi.fn(),
+    } as any;
+
+    const updated = await extendExecutorLut(connection, signer, lut, [Keypair.generate().publicKey]);
+    expect(updated).toBe(lut);
+    expect(connection.sendTransaction).not.toHaveBeenCalled();
   });
 });

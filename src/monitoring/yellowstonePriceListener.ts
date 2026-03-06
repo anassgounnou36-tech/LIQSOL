@@ -223,7 +223,7 @@ export class YellowstonePriceListener extends EventEmitter {
     logger.info({ reconnectCount: this.reconnectCount, delayMs: delay }, 'Reconnecting price listener');
     // Cleanup before resubscribe
     this.cleanupStream();
-    setTimeout(() => this.subscribe(), delay);
+    setTimeout(() => void this.subscribe().catch((e) => this.onError(e as Error)), delay);
   }
 
   async stop(): Promise<void> {

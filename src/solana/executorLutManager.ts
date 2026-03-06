@@ -10,6 +10,7 @@ import { buildVersionedTx } from '../execute/versionedTx.js';
 import { confirmSignatureByPolling } from './confirmPolling.js';
 
 const EXTEND_BATCH_SIZE = 20;
+const MAX_LUT_ADDRESSES = 256;
 
 export function collectLutCandidateAddresses(
   ixs: TransactionInstruction[],
@@ -82,7 +83,17 @@ export async function extendExecutorLut(
   addressesToAdd: PublicKey[]
 ): Promise<AddressLookupTableAccount> {
   const current = new Set(lut.state.addresses.map((a) => a.toBase58()));
-  const missing = addressesToAdd.filter((a) => !current.has(a.toBase58()));
+  const remaining = MAX_LUT_ADDRESSES - lut.state.addresses.length;
+  if (remaining <= 0) {
+    console.log(`[LUT] capacity reached/overfilled (${lut.state.addresses.length}/${MAX_LUT_ADDRESSES}): skipping extension`);
+    return lut;
+  }
+
+  const allMissing = addressesToAdd.filter((a) => !current.has(a.toBase58()));
+  const missing = allMissing.slice(0, remaining);
+  if (allMissing.length > missing.length) {
+    console.log(`[LUT] capacity reached: trimming missing from ${allMissing.length} to ${missing.length}`);
+  }
   if (missing.length === 0) return lut;
 
   let extendTxCount = 0;

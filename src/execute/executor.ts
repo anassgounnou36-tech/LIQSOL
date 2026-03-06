@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { AddressLookupTableAccount, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
+import { AddressLookupTableAccount, Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { getConnection } from '../solana/connection.js';
 import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
@@ -21,12 +21,14 @@ const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
 const SETUP_FEE_BUFFER_LAMPORTS = 2_000_000;
 const OBLIGATION_HEALTHY_COOLDOWN_MS = 5 * 60 * 1000;
+const DEFAULT_EXECUTOR_LUT_WARMUP_TOPK = 3;
 let lastUnderfundedWarnMs = 0;
 let startupFeePayerCheckDone = false;
 let cachedAtaRentLamports: number | undefined;
 const dryRunSetupRequiredCache = new Map<string, number>();
 const obligationHealthyCooldown = new Map<string, number>(); // planKey -> absolute expiry timestamp (ms)
 let presubmitterSingleton: Presubmitter | undefined;
+let executorLutWarmupAttempted = false;
 
 function dedupeLookupTables(
   lookupTables: Array<AddressLookupTableAccount | undefined>
@@ -129,6 +131,7 @@ interface Plan {
   hazard?: number | string;
   ttlStr?: string;
   ttlMin?: number | string | null; // Can be null for unknown
+  predictedAtMs?: number | string | null; // Optional alternate timestamp key
   predictedLiquidationAtMs?: number | string | null; // Absolute timestamp
   createdAtMs?: number | string;
   repayMint?: string;
@@ -136,6 +139,14 @@ interface Plan {
   repayDecimals?: number;
   collateralDecimals?: number;
   liquidationEligible?: boolean;
+}
+
+function parsePredictedAtMs(plan: Plan): number | null {
+  if (typeof plan.predictedAtMs === 'number') return plan.predictedAtMs;
+  if (typeof plan.predictedLiquidationAtMs === 'number') return plan.predictedLiquidationAtMs;
+  if (typeof plan.predictedAtMs === 'string') return Number(plan.predictedAtMs);
+  if (typeof plan.predictedLiquidationAtMs === 'string') return Number(plan.predictedLiquidationAtMs);
+  return null;
 }
 
 /**
@@ -176,6 +187,65 @@ function loadPlans(): Plan[] {
   if (fs.existsSync(qPath)) return JSON.parse(fs.readFileSync(qPath, 'utf8')) as Plan[];
   if (fs.existsSync(pPath)) return JSON.parse(fs.readFileSync(pPath, 'utf8')) as Plan[];
   return [];
+}
+
+function hasNonEmptyTxQueue(): boolean {
+  const qPath = path.join(process.cwd(), 'data', 'tx_queue.json');
+  if (!fs.existsSync(qPath)) return false;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(qPath, 'utf8'));
+    return Array.isArray(parsed) && parsed.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function warmupExecutorLutFromQueue(args: {
+  connection: Connection;
+  signer: Keypair;
+  market: PublicKey;
+  programId: PublicKey;
+  plans: Plan[];
+  executorLut: AddressLookupTableAccount;
+  topK: number;
+}): Promise<AddressLookupTableAccount> {
+  const selectedPlans = args.plans.slice(0, args.topK);
+  console.log(`[LUT] warmup start: plans=${selectedPlans.length} initialSize=${args.executorLut.state.addresses.length}`);
+
+  const deduped = new Map<string, PublicKey>();
+  for (const plan of selectedPlans) {
+    try {
+      validatePlanVersion(plan);
+      if (!isPlanComplete(plan)) continue;
+      const built = await buildFullTransaction(plan as FlashloanPlan, args.signer, args.market, args.programId, {
+        includeSwap: false,
+        useRealSwapSizing: false,
+        dry: false,
+        preReserveRefreshModeOverride: (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto',
+        disableFarmsRefresh: false,
+        disablePostFarmsRefresh: false,
+        omitComputeBudgetIxs: false,
+      });
+      const ixsForLut = [...built.setupIxs, ...built.ixs];
+      const addrs = collectLutCandidateAddresses(ixsForLut, args.signer.publicKey);
+      for (const addr of addrs) {
+        deduped.set(addr.toBase58(), addr);
+      }
+    } catch (err) {
+      console.warn(`[LUT] warmup skip plan ${String(plan.key).slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const combinedAddresses = Array.from(deduped.values());
+  console.log(`[LUT] warmup collected addresses: total=${combinedAddresses.length}`);
+  if (combinedAddresses.length === 0) {
+    console.log(`[LUT] warmup done: size=${args.executorLut.state.addresses.length}`);
+    return args.executorLut;
+  }
+
+  const updated = await extendExecutorLut(args.connection, args.signer, args.executorLut, combinedAddresses);
+  console.log(`[LUT] warmup done: size=${updated.state.addresses.length}`);
+  return updated;
 }
 
 function shouldWarnUnderfundedDryRun(nowMs: number): boolean {
@@ -323,18 +393,25 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const minFeePayerLamports = Math.floor(Number(env.EXEC_MIN_FEE_PAYER_SOL ?? 0.05) * LAMPORTS_PER_SOL);
     const minDelayMs = Number(env.SCHEDULED_MIN_LIQUIDATION_DELAY_MS ?? 0);
     const ttlGraceMs = Number(env.TTL_GRACE_MS ?? 60_000);
+    const execReadyTtlMaxMin = Number(env.EXEC_READY_TTL_MAX_MIN ?? 0.25);
+    const execEarlyGraceMs = Number(env.EXEC_EARLY_GRACE_MS ?? 3_000);
     const ttlUnknownPasses = (env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
     const forceIncludeLiquidatable = (env.SCHED_FORCE_INCLUDE_LIQUIDATABLE ?? 'false') === 'true';
     const dryRunSetupCacheTtlMs = Math.max(0, Number(env.EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS ?? 300) * 1000);
     const presubmitEnabled = (env.PRESUBMIT_ENABLED ?? 'false') === 'true';
     const presubmitTopK = Number(env.PRESUBMIT_TOPK ?? 5);
     const presubmitRefreshMs = Number(process.env.PRESUBMIT_REFRESH_MS ?? 3000);
+    const warmupOnly = (env.EXECUTOR_LUT_WARMUP_ONLY ?? 'false') === 'true';
+    const warmupTopKRaw = Number(env.EXECUTOR_LUT_WARMUP_TOPK ?? DEFAULT_EXECUTOR_LUT_WARMUP_TOPK);
+    const warmupTopK = Number.isFinite(warmupTopKRaw) && warmupTopKRaw >= 0 ? warmupTopKRaw : DEFAULT_EXECUTOR_LUT_WARMUP_TOPK;
 
     console.log('[Executor] Filter thresholds:');
     console.log(`  EXEC_MIN_EV: ${minEv}`);
     console.log(`  EXEC_MAX_TTL_MIN: ${maxTtlMin}`);
     console.log(`  EXEC_MIN_FEE_PAYER_SOL: ${Number(env.EXEC_MIN_FEE_PAYER_SOL ?? 0.05)}`);
     console.log(`  TTL_GRACE_MS: ${ttlGraceMs}`);
+    console.log(`  EXEC_READY_TTL_MAX_MIN: ${execReadyTtlMaxMin}`);
+    console.log(`  EXEC_EARLY_GRACE_MS: ${execEarlyGraceMs}`);
     console.log(`  TTL_UNKNOWN_PASSES: ${ttlUnknownPasses}`);
     console.log(`  SCHED_FORCE_INCLUDE_LIQUIDATABLE: ${forceIncludeLiquidatable}`);
 
@@ -370,6 +447,34 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       executorLut = await loadExecutorLut(connection, new PublicKey(executorLutAddress));
       if (executorLut) {
         console.log(`[LUT] executor LUT loaded: ${executorLut.key.toBase58()} size=${executorLut.state.addresses.length}`);
+        if (
+          !executorLutWarmupAttempted &&
+          lutManageEnabled &&
+          broadcast &&
+          executorLut.state.addresses.length === 0 &&
+          hasNonEmptyTxQueue()
+        ) {
+          executorLutWarmupAttempted = true;
+          try {
+            executorLut = await warmupExecutorLutFromQueue({
+              connection,
+              signer,
+              market,
+              programId,
+              plans,
+              executorLut,
+              topK: warmupTopK,
+            });
+            if (warmupOnly) {
+              console.log('[LUT] warmup-only enabled; exiting tick without attempting liquidations');
+              return { status: 'lut-warmup-only' };
+            }
+          } catch (err) {
+            console.warn(`[LUT] warmup failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        } else if (executorLut.state.addresses.length === 0) {
+          console.log('[LUT] executor LUT is empty; skipping LUT usage until populated');
+        }
       } else {
         console.warn(`[LUT] executor LUT not found on chain: ${executorLutAddress}`);
       }
@@ -393,67 +498,93 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const nowMs = Date.now();
     const filterReasons = {
       total: plans.length,
-    rejected_ev: 0,
-    rejected_ttl_expired: 0,
-    rejected_ttl_too_high: 0,
-    rejected_hazard: 0,
-    accepted_liquidatable_forced: 0,
-    accepted_normal: 0,
-  };
+      rejected_ev: 0,
+      rejected_ttl_expired: 0,
+      rejected_ttl_too_high: 0,
+      rejected_hazard: 0,
+      accepted_liquidatable_forced: 0,
+      accepted_normal: 0,
+      skipped_too_early: 0,
+    };
+    let earliestTooEarlyTtlMin: number | null = null;
+    let earliestTooEarlyPredictedAtMs: number | null = null;
 
-  const candidates = plans
-    .filter(p => {
-      // Force-include liquidatable if enabled
-      if (forceIncludeLiquidatable && p.liquidationEligible) {
-        filterReasons.accepted_liquidatable_forced++;
+    const candidates = plans
+      .filter(p => {
+        // Force-include liquidatable if enabled
+        if (forceIncludeLiquidatable && p.liquidationEligible) {
+          filterReasons.accepted_liquidatable_forced++;
+          return true;
+        }
+        
+        // EV filter
+        if (Number(p.ev ?? 0) <= minEv) {
+          filterReasons.rejected_ev++;
+          return false;
+        }
+        
+        // TTL filter with new logic
+        const ttlMin = p.ttlMin;
+        const predictedAtMs = parsePredictedAtMs(p);
+        
+        // Handle null/unknown TTL
+        if (ttlMin === null || ttlMin === undefined) {
+          if (!ttlUnknownPasses) {
+            filterReasons.rejected_ttl_expired++;
+            return false;
+          }
+          // Unknown TTL passes if allowed
+        } else {
+          const ttlMinNum = Number(ttlMin);
+          
+          // Check if negative (already expired)
+          if (ttlMinNum < 0) {
+            filterReasons.rejected_ttl_expired++;
+            return false;
+          }
+          
+          // Check if past predicted time + grace
+          if (predictedAtMs !== null && nowMs > predictedAtMs + ttlGraceMs) {
+            filterReasons.rejected_ttl_expired++;
+            return false;
+          }
+          
+          // Check if TTL too high
+          if (ttlMinNum > maxTtlMin) {
+            filterReasons.rejected_ttl_too_high++;
+            return false;
+          }
+
+          if (ttlMinNum > execReadyTtlMaxMin) {
+            filterReasons.skipped_too_early++;
+            if (earliestTooEarlyTtlMin === null || ttlMinNum < earliestTooEarlyTtlMin) {
+              earliestTooEarlyTtlMin = ttlMinNum;
+            }
+            if (predictedAtMs !== null && Number.isFinite(predictedAtMs)) {
+              if (earliestTooEarlyPredictedAtMs === null || predictedAtMs < earliestTooEarlyPredictedAtMs) {
+                earliestTooEarlyPredictedAtMs = predictedAtMs;
+              }
+            }
+            return false;
+          }
+        }
+
+        if (predictedAtMs !== null && Number.isFinite(predictedAtMs) && nowMs < predictedAtMs - execEarlyGraceMs) {
+          filterReasons.skipped_too_early++;
+          if (earliestTooEarlyPredictedAtMs === null || predictedAtMs < earliestTooEarlyPredictedAtMs) {
+            earliestTooEarlyPredictedAtMs = predictedAtMs;
+          }
+          const ttlMinNum = ttlMin !== null && ttlMin !== undefined ? Number(ttlMin) : null;
+          if (ttlMinNum !== null && Number.isFinite(ttlMinNum) && (earliestTooEarlyTtlMin === null || ttlMinNum < earliestTooEarlyTtlMin)) {
+            earliestTooEarlyTtlMin = ttlMinNum;
+          }
+          return false;
+        }
+
+        filterReasons.accepted_normal++;
         return true;
-      }
-      
-      // EV filter
-      if (Number(p.ev ?? 0) <= minEv) {
-        filterReasons.rejected_ev++;
-        return false;
-      }
-      
-      // TTL filter with new logic
-      const ttlMin = p.ttlMin;
-      const predictedAtMs = typeof p.predictedLiquidationAtMs === 'number' ? p.predictedLiquidationAtMs : (
-        typeof p.predictedLiquidationAtMs === 'string' ? Number(p.predictedLiquidationAtMs) : null
-      );
-      
-      // Handle null/unknown TTL
-      if (ttlMin === null || ttlMin === undefined) {
-        if (!ttlUnknownPasses) {
-          filterReasons.rejected_ttl_expired++;
-          return false;
-        }
-        // Unknown TTL passes if allowed
-      } else {
-        const ttlMinNum = Number(ttlMin);
-        
-        // Check if negative (already expired)
-        if (ttlMinNum < 0) {
-          filterReasons.rejected_ttl_expired++;
-          return false;
-        }
-        
-        // Check if past predicted time + grace
-        if (predictedAtMs !== null && nowMs > predictedAtMs + ttlGraceMs) {
-          filterReasons.rejected_ttl_expired++;
-          return false;
-        }
-        
-        // Check if TTL too high
-        if (ttlMinNum > maxTtlMin) {
-          filterReasons.rejected_ttl_too_high++;
-          return false;
-        }
-      }
-      
-      filterReasons.accepted_normal++;
-      return true;
-    })
-    .sort((a, b) => {
+      })
+      .sort((a, b) => {
       // Primary: liquidationEligible (true first)
       const liqDiff = (b.liquidationEligible ? 1 : 0) - (a.liquidationEligible ? 1 : 0);
       if (liqDiff !== 0) return liqDiff;
@@ -469,17 +600,23 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       if (ttlDiff !== 0) return ttlDiff;
       
       // Quaternary: hazard desc
-      return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
-    });
+        return Number(b.hazard ?? 0) - Number(a.hazard ?? 0);
+      });
 
-  console.log('[Executor] Filter results:', filterReasons);
+    console.log('[Executor] Filter results:', filterReasons);
 
-  if (candidates.length === 0) {
-    console.log('[Executor] No eligible candidates based on EV/TTL thresholds.');
-    return { status: 'no-eligible' };
-  }
+    if (candidates.length === 0) {
+      if (filterReasons.skipped_too_early > 0) {
+        console.log(
+          `[Executor] No ready candidates yet (too-early=${filterReasons.skipped_too_early}) earliestTtlMin=${earliestTooEarlyTtlMin ?? 'n/a'} earliestPredictedAtMs=${earliestTooEarlyPredictedAtMs ?? 'n/a'}`
+        );
+        return { status: 'too-early' };
+      }
+      console.log('[Executor] No eligible candidates based on EV/TTL thresholds.');
+      return { status: 'no-eligible' };
+    }
 
-  if (presubmitEnabled) {
+    if (presubmitEnabled) {
     if (!presubmitterSingleton) {
       presubmitterSingleton = new Presubmitter({
         connection,
@@ -557,9 +694,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       }
     }
     
-    const now = Date.now();
+    const attemptNowMs = Date.now();
     const createdAtMs = Number(target.createdAtMs ?? 0);
-    const ageMs = createdAtMs ? (now - createdAtMs) : Infinity;
+    const ageMs = createdAtMs ? (attemptNowMs - createdAtMs) : Infinity;
     if (minDelayMs > 0 && ageMs < minDelayMs) {
       console.log(`[Executor] Skipping due to SCHEDULED_MIN_LIQUIDATION_DELAY_MS (${minDelayMs}ms). Age: ${ageMs}ms`);
       continue; // Skip to next candidate
@@ -640,7 +777,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       });
       const baseSizeCheck = isTxTooLarge(baseSizeTx);
 
-      let allLuts = dedupeLookupTables([...candidateLuts, executorLut]);
+      let allLuts = dedupeLookupTables([
+        ...candidateLuts,
+        executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+      ]);
       let sizeCheckTx = await buildVersionedTx({
         payer: signer.publicKey,
         blockhash: sizeBh.blockhash,
@@ -658,7 +798,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         if (missingCount > 0) {
           console.log(`[LUT] extending LUT: missing=${missingCount} (batched)`);
           executorLut = await extendExecutorLut(connection, signer, executorLut, desiredAddresses);
-          allLuts = dedupeLookupTables([...candidateLuts, executorLut]);
+          allLuts = dedupeLookupTables([
+            ...candidateLuts,
+            executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+          ]);
           const recheckBh = await connection.getLatestBlockhash();
           sizeCheckTx = await buildVersionedTx({
             payer: signer.publicKey,
@@ -677,7 +820,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       if (sizeCheck.tooLarge) {
         console.log(`[Executor] Profile ${profileIndex + 1}/${buildProfiles.length} too large (${sizeCheck.raw} bytes): disableFarmsRefresh=${profile.disableFarmsRefresh} disablePostFarmsRefresh=${profile.disablePostFarmsRefresh} preReserveRefreshMode=${profile.preReserveRefreshMode} omitComputeBudgetIxs=${profile.omitComputeBudgetIxs}`);
         if (profileIndex === 0) {
-          const farmsRequired = result.metadata.farmRequiredModes.length > 0;
+          const farmsRequired =
+            result.metadata.hasFarmsRefresh ||
+            result.metadata.hasPostFarmsRefresh ||
+            result.metadata.farmRequiredModes.length > 0;
           if (farmsRequired) {
             buildProfiles.push(
               { disableFarmsRefresh: false, disablePostFarmsRefresh: false, preReserveRefreshMode: envPreReserveRefreshMode, omitComputeBudgetIxs: true },
@@ -778,7 +924,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     }
     
     const atomicBh = await connection.getLatestBlockhash();
-    const atomicLuts = dedupeLookupTables([...atomicLookupTables, executorLut]);
+    const atomicLuts = dedupeLookupTables([
+      ...atomicLookupTables,
+      executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+    ]);
     const atomicTx = await buildVersionedTx({
       payer: signer.publicKey,
       blockhash: atomicBh.blockhash,
@@ -889,7 +1038,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       signer,
       async ({ blockhash, cuLimit, cuPrice }) => {
         const rebuilt = withUpdatedComputeBudget(atomicIxs, atomicLabels, cuLimit, cuPrice);
-        const rebuildAtomicLuts = dedupeLookupTables([...atomicLookupTables, executorLut]);
+        const rebuildAtomicLuts = dedupeLookupTables([
+          ...atomicLookupTables,
+          executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+        ]);
         return buildVersionedTx({
           payer: signer.publicKey,
           blockhash,
@@ -938,7 +1090,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
   // Build and sign transaction
   const bh = await connection.getLatestBlockhash();
-  const mainLuts = dedupeLookupTables([...swapLookupTables, executorLut]);
+  const mainLuts = dedupeLookupTables([
+    ...swapLookupTables,
+    executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+  ]);
   const tx = presubmittedTx ?? await buildVersionedTx({
     payer: signer.publicKey,
     blockhash: bh.blockhash,
@@ -1155,7 +1310,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         signer,
         async ({ blockhash, cuLimit, cuPrice }) => {
           const rebuilt = withUpdatedComputeBudget(ixs, labels, cuLimit, cuPrice);
-          const rebuildMainLuts = dedupeLookupTables([...swapLookupTables, executorLut]);
+          const rebuildMainLuts = dedupeLookupTables([
+            ...swapLookupTables,
+            executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
+          ]);
           return buildVersionedTx({
             payer: signer.publicKey,
             blockhash,

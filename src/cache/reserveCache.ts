@@ -54,6 +54,8 @@ export interface ReserveCacheEntry {
   collateralDecimals: number;
   /** Scope price chain indices array (0-511) for multi-chain Scope oracles, null if not using Scope */
   scopePriceChain: number[] | null;
+  /** Scope oracle pubkey if reserve declares one */
+  scopeOraclePubkey?: string | null;
   /** 
    * Collateral exchange rate in UI units (computed from reserve state)
    * Used to convert deposit notes (collateral tokens) to underlying liquidity tokens
@@ -570,6 +572,7 @@ export async function loadReserves(
       liquidityDecimals: decoded.liquidityDecimals,
       collateralDecimals: decoded.collateralDecimals,
       scopePriceChain: decoded.scopePriceChain,
+      scopeOraclePubkey: decoded.scopeOraclePubkey ?? null,
       collateralExchangeRateUi: computeExchangeRateUi(decoded),
     };
 

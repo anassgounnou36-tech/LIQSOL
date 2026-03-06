@@ -15,15 +15,24 @@ export interface EvParams {
   slippageBufferPct?: number;      // optional e.g., 0.005 (0.5% slippage buffer)
 }
 
+export interface EvBreakdown {
+  repayValueUsd: number;
+  profit: number;
+  variableFees: number;
+  cost: number;
+  ev: number;
+}
+
 /**
  * Compute the expected value (EV) of a liquidation attempt.
  * 
  * EV = (hazard * profit) - cost
  * 
  * Where:
- * - profit = closeFactor * liquidationBonusPct * borrowValueUsd
+ * - repayValueUsd = closeFactor * borrowValueUsd
+ * - profit = liquidationBonusPct * repayValueUsd
  * - cost = variableFees + fixedGasUsd
- * - variableFees = (flashloanFeePct + slippageBufferPct) * borrowValueUsd
+ * - variableFees = (flashloanFeePct + slippageBufferPct) * repayValueUsd
  * 
  * @param borrowValueUsd - Total borrow value in USD
  * @param hazard - Hazard score from hazardScorer (0 to 1)
@@ -31,8 +40,22 @@ export interface EvParams {
  * @returns Expected value in USD (can be negative)
  */
 export function computeEV(borrowValueUsd: number, hazard: number, p: EvParams): number {
-  const profit = p.closeFactor * p.liquidationBonusPct * borrowValueUsd;
-  const variableFees = (p.flashloanFeePct + (p.slippageBufferPct ?? 0)) * borrowValueUsd;
+  return computeEVBreakdown(borrowValueUsd, hazard, p).ev;
+}
+
+/**
+ * Compute EV and its intermediate values for diagnostics and debugging.
+ *
+ * @param borrowValueUsd - Total borrow value in USD
+ * @param hazard - Hazard score from hazardScorer (0 to 1)
+ * @param p - EV parameters (fees, bonuses, etc.)
+ * @returns EV breakdown including repay value, profit, variable fees, total cost, and final EV
+ */
+export function computeEVBreakdown(borrowValueUsd: number, hazard: number, p: EvParams): EvBreakdown {
+  const repayValueUsd = p.closeFactor * borrowValueUsd;
+  const profit = p.liquidationBonusPct * repayValueUsd;
+  const variableFees = (p.flashloanFeePct + (p.slippageBufferPct ?? 0)) * repayValueUsd;
   const cost = variableFees + p.fixedGasUsd;
-  return (hazard * profit) - cost;
+  const ev = (hazard * profit) - cost;
+  return { repayValueUsd, profit, variableFees, cost, ev };
 }

@@ -123,14 +123,24 @@ describe("Scope Chain Pricing Tests", () => {
       expect(chain).toBeNull();
     });
 
-    it("parses [0, 65535, 65535, 65535] as null", () => {
+    it("parses [0, 65535, 65535, 65535] as [0]", () => {
       const chain = extractScopePriceChain({
         scopeConfiguration: {
           priceFeed: scopeFeed,
           priceChain: [0, 65535, 65535, 65535],
         },
       });
-      expect(chain).toBeNull();
+      expect(chain).toEqual([0]);
+    });
+
+    it("parses [0, 0, 0, 0] as [0]", () => {
+      const chain = extractScopePriceChain({
+        scopeConfiguration: {
+          priceFeed: scopeFeed,
+          priceChain: [0, 0, 0, 0],
+        },
+      });
+      expect(chain).toEqual([0]);
     });
   });
 
@@ -209,6 +219,38 @@ describe("Scope Chain Pricing Tests", () => {
       const priceData = cache.get(mint)!;
       expect(priceData.price).toBe(10000000000n);
       expect(priceData.exponent).toBe(-8);
+    });
+
+    it("computes USD price from single-element chain [0]", async () => {
+      const mint = "So11111111111111111111111111111111111111112";
+      const reservePubkey = PublicKey.unique();
+
+      setScopeOracleMintChain(oraclePubkey, mint, [0]);
+
+      const currentTimestamp = Math.floor(Date.now() / 1000);
+      const mockPrices = createMockScopePriceArray(
+        new Map([
+          [0, { price: "9900000000", exp: 8, timestamp: currentTimestamp }],
+        ])
+      );
+
+      vi.mocked(OraclePrices.decode).mockReturnValue({ prices: mockPrices } as any);
+
+      const scopeData = Buffer.alloc(1000);
+      mockConnection.getMultipleAccountsInfo = vi.fn().mockResolvedValue([
+        { data: scopeData, owner: SCOPE_PROGRAM_ID },
+      ]);
+
+      const reserveEntry = makeReserveEntry(reservePubkey, mint, oraclePubkey, [0]);
+      const reserveCache: ReserveCache = {
+        byMint: new Map([[mint, reserveEntry]]),
+        byReserve: new Map([[reservePubkey.toString(), reserveEntry]]),
+      };
+
+      const cache = await loadOracles(mockConnection, reserveCache);
+
+      expect(cache.has(mint)).toBe(true);
+      expect(cache.get(mint)?.price).toBe(9900000000n);
     });
   });
 

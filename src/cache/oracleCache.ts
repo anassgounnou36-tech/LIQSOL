@@ -41,7 +41,8 @@ const STABLECOIN_MINTS = new Set([
  */
 const PYTH_MAX_AGE_SEC = Number(process.env.LIQSOL_PYTH_MAX_AGE_SECONDS ?? 30);
 const SWITCHBOARD_MAX_AGE_SEC = Number(process.env.LIQSOL_SWITCHBOARD_MAX_AGE_SECONDS ?? 120);
-const SCOPE_MAX_AGE_SEC = Number(process.env.LIQSOL_SCOPE_MAX_AGE_SECONDS ?? 120);
+const SCOPE_MAX_AGE_SEC = Number(process.env.LIQSOL_SCOPE_MAX_AGE_SECONDS ?? 180);
+const lastScopeStaleWarnMs = new Map<string, number>();
 
 logger.info(
   { pythMaxAgeSec: PYTH_MAX_AGE_SEC, switchboardMaxAgeSec: SWITCHBOARD_MAX_AGE_SEC, scopeMaxAgeSec: SCOPE_MAX_AGE_SEC },
@@ -214,8 +215,9 @@ function decodeScopePrice(
     return null;
   }
 
-  if (!Scope.isScopeChainValid(chains)) {
-    logger.warn({ chain: chains }, "[OracleCache] Invalid Scope chain");
+  const hasOutOfRangeIndex = chains.some((idx) => !Number.isInteger(idx) || idx < 0 || idx > 511);
+  if (hasOutOfRangeIndex) {
+    logger.warn({ chain: chains }, "[OracleCache] Scope chain index out of range");
     return null;
   }
 
@@ -227,24 +229,28 @@ function decodeScopePrice(
     return null;
   }
 
-  try {
-    // Compute USD price from the full chain
-    const result = Scope.getPriceFromScopeChain(chains, oraclePrices);
-
-    // Staleness check using the oldest timestamp in the chain
-    const timestampSec = result.timestamp.toNumber();
+  // Shared validation + conversion for Scope-decoded UI prices.
+  const buildPriceData = (uiPrice: number, timestampSec: number): OraclePriceData | null => {
     const ageSec = Date.now() / 1000 - timestampSec;
     if (ageSec > SCOPE_MAX_AGE_SEC) {
-      logger.warn(
-        { chain: chains, ageSec, threshold: SCOPE_MAX_AGE_SEC },
-        "[OracleCache] Scope chain price is stale"
-      );
+      const chainKey = chains.join(',');
+      const nowMs = Date.now();
+      const lastWarnMs = lastScopeStaleWarnMs.get(chainKey) ?? 0;
+      if (nowMs - lastWarnMs > 60_000) {
+        lastScopeStaleWarnMs.set(chainKey, nowMs);
+        logger.warn(
+          { chain: chains, ageSec, threshold: SCOPE_MAX_AGE_SEC },
+          "[OracleCache] Scope chain price is stale"
+        );
+      } else {
+        logger.debug(
+          { chain: chains, ageSec, threshold: SCOPE_MAX_AGE_SEC },
+          "[OracleCache] Scope chain price is stale (rate-limited)"
+        );
+      }
       return null;
     }
 
-    const uiPrice = result.price.toNumber();
-
-    // Validate result
     if (!Number.isFinite(uiPrice) || uiPrice <= 0) {
       logger.warn({ chain: chains, uiPrice }, "[OracleCache] Scope chain returned invalid price");
       return null;
@@ -277,7 +283,28 @@ function decodeScopePrice(
       slot: BigInt(Math.floor(timestampSec)),
       oracleType: "scope",
     };
+  };
+
+  try {
+    // Compute USD price from the full chain
+    const result = Scope.getPriceFromScopeChain(chains, oraclePrices);
+    return buildPriceData(result.price.toNumber(), result.timestamp.toNumber());
   } catch (err) {
+    // Fallback for single-hop chains when SDK chain decode rejects but direct slot decoding is still usable.
+    if (chains.length === 1) {
+      const singleHop = oraclePrices.prices[chains[0]];
+      const value = singleHop?.price?.value ? Number(singleHop.price.value.toString()) : NaN;
+      const exp = singleHop?.price?.exp ? Number(singleHop.price.exp.toString()) : NaN;
+      const timestampSec = singleHop?.unixTimestamp ? Number(singleHop.unixTimestamp.toString()) : NaN;
+      if (Number.isFinite(value) && Number.isFinite(exp) && Number.isFinite(timestampSec)) {
+        const fallbackUiPrice = value * Math.pow(10, -exp);
+        const fallbackDecoded = buildPriceData(fallbackUiPrice, timestampSec);
+        if (fallbackDecoded) {
+          logger.debug({ chain: chains }, "[OracleCache] Scope single-hop fallback decode succeeded");
+          return fallbackDecoded;
+        }
+      }
+    }
     logger.warn(
       { chain: chains, err: err instanceof Error ? err.message : String(err) },
       "[OracleCache] Scope chain pricing failed"
@@ -592,6 +619,7 @@ export async function loadOracles(
   let scopeCount = 0;
   let unknownCount = 0;
   let failedCount = 0;
+  const oracleProgramByPubkey = new Map<string, 'pyth' | 'switchboard' | 'scope' | 'unknown'>();
 
   for (const { pubkey, data, owner } of allOracleAccounts) {
     if (!data) {
@@ -613,6 +641,16 @@ export async function loadOracles(
     }
 
     const pubkeyStr = pubkey.toString();
+    oracleProgramByPubkey.set(
+      pubkeyStr,
+      owner.equals(PYTH_PROGRAM_ID)
+        ? 'pyth'
+        : owner.equals(SWITCHBOARD_V2_PROGRAM_ID)
+        ? 'switchboard'
+        : owner.equals(SCOPE_PROGRAM_ID)
+        ? 'scope'
+        : 'unknown'
+    );
     const mints = oracleToMints.get(pubkeyStr);
     if (!mints || mints.size === 0) {
       continue;
@@ -649,9 +687,9 @@ export async function loadOracles(
       for (const [mint, chains] of mintChains.entries()) {
         const priceData = decodeScopePrice(data, chains);
         if (!priceData) {
-          logger.warn(
+          logger.debug(
             { oracle: pubkeyStr, mint, chains },
-            "Failed to decode Scope price for mint"
+            "Scope decode returned null"
           );
           continue;
         }
@@ -798,6 +836,29 @@ export async function loadOracles(
     logger.warn(
       coverageSummary,
       "[OracleCache] Oracle coverage summary"
+    );
+    const missingMints = Array.from(unpricedRequiredMints).slice(0, 5);
+    logger.warn(
+      {
+        missingMints,
+        missingMintDiagnostics: missingMints.map((mint) => {
+          const reserve = reserveCache.byMint.get(mint);
+          if (!reserve) return { mint, reserveFound: false };
+          const scopeOraclePubkey =
+            reserve.scopeOraclePubkey ??
+            reserve.oraclePubkeys.find((pk) => scopeOracleMintChains.get(pk.toString())?.has(mint))?.toString() ??
+            null;
+          return {
+            mint,
+            reserveFound: true,
+            reservePubkey: reserve.reservePubkey.toBase58(),
+            scopeOraclePubkey,
+            scopePriceChain: reserve.scopePriceChain,
+            oraclePubkeys: reserve.oraclePubkeys.map((pk) => pk.toString()),
+          };
+        }),
+      },
+      "[OracleCache] Unpriced required mint diagnostics"
     );
   } else {
     logger.info(

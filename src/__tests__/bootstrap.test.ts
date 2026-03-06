@@ -23,6 +23,8 @@ describe('Environment Tests', () => {
     expect(env.LOG_LEVEL).toBe('info');
     expect(env.NODE_ENV).toBe('test');
     expect(env.EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS).toBe(300);
+    expect(env.EXECUTOR_LUT_WARMUP_ONLY).toBe('false');
+    expect(env.EXECUTOR_LUT_WARMUP_TOPK).toBe('3');
     expect(env.LIQSOL_EXEC_MINT_ALLOWLIST).toBeUndefined();
   });
 
