@@ -157,6 +157,7 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     hazard,
     ttlMin,
     ttlStr,
+    createdAtMs: plan.createdAtMs ?? nowMs,
     ttlComputedAtMs,
     ttlComputedMin,
     predictedLiquidationAtMs,

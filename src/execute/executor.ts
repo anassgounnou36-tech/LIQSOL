@@ -630,7 +630,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     if (candidates.length === 0) {
       if (filterReasons.skipped_too_early > 0) {
         console.log(
-          `[Executor] No ready candidates yet (too-early=${filterReasons.skipped_too_early}) earliestTtlRemainingMin=${earliestTooEarlyTtlRemainingMin ?? 'n/a'} earliestPredictedLiquidationAtMs=${earliestTooEarlyPredictedAtMs ?? 'n/a'}`
+          `[Executor] No ready candidates yet (too-early=${filterReasons.skipped_too_early}) earliestTtlRemainingMin=${earliestTooEarlyTtlRemainingMin ?? 'n/a'} earliestTooEarlyPredictedAtMs=${earliestTooEarlyPredictedAtMs ?? 'n/a'}`
         );
         return { status: 'too-early' };
       }
