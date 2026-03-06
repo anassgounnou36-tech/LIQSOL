@@ -42,6 +42,8 @@ export interface FlashloanPlan {
   ttlMin: number | null; // null for unknown TTL
   ttlStr?: string;
   createdAtMs: number;
+  ttlComputedAtMs: number;
+  ttlComputedMin: number | null;
   predictedLiquidationAtMs?: number | null; // absolute epoch timestamp when liquidation predicted
   prevEv?: number; // optional: previous EV for audit
   liquidationEligible?: boolean; // PR10+: whether obligation is currently liquidatable
@@ -67,7 +69,11 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
   } else {
     ttlMin = parseTtlMinutes(c.ttlStr);
   }
-  const predictedLiquidationAtMs = ttlMin !== null ? computePredictedLiquidationAtMs(ttlMin, nowMs) : null;
+  const ttlComputedAtMs = nowMs;
+  const ttlComputedMin = ttlMin;
+  const predictedLiquidationAtMs = ttlComputedMin !== null
+    ? computePredictedLiquidationAtMs(ttlComputedMin, ttlComputedAtMs)
+    : null;
   
   return {
     planVersion: 2, // PR2 plan version
@@ -88,6 +94,8 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
     ttlMin,
     ttlStr: c.ttlStr ?? c.ttl,
     createdAtMs: nowMs,
+    ttlComputedAtMs,
+    ttlComputedMin,
     predictedLiquidationAtMs,
     liquidationEligible: c.liquidationEligible ?? false,
     assets: Array.isArray(c.assets) ? c.assets : undefined,
@@ -131,7 +139,11 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
   
   // Compute absolute predicted liquidation timestamp
   const nowMs = Date.now();
-  const predictedLiquidationAtMs = ttlMin !== null ? computePredictedLiquidationAtMs(ttlMin, nowMs) : null;
+  const ttlComputedAtMs = nowMs;
+  const ttlComputedMin = ttlMin;
+  const predictedLiquidationAtMs = ttlComputedMin !== null
+    ? computePredictedLiquidationAtMs(ttlComputedMin, ttlComputedAtMs)
+    : null;
   
   // PR2: Update liquidation fields from candidate if available
   const repayMint = candidateLike.primaryBorrowMint ?? candidateLike.borrowMint ?? plan.repayMint;
@@ -145,7 +157,8 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     hazard,
     ttlMin,
     ttlStr,
-    createdAtMs: nowMs,
+    ttlComputedAtMs,
+    ttlComputedMin,
     predictedLiquidationAtMs,
     amountUi,
     amountUsd,

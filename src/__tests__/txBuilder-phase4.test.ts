@@ -17,6 +17,8 @@ describe('txBuilder Phase 4 guards', () => {
       ttlMin: 5,
       ttlStr: '5m',
       createdAtMs: 1,
+      ttlComputedAtMs: 1,
+      ttlComputedMin: 5,
       liquidationEligible: true,
       assets: ['mint-a', 'mint-b'],
     };

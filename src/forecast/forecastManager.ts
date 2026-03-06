@@ -9,10 +9,6 @@ export interface RefreshResult {
   reason?: string;
 }
 
-function nowMs(): number {
-  return Date.now();
-}
-
 /**
  * Refresh a single obligation forecast in-place within queue using recomputePlanFields.
  * Optionally provide a candidate payload to recompute with fresh source data.
@@ -57,7 +53,6 @@ export function refreshSubset(keys: string[], candidatesByKey?: Map<string, any>
 
     try {
       after = recomputePlanFields(before, candidate);
-      after.createdAtMs = nowMs();
       queue[idx] = after;
       updatesByKey.set(key, after);
     } catch (e) {
