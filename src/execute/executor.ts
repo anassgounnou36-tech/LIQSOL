@@ -631,6 +631,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
           if (ttlRemainingMin !== null && ttlRemainingMin > execReadyTtlMaxMin) {
             filterReasons.skipped_too_early++;
+            // Collect all too-early plans; apply bounded near-ready window just-in-time in
+            // applyKlendSdkNearReadyGate to keep filter semantics unchanged here.
             tooEarlyNearReadyCandidates.push({ plan: p, ttlRemainingMin });
             if (earliestTooEarlyTtlRemainingMin === null || ttlRemainingMin < earliestTooEarlyTtlRemainingMin) {
               earliestTooEarlyTtlRemainingMin = ttlRemainingMin;
@@ -687,8 +689,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       env.LIQSOL_HEALTH_SOURCE === 'recomputed' &&
       env.LIQSOL_RECOMPUTED_VERIFY_BACKEND === 'klend-sdk' &&
       env.EXEC_KLEND_VERIFY_ENABLED === 'true';
-    const klendVerifyWindowMin = Number(env.EXEC_KLEND_VERIFY_TTL_WINDOW_MIN ?? 2);
-    const klendVerifyTopK = Number(env.EXEC_KLEND_VERIFY_TOPK ?? 3);
+    const klendVerifyWindowMin = Number(env.EXEC_KLEND_VERIFY_TTL_WINDOW_MIN);
+    const klendVerifyTopK = Number(env.EXEC_KLEND_VERIFY_TOPK);
     await applyKlendSdkNearReadyGate({
       candidates,
       tooEarlyNearReadyCandidates,

@@ -28,7 +28,7 @@ export async function rankCandidatesWithBoundedKlendVerification(args: {
   marketPubkey: PublicKey;
   programId: PublicKey;
   rpcUrl: string;
-}): Promise<Candidate[]> {
+}): Promise<{ rerankedCandidates: Candidate[]; topCandidates: Candidate[] }> {
   const initialCandidates = selectCandidates(args.candidatesWithBothLegs, {
     nearThreshold: args.nearThreshold,
   });
@@ -44,7 +44,10 @@ export async function rankCandidatesWithBoundedKlendVerification(args: {
   const rerankedCandidates = selectCandidates(initialCandidates, {
     nearThreshold: args.nearThreshold,
   });
-  return rerankedCandidates.slice(0, args.topN);
+  return {
+    rerankedCandidates,
+    topCandidates: rerankedCandidates.slice(0, args.topN),
+  };
 }
 
 /**
@@ -255,7 +258,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
 
   // Select and rank candidates
   logger.info('Selecting and ranking candidates...');
-  const topCandidates = await rankCandidatesWithBoundedKlendVerification({
+  const { rerankedCandidates, topCandidates } = await rankCandidatesWithBoundedKlendVerification({
     candidatesWithBothLegs,
     nearThreshold,
     topN,
@@ -264,11 +267,9 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
     programId,
     rpcUrl,
   });
-  const candidates = topCandidates;
-
   // Report statistics
-  const candLiquidatable = candidates.filter(c => c.liquidationEligible).length;
-  const candNear = candidates.filter(c => c.predictedLiquidatableSoon).length;
+  const candLiquidatable = rerankedCandidates.filter(c => c.liquidationEligible).length;
+  const candNear = rerankedCandidates.filter(c => c.predictedLiquidatableSoon).length;
 
   logger.info(
     { 

@@ -63,7 +63,6 @@ describe("rankCandidatesWithBoundedKlendVerification", () => {
       rpcUrl: "https://api.mainnet-beta.solana.com",
     });
 
-    expect(ranked[0].obligationPubkey).toBe("becomes-best-after-sdk");
+    expect(ranked.topCandidates[0].obligationPubkey).toBe("becomes-best-after-sdk");
   });
 });
-

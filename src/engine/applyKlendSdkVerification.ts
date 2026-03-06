@@ -3,6 +3,7 @@ import { isLiquidatable } from "../math/liquidation.js";
 import { getKlendSdkVerifier } from "./klendSdkVerifier.js";
 import type { ScoredObligation } from "../strategy/candidateSelector.js";
 import type { Env, ReadonlyEnv } from "../config/env.js";
+import { logger } from "../observability/logger.js";
 
 type VerificationEnv = Pick<
   Env & ReadonlyEnv,
@@ -40,6 +41,7 @@ export async function applyKlendSdkVerificationToCandidates(args: {
     Number(env.LIQSOL_RECOMPUTED_VERIFY_CONCURRENCY)
   );
   const verifyQueue = candidates.slice(0, verifyTopK);
+  // Shared cursor is safe here because JS async workers run on a single-threaded event loop.
   let verifyCursor = 0;
 
   await Promise.all(
@@ -49,7 +51,13 @@ export async function applyKlendSdkVerificationToCandidates(args: {
         while (verifyCursor < verifyQueue.length) {
           const idx = verifyCursor++;
           const candidate = verifyQueue[idx];
-          if (!candidate.ownerPubkey || !candidate.obligationPubkey) continue;
+          if (!candidate.ownerPubkey || !candidate.obligationPubkey) {
+            logger.debug(
+              { obligationPubkey: candidate.obligationPubkey, ownerPubkey: candidate.ownerPubkey },
+              "Skipping klend-sdk verification for candidate missing keys"
+            );
+            continue;
+          }
 
           const verification = await verifier.verify({
             obligationPubkey: candidate.obligationPubkey,
@@ -69,7 +77,7 @@ export async function applyKlendSdkVerificationToCandidates(args: {
           if (env.LIQSOL_HEALTH_SOURCE === "recomputed") {
             candidate.healthRatio = verification.healthRatioSdk;
             candidate.healthRatioRaw = verification.healthRatioSdkRaw;
-            candidate.liquidationEligible = !!candidate.liquidationEligibleVerified;
+            candidate.liquidationEligible = candidate.liquidationEligibleVerified;
             candidate.borrowValueUsd = verification.borrowUsdAdjSdk;
             candidate.collateralValueUsd = verification.collateralUsdAdjSdk;
             candidate.healthSourceUsed = "klend-sdk";
@@ -80,4 +88,3 @@ export async function applyKlendSdkVerificationToCandidates(args: {
     )
   );
 }
-
