@@ -9,11 +9,11 @@ import { loadReserves } from "../cache/reserveCache.js";
 import { loadOracles } from "../cache/oracleCache.js";
 import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
 import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
-import { selectCandidates, type ScoredObligation } from "../strategy/candidateSelector.js";
+import { type ScoredObligation } from "../strategy/candidateSelector.js";
+import { rankCandidatesWithBoundedKlendVerification } from "../strategy/rankCandidatesForSelection.js";
 import { explainHealth } from "../math/healthBreakdown.js";
 import { SF_SCALE } from "../math/fractionScale.js";
 import { divBigintToNumber } from "../utils/bn.js";
-import { applyKlendSdkVerificationToCandidates } from "../engine/applyKlendSdkVerification.js";
 
 const ratio = (a?: number, b?: number) =>
   (a && b && b > 0) ? (a / b).toFixed(4) : 'n/a';
@@ -301,11 +301,10 @@ async function main() {
 
     // Select and rank candidates
     logger.info("Selecting and ranking candidates...");
-    const candidates = selectCandidates(candidatesWithBothLegs, { nearThreshold: nearArg });
-    const topN = candidates.slice(0, topArg);
-
-    await applyKlendSdkVerificationToCandidates({
-      candidates: topN,
+    const { rankedCandidates, topCandidates } = await rankCandidatesWithBoundedKlendVerification({
+      scoredCandidates: candidatesWithBothLegs,
+      nearThreshold: nearArg,
+      topN: topArg,
       env,
       marketPubkey,
       programId,
@@ -313,28 +312,30 @@ async function main() {
     });
 
     // Report candidate counts after selection
-    const candLiquidatable = candidates.filter(c => c.liquidationEligible).length;
-    const candNear = candidates.filter(c => c.predictedLiquidatableSoon).length;
+    const candLiquidatable = rankedCandidates.filter(c => c.liquidationEligible).length;
+    const candNear = rankedCandidates.filter(c => c.predictedLiquidatableSoon).length;
 
     logger.info(
-      { scoredCount: scoredObligations.length, topCount: topN.length },
+      { scoredCount: scoredObligations.length, topCount: topCandidates.length },
       "PR8 candidates selected"
     );
 
     // Print summary
     console.log("\n=== PR8 CANDIDATE SELECTION ===\n");
+    const useEvRanking = env.USE_EV_RANKING === "true";
+    console.log(`Ranking mode: ${useEvRanking ? "EV" : "priorityScore"}`);
     console.log(`\nCandidates liquidatable: ${candLiquidatable}`);
     console.log(`Candidates near-threshold (<= ${nearArg}): ${candNear}\n`);
-    console.log(
-      "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(protocol) | HR(recomputed-manual) | HR(klend-sdk-verified) | Gate source | Obligation"
-    );
+    const header = useEvRanking
+      ? "Rank | Priority     | EV         | Hazard   | Forecast TTL | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(protocol) | HR(recomputed-manual) | HR(klend-sdk-verified) | Gate source | Health source | Obligation"
+      : "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(protocol) | HR(recomputed-manual) | HR(klend-sdk-verified) | Gate source | Obligation";
+    console.log(header);
     console.log("Note: Borrow/Collateral values are risk-adjusted (borrowFactor × USD, liquidationThreshold × USD)");
-    console.log("-".repeat(240));
+    console.log("-".repeat(useEvRanking ? 300 : 240));
 
-    topN.forEach((c, index) => {
+    topCandidates.forEach((c, index) => {
       const rank = (index + 1).toString().padStart(4);
       const priorityStr = c.priorityScore.toFixed(2).padStart(12);
-      const distanceStr = c.distanceToLiquidation.toFixed(4).padStart(8);
       const liquidatableStr = (c.liquidationEligible ? "YES" : "NO").padEnd(12);
       const nearThresholdStr = (c.predictedLiquidatableSoon ? "YES" : "NO").padEnd(14);
       const borrowValueStr = `$${c.borrowValueUsd.toFixed(2)}`.padStart(12);
@@ -344,41 +345,52 @@ async function main() {
       const hrRecomp = (c.healthRatioRecomputed ?? 0).toFixed(4).padStart(20);
       const hrVerified = (c.healthRatioVerified ?? 0).toFixed(4).padStart(23);
       const gateSource = (c.healthSourceUsed ?? c.healthSource ?? "n/a").padEnd(11);
+      const healthSource = (c.healthSource ?? "n/a").padEnd(12);
       const obligationStr = c.obligationPubkey;
 
-      console.log(
-        `${rank} | ${priorityStr} | ${distanceStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrVerified} | ${gateSource} | ${obligationStr}`
-      );
+      if (useEvRanking) {
+        const evStr = c.ev !== undefined ? c.ev.toFixed(4).padStart(10) : "n/a".padStart(10);
+        const hazardStr = c.hazard !== undefined ? c.hazard.toFixed(4).padStart(8) : "n/a".padStart(8);
+        const forecastTtlStr = (c.forecast?.timeToLiquidation ?? "n/a").padEnd(12);
+        console.log(
+          `${rank} | ${priorityStr} | ${evStr} | ${hazardStr} | ${forecastTtlStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrVerified} | ${gateSource} | ${healthSource} | ${obligationStr}`
+        );
+      } else {
+        const distanceStr = c.distanceToLiquidation.toFixed(4).padStart(8);
+        console.log(
+          `${rank} | ${priorityStr} | ${distanceStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrVerified} | ${gateSource} | ${obligationStr}`
+        );
+      }
     });
 
     console.log("\n");
 
     // PR: Add guardrails - report % of candidates with reserve pubkeys
-    const withRepayReserve = topN.filter(c => c.repayReservePubkey).length;
-    const withCollateralReserve = topN.filter(c => c.collateralReservePubkey).length;
-    const withBothReserves = topN.filter(c => c.repayReservePubkey && c.collateralReservePubkey).length;
+    const withRepayReserve = topCandidates.filter(c => c.repayReservePubkey).length;
+    const withCollateralReserve = topCandidates.filter(c => c.collateralReservePubkey).length;
+    const withBothReserves = topCandidates.filter(c => c.repayReservePubkey && c.collateralReservePubkey).length;
     
     console.log("=== RESERVE PUBKEY COVERAGE ===\n");
     
     // Guard against division by zero
-    if (topN.length > 0) {
-      const repayPct = ((withRepayReserve / topN.length) * 100).toFixed(1);
-      const collateralPct = ((withCollateralReserve / topN.length) * 100).toFixed(1);
-      const bothPct = ((withBothReserves / topN.length) * 100).toFixed(1);
+    if (topCandidates.length > 0) {
+      const repayPct = ((withRepayReserve / topCandidates.length) * 100).toFixed(1);
+      const collateralPct = ((withCollateralReserve / topCandidates.length) * 100).toFixed(1);
+      const bothPct = ((withBothReserves / topCandidates.length) * 100).toFixed(1);
       
-      console.log(`Candidates with repayReservePubkey:      ${withRepayReserve}/${topN.length} (${repayPct}%)`);
-      console.log(`Candidates with collateralReservePubkey: ${withCollateralReserve}/${topN.length} (${collateralPct}%)`);
-      console.log(`Candidates with BOTH reserve pubkeys:    ${withBothReserves}/${topN.length} (${bothPct}%)`);
+      console.log(`Candidates with repayReservePubkey:      ${withRepayReserve}/${topCandidates.length} (${repayPct}%)`);
+      console.log(`Candidates with collateralReservePubkey: ${withCollateralReserve}/${topCandidates.length} (${collateralPct}%)`);
+      console.log(`Candidates with BOTH reserve pubkeys:    ${withBothReserves}/${topCandidates.length} (${bothPct}%)`);
     } else {
       console.log("No candidates selected - skipping coverage statistics");
     }
     
-    if (topN.length > 0 && withBothReserves < topN.length) {
+    if (topCandidates.length > 0 && withBothReserves < topCandidates.length) {
       logger.warn(
         { 
-          total: topN.length, 
+          total: topCandidates.length, 
           withBoth: withBothReserves, 
-          missing: topN.length - withBothReserves 
+          missing: topCandidates.length - withBothReserves 
         },
         "Some candidates missing reserve pubkeys - may cause execution failures"
       );
@@ -390,15 +402,15 @@ async function main() {
     // Write machine-readable output
     const outPath = path.join("data", "candidates.json");
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    fs.writeFileSync(outPath, JSON.stringify({ candidates: topN }, null, 2));
+    fs.writeFileSync(outPath, JSON.stringify({ candidates: topCandidates }, null, 2));
     logger.info({ path: outPath }, "Candidate data written to JSON file");
 
     // Optional: print validation samples
     if (validateArg > 0) {
       console.log(`\n=== VALIDATION SAMPLES (first ${validateArg}) ===\n`);
       
-      for (let i = 0; i < Math.min(validateArg, topN.length); i++) {
-        const c = topN[i];
+      for (let i = 0; i < Math.min(validateArg, topCandidates.length); i++) {
+        const c = topCandidates[i];
         console.log(`\n--- Candidate ${i + 1}: ${c.obligationPubkey} ---`);
         
         // Get the full obligation entry from cache using public accessor

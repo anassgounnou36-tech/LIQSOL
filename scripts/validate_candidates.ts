@@ -4,7 +4,7 @@
  * Validates the structure and integrity of data/candidates.json
  * - Checks file exists
  * - Validates candidate structure and numeric fields
- * - Ensures candidates are sorted by priorityScore descending
+ * - Ensures candidates are sorted by EV descending (when available) or priorityScore descending
  * - Verifies no NaN/Infinity values in key fields
  */
 
@@ -99,17 +99,30 @@ function main() {
   }
   console.log("✓ All candidates have valid structure and numeric fields");
 
-  // Verify sorting by priorityScore descending
-  for (let i = 1; i < candidates.length; i++) {
-    if (candidates[i].priorityScore > candidates[i - 1].priorityScore) {
-      throw new Error(
-        `ERROR: Candidates not sorted by priorityScore descending at index ${i}:\n` +
-        `  [${i - 1}] priorityScore: ${candidates[i - 1].priorityScore}\n` +
-        `  [${i}] priorityScore: ${candidates[i].priorityScore}`
-      );
+  const allHaveFiniteEv = candidates.every((c) => typeof c.ev === "number" && Number.isFinite(c.ev));
+  if (allHaveFiniteEv) {
+    for (let i = 1; i < candidates.length; i++) {
+      if (candidates[i].ev > candidates[i - 1].ev) {
+        throw new Error(
+          `ERROR: Candidates not sorted by ev descending at index ${i}:\n` +
+          `  [${i - 1}] ev: ${candidates[i - 1].ev}\n` +
+          `  [${i}] ev: ${candidates[i].ev}`
+        );
+      }
     }
+    console.log("✓ Candidates sorted by EV descending");
+  } else {
+    for (let i = 1; i < candidates.length; i++) {
+      if (candidates[i].priorityScore > candidates[i - 1].priorityScore) {
+        throw new Error(
+          `ERROR: Candidates not sorted by priorityScore descending at index ${i}:\n` +
+          `  [${i - 1}] priorityScore: ${candidates[i - 1].priorityScore}\n` +
+          `  [${i}] priorityScore: ${candidates[i].priorityScore}`
+        );
+      }
+    }
+    console.log("✓ Candidates sorted by priorityScore descending");
   }
-  console.log("✓ Candidates sorted by priorityScore descending");
 
   // Validate selection rules
   const liquidatableCount = candidates.filter((c) => c.liquidationEligible).length;
