@@ -29,6 +29,8 @@ export type BuiltPlanTx = {
   repayMint: PublicKey;
   collateralMint: PublicKey;
   withdrawCollateralMint: PublicKey;
+  swapRequired: boolean;
+  swapReady: boolean;
 };
 
 export async function buildPlanTransactions(opts: {
@@ -48,7 +50,7 @@ export async function buildPlanTransactions(opts: {
 }): Promise<BuiltPlanTx> {
   const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
   const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
-  const preReserveMode = opts.preReserveRefreshModeOverride ?? (process.env.PRE_RESERVE_REFRESH_MODE ?? 'auto') as 'all' | 'primary' | 'auto';
+  const preReserveMode = opts.preReserveRefreshModeOverride ?? 'auto';
   let refreshObligationMode: 'active' | 'nonDefault' = opts.refreshObligationMode ?? 'active';
 
   let repayMintPreference: PublicKey | undefined;
@@ -213,6 +215,8 @@ export async function buildPlanTransactions(opts: {
 
   const atomicIxs = [...finalCanonical.setupIxs, ...atomicMainIxs];
   const atomicLabels = [...finalCanonical.setupLabels, ...atomicMainLabels];
+  const swapRequired = !collateralMint.equals(repayMint);
+  const swapReady = !swapRequired || swapIxs.length > 0;
 
   return {
     setupIxs: finalCanonical.setupIxs,
@@ -231,5 +235,7 @@ export async function buildPlanTransactions(opts: {
     repayMint,
     collateralMint,
     withdrawCollateralMint,
+    swapRequired,
+    swapReady,
   };
 }

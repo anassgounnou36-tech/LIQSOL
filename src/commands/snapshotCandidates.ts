@@ -11,10 +11,9 @@ import { LiveObligationIndexer } from "../engine/liveObligationIndexer.js";
 import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
 import { selectCandidates, type ScoredObligation } from "../strategy/candidateSelector.js";
 import { explainHealth } from "../math/healthBreakdown.js";
-import { isLiquidatable } from "../math/liquidation.js";
 import { SF_SCALE } from "../math/fractionScale.js";
 import { divBigintToNumber } from "../utils/bn.js";
-import { getKlendSdkVerifier } from "../engine/klendSdkVerifier.js";
+import { applyKlendSdkVerificationToCandidates } from "../engine/applyKlendSdkVerification.js";
 
 const ratio = (a?: number, b?: number) =>
   (a && b && b > 0) ? (a / b).toFixed(4) : 'n/a';
@@ -305,51 +304,13 @@ async function main() {
     const candidates = selectCandidates(candidatesWithBothLegs, { nearThreshold: nearArg });
     const topN = candidates.slice(0, topArg);
 
-    const shouldVerifyWithSdk = env.LIQSOL_RECOMPUTED_VERIFY_BACKEND === "klend-sdk";
-    if (shouldVerifyWithSdk && topN.length > 0) {
-      const verifier = getKlendSdkVerifier({
-        rpcUrl: env.RPC_PRIMARY,
-        marketPubkey,
-        programId,
-        cacheTtlMs: Math.max(1, env.LIQSOL_RECOMPUTED_VERIFY_TTL_MS),
-      });
-      const verifyTopK = Math.max(0, Math.min(topN.length, env.LIQSOL_RECOMPUTED_VERIFY_TOP_K));
-      const verifyConcurrency = Math.max(1, env.LIQSOL_RECOMPUTED_VERIFY_CONCURRENCY);
-      const verifyQueue = topN.slice(0, verifyTopK);
-      // Shared cursor is safe here because JS runs this loop on a single-threaded event loop.
-      let verifyCursor = 0;
-
-      await Promise.all(
-        Array.from({ length: Math.min(verifyConcurrency, verifyQueue.length) }, async () => {
-          while (verifyCursor < verifyQueue.length) {
-            const idx = verifyCursor++;
-            const candidate = verifyQueue[idx];
-            const verification = await verifier.verify({
-              obligationPubkey: candidate.obligationPubkey,
-              ownerPubkey: candidate.ownerPubkey,
-            });
-            if (!verification.ok) continue;
-
-            candidate.healthRatioVerified = verification.healthRatioSdk;
-            candidate.healthRatioVerifiedRaw = verification.healthRatioSdkRaw;
-            candidate.healthSourceVerified = "klend-sdk";
-            candidate.borrowUsdAdjVerified = verification.borrowUsdAdjSdk;
-            candidate.collateralUsdAdjVerified = verification.collateralUsdAdjSdk;
-            candidate.liquidationEligibleVerified = isLiquidatable(verification.healthRatioSdk);
-
-            if (env.LIQSOL_HEALTH_SOURCE === "recomputed") {
-              candidate.healthRatio = verification.healthRatioSdk;
-              candidate.healthRatioRaw = verification.healthRatioSdkRaw;
-              candidate.liquidationEligible = candidate.liquidationEligibleVerified;
-              candidate.borrowValueUsd = verification.borrowUsdAdjSdk;
-              candidate.collateralValueUsd = verification.collateralUsdAdjSdk;
-              candidate.healthSourceUsed = "klend-sdk";
-              candidate.healthSource = "klend-sdk";
-            }
-          }
-        })
-      );
-    }
+    await applyKlendSdkVerificationToCandidates({
+      candidates: topN,
+      env,
+      marketPubkey,
+      programId,
+      rpcUrl: env.RPC_PRIMARY,
+    });
 
     // Report candidate counts after selection
     const candLiquidatable = candidates.filter(c => c.liquidationEligible).length;

@@ -9,7 +9,7 @@ describe('Environment Tests', () => {
   it('should accept injected env vars', () => {
     const mockEnv = {
       RPC_PRIMARY: 'https://api.mainnet-beta.solana.com',
-      BOT_KEYPAIR_PATH: '/tmp/keypair.json',
+      BOT_KEYPAIR_PATH: `${process.cwd()}/package.json`,
       KAMINO_MARKET_PUBKEY: '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF',
       KAMINO_KLEND_PROGRAM_ID: 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD',
       YELLOWSTONE_GRPC_URL: 'https://solana-mainnet.g.alchemy.com/',
@@ -31,12 +31,44 @@ describe('Environment Tests', () => {
   it('should throw when RPC_PRIMARY is not a valid URL', () => {
     const mockEnv = {
       RPC_PRIMARY: 'not-a-url',
-      BOT_KEYPAIR_PATH: '/tmp/keypair.json',
+      BOT_KEYPAIR_PATH: `${process.cwd()}/package.json`,
       KAMINO_MARKET_PUBKEY: '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF',
       KAMINO_KLEND_PROGRAM_ID: 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD',
       NODE_ENV: 'test'
     };
     
     expect(() => loadEnv(mockEnv)).toThrow('Invalid .env');
+  });
+
+  it('should block production primary pre-reserve mode without explicit unsafe override', () => {
+    const mockEnv = {
+      RPC_PRIMARY: 'https://api.mainnet-beta.solana.com',
+      BOT_KEYPAIR_PATH: `${process.cwd()}/package.json`,
+      KAMINO_MARKET_PUBKEY: '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF',
+      KAMINO_KLEND_PROGRAM_ID: 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD',
+      YELLOWSTONE_GRPC_URL: 'https://solana-mainnet.g.alchemy.com/',
+      YELLOWSTONE_X_TOKEN: 'test-token',
+      NODE_ENV: 'production',
+      PRE_RESERVE_REFRESH_MODE: 'primary',
+      ALLOW_UNSAFE_PRIMARY_REFRESH: 'false',
+    };
+
+    expect(() => loadEnv(mockEnv)).toThrow('Unsafe configuration');
+  });
+
+  it('should allow production primary pre-reserve mode with explicit unsafe override', () => {
+    const mockEnv = {
+      RPC_PRIMARY: 'https://api.mainnet-beta.solana.com',
+      BOT_KEYPAIR_PATH: `${process.cwd()}/package.json`,
+      KAMINO_MARKET_PUBKEY: '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF',
+      KAMINO_KLEND_PROGRAM_ID: 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD',
+      YELLOWSTONE_GRPC_URL: 'https://solana-mainnet.g.alchemy.com/',
+      YELLOWSTONE_X_TOKEN: 'test-token',
+      NODE_ENV: 'production',
+      PRE_RESERVE_REFRESH_MODE: 'primary',
+      ALLOW_UNSAFE_PRIMARY_REFRESH: 'true',
+    };
+
+    expect(() => loadEnv(mockEnv)).not.toThrow();
   });
 });
