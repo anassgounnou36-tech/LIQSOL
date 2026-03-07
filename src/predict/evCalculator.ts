@@ -9,6 +9,8 @@
 
 import type { PlanAwareEvContext } from './evContext.js';
 
+const DEFAULT_MIN_LIQUIDATION_BONUS_PCT = 0.02;
+
 export interface EvParams {
   closeFactor: number;             // e.g., 0.5 (50% of debt can be closed)
   liquidationBonusPct: number;     // e.g., 0.05 (5% bonus on collateral)
@@ -136,7 +138,10 @@ export function estimatePlanEv(
     );
 
     if (repayCapUsd > 0) {
-      const minBonusPct = evContext.minLiquidationBonusPct ?? p.minLiquidationBonusPctFallback ?? 0.02;
+      const minBonusPct =
+        evContext.minLiquidationBonusPct ??
+        p.minLiquidationBonusPctFallback ??
+        DEFAULT_MIN_LIQUIDATION_BONUS_PCT;
       const maxBonusPct = evContext.maxLiquidationBonusPct ?? p.liquidationBonusPct;
       const hr = Number(candidate.healthRatioRaw ?? candidate.healthRatio ?? 0);
       const bonusFullSeverityHrGap = p.bonusFullSeverityHrGap ?? 0.10;

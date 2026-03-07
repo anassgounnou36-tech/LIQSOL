@@ -226,6 +226,8 @@ export function decodeReserve(
       decoded.config?.maxLiquidationBonusBps !== null
         ? Number(decoded.config.maxLiquidationBonusBps)
         : null,
+    // Reserve config stores fee in percent points (e.g. 15 => 15%).
+    // Unit conversion to decimal fraction is handled in buildPlanAwareEvContext (evContext.ts).
     protocolLiquidationFeePct:
       decoded.config?.protocolLiquidationFeePct !== undefined &&
       decoded.config?.protocolLiquidationFeePct !== null
