@@ -14,6 +14,8 @@ type RankingEnv = Pick<
   | 'MIN_BORROW_USD'
   | 'HAZARD_ALPHA'
   | 'FORECAST_TTL_MS'
+  | 'TTL_VOLATILE_MOVE_PCT_PER_MIN'
+  | 'TTL_STABLE_MOVE_PCT_PER_MIN'
   | 'TTL_SOL_DROP_PCT_PER_MIN'
   | 'TTL_MAX_DROP_PCT'
   | 'EV_CLOSE_FACTOR'
@@ -43,8 +45,12 @@ export function buildCandidateSelectorConfigFromEnv(
     minBorrowUsd: Number(env.MIN_BORROW_USD),
     hazardAlpha: Number(env.HAZARD_ALPHA),
     forecastTtlMs: Number(env.FORECAST_TTL_MS),
-    ttlSolDropPctPerMin: Number(env.TTL_SOL_DROP_PCT_PER_MIN),
-    ttlMaxDropPct: Number(env.TTL_MAX_DROP_PCT),
+    ttlVolatileMovePctPerMin: Number(
+      env.TTL_VOLATILE_MOVE_PCT_PER_MIN ?? env.TTL_SOL_DROP_PCT_PER_MIN ?? '0.2'
+    ),
+    ttlStableMovePctPerMin: Number(env.TTL_STABLE_MOVE_PCT_PER_MIN ?? '0.02'),
+    ttlMaxMovePct: Number(env.TTL_MAX_DROP_PCT),
+    legacySolDropPctPerMin: Number(env.TTL_SOL_DROP_PCT_PER_MIN ?? '0.2'),
     evParams: {
       closeFactor: Number(env.EV_CLOSE_FACTOR),
       liquidationBonusPct: Number(env.EV_LIQUIDATION_BONUS_PCT),

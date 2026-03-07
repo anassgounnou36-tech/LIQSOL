@@ -7,7 +7,8 @@
 
 import { scoreHazard } from '../predict/hazardScorer.js';
 import { computeEV, EvParams } from '../predict/evCalculator.js';
-import { estimateTtlString } from '../predict/ttlEstimator.js';
+import type { PairAwareTtlContext } from '../predict/ttlContext.js';
+import { estimateTtl } from '../predict/ttlEstimator.js';
 
 export interface ScoredObligation {
   obligationPubkey: string;
@@ -58,6 +59,7 @@ export interface ScoredObligation {
   slotLag?: number;
   hybridDisabledReason?: string;
   assets?: string[];
+  ttlContext?: PairAwareTtlContext;
   // optionally: underlying detail for validation
 }
 
@@ -72,6 +74,11 @@ export interface Candidate extends ScoredObligation {
     evScore: number;
     timeToLiquidation: string;
     rank?: number;
+    model?: string;
+    confidence?: 'high' | 'medium' | 'low';
+    driverMint?: string;
+    driverSide?: 'deposit' | 'borrow';
+    requiredMovePct?: number;
   };
 }
 
@@ -84,8 +91,10 @@ export interface CandidateSelectorConfig {
   evParams?: EvParams; // EV calculation parameters
   // PR 8.6: Forecast caching and TTL parameters
   forecastTtlMs?: number; // default 300000 (5 minutes)
-  ttlSolDropPctPerMin?: number; // default 0.2
-  ttlMaxDropPct?: number; // default 20
+  ttlVolatileMovePctPerMin?: number; // default 0.2
+  ttlStableMovePctPerMin?: number; // default 0.02
+  ttlMaxMovePct?: number; // default 20
+  legacySolDropPctPerMin?: number; // default 0.2
 }
 
 // PR 8.6: Simple in-memory forecast cache with TTL
@@ -96,6 +105,11 @@ export interface CandidateSelectorConfig {
 type ForecastEntry = {
   evScore: number;
   timeToLiquidation: string;
+  model?: string;
+  confidence?: 'high' | 'medium' | 'low';
+  driverMint?: string;
+  driverSide?: 'deposit' | 'borrow';
+  requiredMovePct?: number;
   rank?: number;
   atMs: number;
 };
@@ -171,8 +185,10 @@ export function selectCandidates(
     const evParams = config.evParams; // TypeScript narrowing
     const ttlMs = config.forecastTtlMs ?? 300000; // Default 5 minutes
     const ttlOpts = {
-      solDropPctPerMin: config.ttlSolDropPctPerMin ?? 0.2,
-      maxDropPct: config.ttlMaxDropPct ?? 20,
+      volatileMovePctPerMin: config.ttlVolatileMovePctPerMin ?? 0.2,
+      stableMovePctPerMin: config.ttlStableMovePctPerMin ?? 0.02,
+      maxMovePct: config.ttlMaxMovePct ?? 20,
+      legacySolDropPctPerMin: config.legacySolDropPctPerMin ?? 0.2,
     };
 
     const withEvAndForecast = candidates
@@ -186,20 +202,48 @@ export function selectCandidates(
         const key = c.obligationPubkey;
         const cached = getCachedForecast(key, ttlMs);
         let ttlString = cached?.timeToLiquidation;
+        let ttlModel = cached?.model;
+        let ttlConfidence = cached?.confidence;
+        let ttlDriverMint = cached?.driverMint;
+        let ttlDriverSide = cached?.driverSide;
+        let ttlRequiredMovePct = cached?.requiredMovePct;
         // Validate cached EV score matches current calculation (within small tolerance)
         if (ttlString && cached && Math.abs(cached.evScore - ev) < 0.01) {
           // Use cached TTL
         } else {
           // Recalculate TTL if cache miss or EV changed
-          ttlString = estimateTtlString(c, ttlOpts);
-          setCachedForecast(key, { evScore: ev, timeToLiquidation: ttlString, atMs: Date.now() });
+          const ttlEstimate = estimateTtl(c, ttlOpts);
+          ttlString = ttlEstimate.ttlString;
+          ttlModel = ttlEstimate.model;
+          ttlConfidence = ttlEstimate.confidence;
+          ttlDriverMint = ttlEstimate.driverMint;
+          ttlDriverSide = ttlEstimate.driverSide;
+          ttlRequiredMovePct = ttlEstimate.requiredMovePct;
+          setCachedForecast(key, {
+            evScore: ev,
+            timeToLiquidation: ttlString,
+            model: ttlModel,
+            confidence: ttlConfidence,
+            driverMint: ttlDriverMint,
+            driverSide: ttlDriverSide,
+            requiredMovePct: ttlRequiredMovePct,
+            atMs: Date.now(),
+          });
         }
-        
+
         return { 
           ...c, 
           hazard, 
           ev, 
-          forecast: { evScore: ev, timeToLiquidation: ttlString } 
+          forecast: {
+            evScore: ev,
+            timeToLiquidation: ttlString,
+            model: ttlModel,
+            confidence: ttlConfidence,
+            driverMint: ttlDriverMint,
+            driverSide: ttlDriverSide,
+            requiredMovePct: ttlRequiredMovePct,
+          }
         };
       })
       .filter((c) => c.liquidationEligible || c.borrowValueUsd >= minBorrow)

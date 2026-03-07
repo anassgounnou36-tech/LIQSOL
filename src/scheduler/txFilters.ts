@@ -1,6 +1,6 @@
 import { scoreHazard } from '../predict/hazardScorer.js';
 import { computeEV, type EvParams } from '../predict/evCalculator.js';
-import { estimateTtlString } from '../predict/ttlEstimator.js';
+import { estimateTtl } from '../predict/ttlEstimator.js';
 
 export interface FilterParams {
   minEv: number;
@@ -9,6 +9,9 @@ export interface FilterParams {
   hazardAlpha: number;
   evParams: EvParams;
   ttlDropPerMinPct: number;
+  ttlVolatileMovePctPerMin?: number;
+  ttlStableMovePctPerMin?: number;
+  ttlMaxMovePct?: number;
   ttlMaxDropPct: number;
 }
 
@@ -51,8 +54,14 @@ export function filterCandidates(raw: any[], p: FilterParams): any[] {
       const hazard = c.hazard ?? scoreHazard(hr, p.hazardAlpha);
       const borrowUsd = Number(c.borrowValueUsd ?? 0);
       const ev = c.ev ?? computeEV(borrowUsd, hazard, p.evParams);
+      const volatileMovePctPerMin = p.ttlVolatileMovePctPerMin ?? p.ttlDropPerMinPct;
       const ttlStr = c.forecast?.timeToLiquidation ??
-        estimateTtlString(c, { solDropPctPerMin: p.ttlDropPerMinPct, maxDropPct: p.ttlMaxDropPct });
+        estimateTtl(c, {
+          volatileMovePctPerMin,
+          stableMovePctPerMin: p.ttlStableMovePctPerMin ?? 0.02,
+          maxMovePct: p.ttlMaxMovePct ?? p.ttlMaxDropPct,
+          legacySolDropPctPerMin: p.ttlDropPerMinPct,
+        }).ttlString;
       const ttlMin = parseTtlMinutes(ttlStr);
       const liquidationEligible = c.liquidationEligible ?? false;
       return { ...c, key: c.key ?? c.obligationPubkey ?? 'unknown', hazard, ev, ttlStr, ttlMin, borrowUsd, liquidationEligible };
@@ -87,8 +96,14 @@ export function filterCandidatesWithStats(raw: any[], p: FilterParams): { filter
     const hazard = c.hazard ?? scoreHazard(hr, p.hazardAlpha);
     const borrowUsd = Number(c.borrowValueUsd ?? 0);
     const ev = c.ev ?? computeEV(borrowUsd, hazard, p.evParams);
+    const volatileMovePctPerMin = p.ttlVolatileMovePctPerMin ?? p.ttlDropPerMinPct;
     const ttlStr = c.forecast?.timeToLiquidation ??
-      estimateTtlString(c, { solDropPctPerMin: p.ttlDropPerMinPct, maxDropPct: p.ttlMaxDropPct });
+      estimateTtl(c, {
+        volatileMovePctPerMin,
+        stableMovePctPerMin: p.ttlStableMovePctPerMin ?? 0.02,
+        maxMovePct: p.ttlMaxMovePct ?? p.ttlMaxDropPct,
+        legacySolDropPctPerMin: p.ttlDropPerMinPct,
+      }).ttlString;
     const ttlMin = parseTtlMinutes(ttlStr);
     const liquidationEligible = c.liquidationEligible ?? false;
     return { ...c, key: c.key ?? c.obligationPubkey ?? 'unknown', hazard, ev, ttlStr, ttlMin, borrowUsd, liquidationEligible };

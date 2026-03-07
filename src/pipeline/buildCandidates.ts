@@ -10,6 +10,7 @@ import { type ScoredObligation } from '../strategy/candidateSelector.js';
 import { rankCandidatesWithBoundedKlendVerification } from '../strategy/rankCandidatesForSelection.js';
 import { SOL_MINT, USDC_MINT } from '../constants/mints.js';
 import { logger } from '../observability/logger.js';
+import { buildPairAwareTtlContext } from '../predict/ttlContext.js';
 
 export interface BuildCandidatesOptions {
   marketPubkey: PublicKey;
@@ -214,6 +215,29 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
 
   // Only emit candidates with BOTH repay/collateral legs present
   const candidatesWithBothLegs = scoredForSelection.filter(c => c.repayReservePubkey && c.collateralReservePubkey);
+  let withPairAwareTtlContext = 0;
+  for (const c of candidatesWithBothLegs) {
+    const entry = indexer.getObligationEntry(c.obligationPubkey);
+    if (!entry?.decoded) continue;
+    const ttlContext = buildPairAwareTtlContext({
+      decoded: entry.decoded,
+      reserveCache,
+      oracleCache,
+    });
+    if (ttlContext) {
+      c.ttlContext = ttlContext;
+      withPairAwareTtlContext++;
+    }
+  }
+
+  logger.info(
+    {
+      executableCandidates: candidatesWithBothLegs.length,
+      withPairAwareTtlContext,
+      legacyFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPairAwareTtlContext),
+    },
+    'TTL context enrichment summary for executable candidates'
+  );
 
   if (scoredForSelection.length !== candidatesWithBothLegs.length) {
     logger.info(
