@@ -29,7 +29,7 @@ function makeScored(
 describe("rankCandidatesWithBoundedKlendVerification", () => {
   it("re-ranks after bounded sdk mutation before slicing topN", async () => {
     const { rankCandidatesWithBoundedKlendVerification } = await import(
-      "../pipeline/buildCandidates.js"
+      "../strategy/rankCandidatesForSelection.js"
     );
     const candidatesWithBothLegs: ScoredObligation[] = [
       makeScored("best-initial", 1.01, 120),
@@ -48,10 +48,21 @@ describe("rankCandidatesWithBoundedKlendVerification", () => {
     });
 
     const ranked = await rankCandidatesWithBoundedKlendVerification({
-      candidatesWithBothLegs,
+      scoredCandidates: candidatesWithBothLegs,
       nearThreshold: 1.02,
       topN: 1,
       env: {
+        USE_EV_RANKING: "false",
+        MIN_BORROW_USD: "10",
+        HAZARD_ALPHA: "25",
+        FORECAST_TTL_MS: "300000",
+        TTL_SOL_DROP_PCT_PER_MIN: "0.2",
+        TTL_MAX_DROP_PCT: "20",
+        EV_CLOSE_FACTOR: "0.5",
+        EV_LIQUIDATION_BONUS_PCT: "0.05",
+        EV_FLASHLOAN_FEE_PCT: "0.002",
+        EV_FIXED_GAS_USD: "0.5",
+        EV_SLIPPAGE_BUFFER_PCT: undefined,
         LIQSOL_RECOMPUTED_VERIFY_BACKEND: "klend-sdk",
         LIQSOL_RECOMPUTED_VERIFY_TOP_K: 3,
         LIQSOL_RECOMPUTED_VERIFY_CONCURRENCY: 1,

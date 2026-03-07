@@ -2,14 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import { PublicKey } from '@solana/web3.js';
 import { getConnection } from '../solana/connection.js';
-import { loadReadonlyEnv, type ReadonlyEnv } from '../config/env.js';
+import { loadReadonlyEnv } from '../config/env.js';
 import { loadReserves } from '../cache/reserveCache.js';
 import { loadOracles } from '../cache/oracleCache.js';
 import { LiveObligationIndexer } from '../engine/liveObligationIndexer.js';
-import { selectCandidates, type Candidate, type ScoredObligation } from '../strategy/candidateSelector.js';
+import { type ScoredObligation } from '../strategy/candidateSelector.js';
+import { rankCandidatesWithBoundedKlendVerification } from '../strategy/rankCandidatesForSelection.js';
 import { SOL_MINT, USDC_MINT } from '../constants/mints.js';
 import { logger } from '../observability/logger.js';
-import { applyKlendSdkVerificationToCandidates } from '../engine/applyKlendSdkVerification.js';
 
 export interface BuildCandidatesOptions {
   marketPubkey: PublicKey;
@@ -18,36 +18,6 @@ export interface BuildCandidatesOptions {
   topN?: number;
   nearThreshold?: number;
   outputPath?: string;
-}
-
-export async function rankCandidatesWithBoundedKlendVerification(args: {
-  candidatesWithBothLegs: ScoredObligation[];
-  nearThreshold: number;
-  topN: number;
-  env: ReadonlyEnv;
-  marketPubkey: PublicKey;
-  programId: PublicKey;
-  rpcUrl: string;
-}): Promise<{ rerankedCandidates: Candidate[]; topCandidates: Candidate[] }> {
-  const initialCandidates = selectCandidates(args.candidatesWithBothLegs, {
-    nearThreshold: args.nearThreshold,
-  });
-
-  await applyKlendSdkVerificationToCandidates({
-    candidates: initialCandidates,
-    env: args.env,
-    marketPubkey: args.marketPubkey,
-    programId: args.programId,
-    rpcUrl: args.rpcUrl,
-  });
-
-  const rerankedCandidates = selectCandidates(initialCandidates, {
-    nearThreshold: args.nearThreshold,
-  });
-  return {
-    rerankedCandidates,
-    topCandidates: rerankedCandidates.slice(0, args.topN),
-  };
 }
 
 /**
@@ -258,8 +228,8 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
 
   // Select and rank candidates
   logger.info('Selecting and ranking candidates...');
-  const { rerankedCandidates, topCandidates } = await rankCandidatesWithBoundedKlendVerification({
-    candidatesWithBothLegs,
+  const { rankedCandidates, topCandidates } = await rankCandidatesWithBoundedKlendVerification({
+    scoredCandidates: candidatesWithBothLegs,
     nearThreshold,
     topN,
     env,
@@ -268,8 +238,8 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
     rpcUrl,
   });
   // Report statistics
-  const candLiquidatable = rerankedCandidates.filter(c => c.liquidationEligible).length;
-  const candNear = rerankedCandidates.filter(c => c.predictedLiquidatableSoon).length;
+  const candLiquidatable = rankedCandidates.filter(c => c.liquidationEligible).length;
+  const candNear = rankedCandidates.filter(c => c.predictedLiquidatableSoon).length;
 
   logger.info(
     { 
