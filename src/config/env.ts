@@ -52,6 +52,8 @@ export const EnvSchema = z.object({
 
   // PR 8.6: Forecast caching and TTL parameters
   FORECAST_TTL_MS: z.string().optional().default('300000'),
+  TTL_VOLATILE_MOVE_PCT_PER_MIN: z.string().optional(),
+  TTL_STABLE_MOVE_PCT_PER_MIN: z.string().optional().default('0.02'),
   TTL_SOL_DROP_PCT_PER_MIN: z.string().optional().default('0.2'),
   TTL_MAX_DROP_PCT: z.string().optional().default('20'),
 

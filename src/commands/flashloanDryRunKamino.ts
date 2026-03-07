@@ -15,7 +15,7 @@ import { MEMO_PROGRAM_ID } from "../constants/programs.js";
 import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
 import { scoreHazard } from "../predict/hazardScorer.js";
 import { computeEV, type EvParams } from "../predict/evCalculator.js";
-import { estimateTtlString } from "../predict/ttlEstimator.js";
+import { estimateTtl } from "../predict/ttlEstimator.js";
 
 /**
  * Normalize any candidates payload into an array.
@@ -179,15 +179,19 @@ async function main() {
       fixedGasUsd: Number(env.EV_FIXED_GAS_USD ?? 0.5),
       slippageBufferPct: env.EV_SLIPPAGE_BUFFER_PCT ? Number(env.EV_SLIPPAGE_BUFFER_PCT) : undefined,
     };
-    const solDropPctPerMin = Number(env.TTL_SOL_DROP_PCT_PER_MIN ?? 0.2);
-    const maxDropPct = Number(env.TTL_MAX_DROP_PCT ?? 20);
+    const ttlOpts = {
+      volatileMovePctPerMin: Number(env.TTL_VOLATILE_MOVE_PCT_PER_MIN ?? env.TTL_SOL_DROP_PCT_PER_MIN ?? 0.2),
+      stableMovePctPerMin: Number(env.TTL_STABLE_MOVE_PCT_PER_MIN ?? 0.02),
+      maxMovePct: Number(env.TTL_MAX_DROP_PCT ?? 20),
+      legacySolDropPctPerMin: Number(env.TTL_SOL_DROP_PCT_PER_MIN ?? 0.2),
+    };
 
     ranked = candidates.map((c: any) => {
       const hr = Number(c.healthRatioRaw ?? c.healthRatio ?? 0);
       const hazard = c.hazard ?? scoreHazard(hr, alpha);
       const borrow = Number(c.borrowValueUsd ?? 0);
       const ev = c.ev ?? computeEV(borrow, hazard, evParams);
-      const ttlStr = (c.forecast?.timeToLiquidation) ?? estimateTtlString(c, { solDropPctPerMin, maxDropPct });
+      const ttlStr = (c.forecast?.timeToLiquidation) ?? estimateTtl(c, ttlOpts).ttlString;
       const ttlMin = parseTtlMinutes(ttlStr);
       return { ...c, key: c.key ?? c.obligationPubkey ?? 'unknown', hazard, ev, ttlMin, ttlStr };
     }).sort((a: any, b: any) => {

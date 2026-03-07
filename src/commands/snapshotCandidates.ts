@@ -14,6 +14,7 @@ import { rankCandidatesWithBoundedKlendVerification } from "../strategy/rankCand
 import { explainHealth } from "../math/healthBreakdown.js";
 import { SF_SCALE } from "../math/fractionScale.js";
 import { divBigintToNumber } from "../utils/bn.js";
+import { buildPairAwareTtlContext } from "../predict/ttlContext.js";
 
 const ratio = (a?: number, b?: number) =>
   (a && b && b > 0) ? (a / b).toFixed(4) : 'n/a';
@@ -287,6 +288,29 @@ async function main() {
 
     // Only emit candidates with BOTH repay/collateral legs present
     const candidatesWithBothLegs = scoredForSelection.filter(c => c.repayReservePubkey && c.collateralReservePubkey);
+    let withPairAwareTtlContext = 0;
+    for (const c of candidatesWithBothLegs) {
+      const entry = indexer.getObligationEntry(c.obligationPubkey);
+      if (!entry?.decoded) continue;
+      const ttlContext = buildPairAwareTtlContext({
+        decoded: entry.decoded,
+        reserveCache,
+        oracleCache,
+      });
+      if (ttlContext) {
+        c.ttlContext = ttlContext;
+        withPairAwareTtlContext++;
+      }
+    }
+
+    logger.info(
+      {
+        executableCandidates: candidatesWithBothLegs.length,
+        withPairAwareTtlContext,
+        legacyFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPairAwareTtlContext),
+      },
+      'TTL context enrichment summary for executable candidates'
+    );
 
     if (scoredForSelection.length !== candidatesWithBothLegs.length) {
       logger.info(
@@ -363,6 +387,26 @@ async function main() {
       }
     });
 
+    console.log("\n");
+    const modelCounts = topCandidates.reduce<Record<string, number>>((acc, candidate) => {
+      const model = candidate.forecast?.model;
+      if (!model) return acc;
+      acc[model] = (acc[model] ?? 0) + 1;
+      return acc;
+    }, {});
+    const topWithPairAwareTtl = topCandidates.filter((c) => c.forecast?.model?.startsWith('pair-')).length;
+    const topWithLegacyTtl = topCandidates.filter((c) => c.forecast?.model === 'legacy-global').length;
+    console.log("=== TTL MODEL SUMMARY (TOP CANDIDATES) ===\n");
+    console.log(`Top candidates using pair-aware TTL: ${topWithPairAwareTtl}`);
+    console.log(`Top candidates using legacy fallback TTL: ${topWithLegacyTtl}`);
+    if (Object.keys(modelCounts).length > 0) {
+      console.log('Counts by forecast.model:');
+      for (const [model, count] of Object.entries(modelCounts)) {
+        console.log(`  ${model}: ${count}`);
+      }
+    } else {
+      console.log('Counts by forecast.model: (none)');
+    }
     console.log("\n");
 
     // PR: Add guardrails - report % of candidates with reserve pubkeys
@@ -456,6 +500,12 @@ async function main() {
           console.log(`    Borrow Value: $${c.borrowValueUsd.toFixed(2)}`);
           console.log(`    Collateral Value: $${c.collateralValueUsd.toFixed(2)}`);
           console.log(`    Health Ratio: ${c.healthRatio.toFixed(4)}`);
+          if (c.forecast?.model) console.log(`    Forecast model: ${c.forecast.model}`);
+          if (c.forecast?.confidence) console.log(`    Forecast confidence: ${c.forecast.confidence}`);
+          if (c.forecast?.driverMint) console.log(`    Forecast driver mint: ${c.forecast.driverMint}`);
+          if (c.forecast?.requiredMovePct !== undefined) {
+            console.log(`    Forecast required move (%): ${c.forecast.requiredMovePct.toFixed(4)}`);
+          }
 
           // Protocol SF cross-check
           const decoded = entry.decoded;

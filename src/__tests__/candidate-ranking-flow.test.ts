@@ -38,6 +38,8 @@ function makeEnv(overrides: Record<string, string | number | undefined> = {}) {
     MIN_BORROW_USD: "10",
     HAZARD_ALPHA: "25",
     FORECAST_TTL_MS: "300000",
+    TTL_VOLATILE_MOVE_PCT_PER_MIN: undefined,
+    TTL_STABLE_MOVE_PCT_PER_MIN: "0.02",
     TTL_SOL_DROP_PCT_PER_MIN: "0.2",
     TTL_MAX_DROP_PCT: "20",
     EV_CLOSE_FACTOR: "0.5",
@@ -81,6 +83,8 @@ describe("candidate ranking flow alignment", () => {
         MIN_BORROW_USD: "123",
         HAZARD_ALPHA: "9",
         FORECAST_TTL_MS: "4567",
+        TTL_VOLATILE_MOVE_PCT_PER_MIN: "0.9",
+        TTL_STABLE_MOVE_PCT_PER_MIN: "0.03",
         TTL_SOL_DROP_PCT_PER_MIN: "0.7",
         TTL_MAX_DROP_PCT: "11",
         EV_CLOSE_FACTOR: "0.33",
@@ -98,8 +102,10 @@ describe("candidate ranking flow alignment", () => {
       minBorrowUsd: 123,
       hazardAlpha: 9,
       forecastTtlMs: 4567,
-      ttlSolDropPctPerMin: 0.7,
-      ttlMaxDropPct: 11,
+      ttlVolatileMovePctPerMin: 0.9,
+      ttlStableMovePctPerMin: 0.03,
+      ttlMaxMovePct: 11,
+      legacySolDropPctPerMin: 0.7,
       evParams: {
         closeFactor: 0.33,
         liquidationBonusPct: 0.06,
@@ -114,6 +120,20 @@ describe("candidate ranking flow alignment", () => {
       1.02
     );
     expect(cfgNoFiniteSlippage.evParams?.slippageBufferPct).toBeUndefined();
+  });
+
+  it("falls back to legacy volatile env knob when TTL_VOLATILE_MOVE_PCT_PER_MIN is absent", () => {
+    const cfg = buildCandidateSelectorConfigFromEnv(
+      makeEnv({
+        TTL_VOLATILE_MOVE_PCT_PER_MIN: undefined,
+        TTL_SOL_DROP_PCT_PER_MIN: "0.77",
+      }),
+      1.02
+    );
+
+    expect(cfg.ttlVolatileMovePctPerMin).toBe(0.77);
+    expect(cfg.legacySolDropPctPerMin).toBe(0.77);
+    expect(cfg.ttlStableMovePctPerMin).toBe(0.02);
   });
 
   it("uses EV-enabled config for selectCandidates before and after bounded sdk mutation", async () => {
@@ -182,6 +202,52 @@ describe("candidate ranking flow alignment", () => {
 
     expect(filesUsingHelper.some((p) => p.endsWith(path.join("pipeline", "buildCandidates.ts")))).toBe(true);
     expect(filesUsingHelper.some((p) => p.endsWith(path.join("commands", "snapshotCandidates.ts")))).toBe(true);
+  });
+
+  it("EV ranking adds TTL forecast model metadata when ttlContext is present", async () => {
+    applyMock.mockResolvedValue(undefined);
+    const result = await rankCandidatesWithBoundedKlendVerification({
+      scoredCandidates: [
+        {
+          ...makeScored("ttl-model", 1.1, 200),
+          ttlContext: {
+            deposits: [
+              {
+                mint: "So11111111111111111111111111111111111111112",
+                usdRaw: 120,
+                usdWeighted: 120,
+                shareOfWeightedSide: 1,
+                assetClass: "volatile",
+              },
+            ],
+            borrows: [
+              {
+                mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                usdRaw: 100,
+                usdWeighted: 100,
+                shareOfWeightedSide: 1,
+                assetClass: "stable",
+              },
+            ],
+            totalCollateralUsdAdj: 110,
+            totalBorrowUsdAdj: 100,
+            totalCollateralUsdRaw: 110,
+            totalBorrowUsdRaw: 100,
+            activeDepositCount: 1,
+            activeBorrowCount: 1,
+          },
+        },
+      ],
+      nearThreshold: 1.02,
+      topN: 1,
+      env: makeEnv({ USE_EV_RANKING: "true" }),
+      marketPubkey: PublicKey.unique(),
+      programId: new PublicKey("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"),
+      rpcUrl: "https://api.mainnet-beta.solana.com",
+    });
+
+    expect(result.topCandidates[0]?.forecast?.model).toBeDefined();
+    expect(result.topCandidates[0]?.forecast?.confidence).toBeDefined();
   });
 
   it("keeps legacy priorityScore ordering when USE_EV_RANKING=false", async () => {

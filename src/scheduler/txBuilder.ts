@@ -1,6 +1,6 @@
 import { scoreHazard } from '../predict/hazardScorer.js';
 import { computeEV, type EvParams } from '../predict/evCalculator.js';
-import { estimateTtlString } from '../predict/ttlEstimator.js';
+import { estimateTtl } from '../predict/ttlEstimator.js';
 import { parseTtlMinutes } from '../predict/forecastTTLManager.js';
 
 /**
@@ -45,6 +45,11 @@ export interface FlashloanPlan {
   ttlComputedAtMs: number;
   ttlComputedMin: number | null;
   predictedLiquidationAtMs?: number | null; // absolute epoch timestamp when liquidation predicted
+  ttlModel?: string;
+  ttlConfidence?: 'high' | 'medium' | 'low';
+  ttlDriverMint?: string;
+  ttlDriverSide?: 'deposit' | 'borrow';
+  ttlRequiredMovePct?: number;
   prevEv?: number; // optional: previous EV for audit
   liquidationEligible?: boolean; // PR10+: whether obligation is currently liquidatable
   assets?: string[];
@@ -62,12 +67,13 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
   
   const nowMs = Date.now();
   // Parse TTL: use ttlMin if provided, otherwise parse from ttlStr
+  const ttlString = c.forecast?.timeToLiquidation ?? c.ttlStr ?? c.ttl;
   let ttlMin: number | null;
   if (c.ttlMin !== undefined && c.ttlMin !== null) {
     const ttlMinRaw = Number(c.ttlMin);
     ttlMin = Number.isFinite(ttlMinRaw) ? ttlMinRaw : null;
   } else {
-    ttlMin = parseTtlMinutes(c.ttlStr);
+    ttlMin = parseTtlMinutes(ttlString);
   }
   const ttlComputedAtMs = nowMs;
   const ttlComputedMin = ttlMin;
@@ -92,11 +98,16 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
     ev: Number(c.ev ?? 0),
     hazard: Number(c.hazard ?? 0),
     ttlMin,
-    ttlStr: c.ttlStr ?? c.ttl,
+    ttlStr: ttlString,
     createdAtMs: nowMs,
     ttlComputedAtMs,
     ttlComputedMin,
     predictedLiquidationAtMs,
+    ttlModel: c.forecast?.model,
+    ttlConfidence: c.forecast?.confidence,
+    ttlDriverMint: c.forecast?.driverMint,
+    ttlDriverSide: c.forecast?.driverSide,
+    ttlRequiredMovePct: c.forecast?.requiredMovePct,
     liquidationEligible: c.liquidationEligible ?? false,
     assets: Array.isArray(c.assets) ? c.assets : undefined,
   };
@@ -129,10 +140,18 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     : Number(plan.hazard ?? 0);
   
   const ev = computeEV(amountUsd, hazard, evParams);
-  const ttlStr = estimateTtlString(candidateLike, {
-    solDropPctPerMin: Number(process.env.TTL_SOL_DROP_PCT_PER_MIN ?? 0.2),
-    maxDropPct: Number(process.env.TTL_MAX_DROP_PCT ?? 20),
-  });
+  const forecastTtlString = candidateLike.forecast?.timeToLiquidation;
+  const ttlEstimate = forecastTtlString
+    ? null
+    : estimateTtl(candidateLike, {
+        volatileMovePctPerMin: Number(
+          process.env.TTL_VOLATILE_MOVE_PCT_PER_MIN ?? process.env.TTL_SOL_DROP_PCT_PER_MIN ?? 0.2
+        ),
+        stableMovePctPerMin: Number(process.env.TTL_STABLE_MOVE_PCT_PER_MIN ?? 0.02),
+        maxMovePct: Number(process.env.TTL_MAX_DROP_PCT ?? 20),
+        legacySolDropPctPerMin: Number(process.env.TTL_SOL_DROP_PCT_PER_MIN ?? 0.2),
+      });
+  const ttlStr = forecastTtlString ?? ttlEstimate?.ttlString ?? 'unknown';
   
   // Parse TTL string into minutes using shared utility
   const ttlMin = parseTtlMinutes(ttlStr);
@@ -161,6 +180,12 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     ttlComputedAtMs,
     ttlComputedMin,
     predictedLiquidationAtMs,
+    ttlModel: candidateLike.forecast?.model ?? ttlEstimate?.model ?? plan.ttlModel,
+    ttlConfidence: candidateLike.forecast?.confidence ?? ttlEstimate?.confidence ?? plan.ttlConfidence,
+    ttlDriverMint: candidateLike.forecast?.driverMint ?? ttlEstimate?.driverMint ?? plan.ttlDriverMint,
+    ttlDriverSide: candidateLike.forecast?.driverSide ?? ttlEstimate?.driverSide ?? plan.ttlDriverSide,
+    ttlRequiredMovePct:
+      candidateLike.forecast?.requiredMovePct ?? ttlEstimate?.requiredMovePct ?? plan.ttlRequiredMovePct,
     amountUi,
     amountUsd,
     repayMint,

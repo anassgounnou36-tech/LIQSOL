@@ -13,6 +13,9 @@ export interface BuildQueueOptions {
   maxTtlMin?: number;
   minHazard?: number;
   hazardAlpha?: number;
+  ttlVolatileMovePctPerMin?: number;
+  ttlStableMovePctPerMin?: number;
+  ttlMaxMovePct?: number;
   ttlDropPerMinPct?: number;
   ttlMaxDropPct?: number;
   evParams?: EvParams;
@@ -45,6 +48,12 @@ export async function buildQueue(options: BuildQueueOptions = {}): Promise<void>
     maxTtlMin = getEnvNum('SCHED_MAX_TTL_MIN', 10),
     minHazard = getEnvNum('SCHED_MIN_HAZARD', 0.05),
     hazardAlpha = getEnvNum('HAZARD_ALPHA', 25),
+    ttlVolatileMovePctPerMin = getEnvNum(
+      'TTL_VOLATILE_MOVE_PCT_PER_MIN',
+      getEnvNum('TTL_SOL_DROP_PCT_PER_MIN', 0.2)
+    ),
+    ttlStableMovePctPerMin = getEnvNum('TTL_STABLE_MOVE_PCT_PER_MIN', 0.02),
+    ttlMaxMovePct = getEnvNum('TTL_MAX_DROP_PCT', 20),
     ttlDropPerMinPct = getEnvNum('TTL_SOL_DROP_PCT_PER_MIN', 0.2),
     ttlMaxDropPct = getEnvNum('TTL_MAX_DROP_PCT', 20),
     evParams = {
@@ -74,6 +83,9 @@ export async function buildQueue(options: BuildQueueOptions = {}): Promise<void>
     maxTtlMin,
     minHazard,
     hazardAlpha,
+    ttlVolatileMovePctPerMin,
+    ttlStableMovePctPerMin,
+    ttlMaxMovePct,
     evParams,
     ttlDropPerMinPct,
     ttlMaxDropPct,

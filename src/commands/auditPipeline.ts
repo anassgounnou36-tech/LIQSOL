@@ -112,6 +112,12 @@ function main() {
     minHazard: getEnvNum('SCHED_MIN_HAZARD', 0.05),
     hazardAlpha: getEnvNum('HAZARD_ALPHA', 25),
     evParams,
+    ttlVolatileMovePctPerMin: getEnvNum(
+      'TTL_VOLATILE_MOVE_PCT_PER_MIN',
+      getEnvNum('TTL_SOL_DROP_PCT_PER_MIN', 0.2)
+    ),
+    ttlStableMovePctPerMin: getEnvNum('TTL_STABLE_MOVE_PCT_PER_MIN', 0.02),
+    ttlMaxMovePct: getEnvNum('TTL_MAX_DROP_PCT', 20),
     ttlDropPerMinPct: getEnvNum('TTL_SOL_DROP_PCT_PER_MIN', 0.2),
     ttlMaxDropPct: getEnvNum('TTL_MAX_DROP_PCT', 20),
   };
