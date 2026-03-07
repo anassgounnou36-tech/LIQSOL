@@ -100,23 +100,29 @@ function main() {
   console.log("✓ All candidates have valid structure and numeric fields");
 
   const allHaveFiniteEv = candidates.every((c) => typeof c.ev === "number" && Number.isFinite(c.ev));
-  const sortField = allHaveFiniteEv ? "ev" : "priorityScore";
-
-  // Verify sorting by expected field descending
-  for (let i = 1; i < candidates.length; i++) {
-    if (candidates[i][sortField] > candidates[i - 1][sortField]) {
-      throw new Error(
-        `ERROR: Candidates not sorted by ${sortField} descending at index ${i}:\n` +
-        `  [${i - 1}] ${sortField}: ${candidates[i - 1][sortField]}\n` +
-        `  [${i}] ${sortField}: ${candidates[i][sortField]}`
-      );
+  if (allHaveFiniteEv) {
+    for (let i = 1; i < candidates.length; i++) {
+      if (candidates[i].ev > candidates[i - 1].ev) {
+        throw new Error(
+          `ERROR: Candidates not sorted by ev descending at index ${i}:\n` +
+          `  [${i - 1}] ev: ${candidates[i - 1].ev}\n` +
+          `  [${i}] ev: ${candidates[i].ev}`
+        );
+      }
     }
+    console.log("✓ Candidates sorted by EV descending");
+  } else {
+    for (let i = 1; i < candidates.length; i++) {
+      if (candidates[i].priorityScore > candidates[i - 1].priorityScore) {
+        throw new Error(
+          `ERROR: Candidates not sorted by priorityScore descending at index ${i}:\n` +
+          `  [${i - 1}] priorityScore: ${candidates[i - 1].priorityScore}\n` +
+          `  [${i}] priorityScore: ${candidates[i].priorityScore}`
+        );
+      }
+    }
+    console.log("✓ Candidates sorted by priorityScore descending");
   }
-  console.log(
-    allHaveFiniteEv
-      ? "✓ Candidates sorted by EV descending"
-      : "✓ Candidates sorted by priorityScore descending"
-  );
 
   // Validate selection rules
   const liquidatableCount = candidates.filter((c) => c.liquidationEligible).length;

@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { PublicKey } from "@solana/web3.js";
 import * as candidateSelector from "../strategy/candidateSelector.js";
@@ -17,6 +19,18 @@ vi.mock("../engine/applyKlendSdkVerification.js", () => ({
 afterEach(() => {
   vi.clearAllMocks();
 });
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const srcRoot = path.join(repoRoot, "src");
+
+function findTsFiles(dir: string): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) return findTsFiles(fullPath);
+    if (entry.isFile() && fullPath.endsWith(".ts")) return [fullPath];
+    return [];
+  });
+}
 
 function makeEnv(overrides: Record<string, string | number | undefined> = {}) {
   return {
@@ -161,21 +175,13 @@ describe("candidate ranking flow alignment", () => {
   });
 
   it("buildCandidates.ts and snapshotCandidates.ts both use shared ranking helper", () => {
-    const buildCandidatesSource = fs.readFileSync(
-      "/home/runner/work/LIQSOL/LIQSOL/src/pipeline/buildCandidates.ts",
-      "utf8"
-    );
-    const snapshotCandidatesSource = fs.readFileSync(
-      "/home/runner/work/LIQSOL/LIQSOL/src/commands/snapshotCandidates.ts",
-      "utf8"
-    );
+    const filesUsingHelper = findTsFiles(srcRoot).filter((filePath) => {
+      const source = fs.readFileSync(filePath, "utf8");
+      return source.includes("strategy/rankCandidatesForSelection.js");
+    });
 
-    expect(buildCandidatesSource).toContain(
-      "from '../strategy/rankCandidatesForSelection.js'"
-    );
-    expect(snapshotCandidatesSource).toContain(
-      "from \"../strategy/rankCandidatesForSelection.js\""
-    );
+    expect(filesUsingHelper.some((p) => p.endsWith(path.join("pipeline", "buildCandidates.ts")))).toBe(true);
+    expect(filesUsingHelper.some((p) => p.endsWith(path.join("commands", "snapshotCandidates.ts")))).toBe(true);
   });
 
   it("keeps legacy priorityScore ordering when USE_EV_RANKING=false", async () => {
