@@ -14,7 +14,7 @@ import { buildComputeBudgetIxs } from "../execution/computeBudget.js";
 import { MEMO_PROGRAM_ID } from "../constants/programs.js";
 import { SOL_MINT, USDC_MINT } from "../constants/mints.js";
 import { scoreHazard } from "../predict/hazardScorer.js";
-import { computeEV, type EvParams } from "../predict/evCalculator.js";
+import { estimatePlanEv, type PlanEvParams } from "../predict/evCalculator.js";
 import { estimateTtl } from "../predict/ttlEstimator.js";
 
 /**
@@ -172,12 +172,15 @@ async function main() {
 
     // Compute on the fly if forecast fields are missing
     const alpha = Number(env.HAZARD_ALPHA ?? 25);
-    const evParams: EvParams = {
+    const evParams: PlanEvParams = {
       closeFactor: Number(env.EV_CLOSE_FACTOR ?? 0.5),
       liquidationBonusPct: Number(env.EV_LIQUIDATION_BONUS_PCT ?? 0.05),
       flashloanFeePct: Number(env.EV_FLASHLOAN_FEE_PCT ?? 0.002),
       fixedGasUsd: Number(env.EV_FIXED_GAS_USD ?? 0.5),
       slippageBufferPct: env.EV_SLIPPAGE_BUFFER_PCT ? Number(env.EV_SLIPPAGE_BUFFER_PCT) : undefined,
+      minLiquidationBonusPctFallback: Number(env.EV_MIN_LIQUIDATION_BONUS_PCT ?? 0.02),
+      bonusFullSeverityHrGap: Number(env.EV_BONUS_FULLY_SEVERE_HR_GAP ?? 0.10),
+      sameMintSlippageBufferPct: Number(env.EV_SAME_MINT_SLIPPAGE_BUFFER_PCT ?? 0),
     };
     const ttlOpts = {
       volatileMovePctPerMin: Number(env.TTL_VOLATILE_MOVE_PCT_PER_MIN ?? env.TTL_SOL_DROP_PCT_PER_MIN ?? 0.2),
@@ -189,11 +192,24 @@ async function main() {
     ranked = candidates.map((c: any) => {
       const hr = Number(c.healthRatioRaw ?? c.healthRatio ?? 0);
       const hazard = c.hazard ?? scoreHazard(hr, alpha);
-      const borrow = Number(c.borrowValueUsd ?? 0);
-      const ev = c.ev ?? computeEV(borrow, hazard, evParams);
+      const evEstimate = c.ev != null ? undefined : estimatePlanEv(c, hazard, evParams);
+      const ev = c.ev ?? evEstimate?.ev ?? 0;
       const ttlStr = (c.forecast?.timeToLiquidation) ?? estimateTtl(c, ttlOpts).ttlString;
       const ttlMin = parseTtlMinutes(ttlStr);
-      return { ...c, key: c.key ?? c.obligationPubkey ?? 'unknown', hazard, ev, ttlMin, ttlStr };
+      return {
+        ...c,
+        key: c.key ?? c.obligationPubkey ?? 'unknown',
+        hazard,
+        ev,
+        ttlMin,
+        ttlStr,
+        evModel: c.evModel ?? evEstimate?.breakdown.model,
+        evRepayCapUsd: c.evRepayCapUsd ?? evEstimate?.breakdown.repayCapUsd,
+        evGrossBonusPct: c.evGrossBonusPct ?? evEstimate?.breakdown.grossBonusPct,
+        evNetBonusPct: c.evNetBonusPct ?? evEstimate?.breakdown.netBonusPct,
+        evCostUsd: c.evCostUsd ?? evEstimate?.breakdown.costUsd,
+        evSwapRequired: c.evSwapRequired ?? evEstimate?.breakdown.swapRequired,
+      };
     }).sort((a: any, b: any) => {
       if (b.ev !== a.ev) return Number(b.ev) - Number(a.ev);
       if (a.ttlMin !== b.ttlMin) return Number(a.ttlMin) - Number(b.ttlMin);
@@ -210,6 +226,12 @@ async function main() {
       ev: Number(x.ev).toFixed(4),
       ttl: x.ttlStr,
       borrowValueUsd: Number(x.borrowValueUsd ?? 0).toFixed(2),
+      evModel: x.evModel ?? 'n/a',
+      evRepayCapUsd: x.evRepayCapUsd != null ? Number(x.evRepayCapUsd).toFixed(2) : 'n/a',
+      evGrossBonusPct: x.evGrossBonusPct != null ? Number(x.evGrossBonusPct).toFixed(4) : 'n/a',
+      evNetBonusPct: x.evNetBonusPct != null ? Number(x.evNetBonusPct).toFixed(4) : 'n/a',
+      evCostUsd: x.evCostUsd != null ? Number(x.evCostUsd).toFixed(4) : 'n/a',
+      evSwapRequired: x.evSwapRequired != null ? String(x.evSwapRequired) : 'n/a',
     })));
 
     target = ranked[0];

@@ -216,6 +216,21 @@ export function decodeReserve(
     loanToValueRatio: Number(decoded.config.loanToValuePct),
     liquidationThreshold: Number(decoded.config.liquidationThresholdPct),
     liquidationBonus: Number(decoded.config.maxLiquidationBonusBps),
+    minLiquidationBonusBps:
+      decoded.config?.minLiquidationBonusBps !== undefined &&
+      decoded.config?.minLiquidationBonusBps !== null
+        ? Number(decoded.config.minLiquidationBonusBps)
+        : null,
+    maxLiquidationBonusBps:
+      decoded.config?.maxLiquidationBonusBps !== undefined &&
+      decoded.config?.maxLiquidationBonusBps !== null
+        ? Number(decoded.config.maxLiquidationBonusBps)
+        : null,
+    protocolLiquidationFeePct:
+      decoded.config?.protocolLiquidationFeePct !== undefined &&
+      decoded.config?.protocolLiquidationFeePct !== null
+        ? Number(decoded.config.protocolLiquidationFeePct)
+        : null,
     borrowFactor: Number(decoded.config.borrowFactorPct || 100), // Default to 100% if not set
     availableAmountRaw: toBigIntSafe(decoded.liquidity?.availableAmount, 0n).toString(),
     borrowedAmountSfRaw: toBigIntSafe(decoded.liquidity?.borrowedAmountSf, 0n).toString(),

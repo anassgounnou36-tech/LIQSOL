@@ -11,6 +11,7 @@ import { rankCandidatesWithBoundedKlendVerification } from '../strategy/rankCand
 import { SOL_MINT, USDC_MINT } from '../constants/mints.js';
 import { logger } from '../observability/logger.js';
 import { buildPairAwareTtlContext } from '../predict/ttlContext.js';
+import { buildPlanAwareEvContext } from '../predict/evContext.js';
 
 export interface BuildCandidatesOptions {
   marketPubkey: PublicKey;
@@ -216,6 +217,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
   // Only emit candidates with BOTH repay/collateral legs present
   const candidatesWithBothLegs = scoredForSelection.filter(c => c.repayReservePubkey && c.collateralReservePubkey);
   let withPairAwareTtlContext = 0;
+  let withPlanAwareEvContext = 0;
   for (const c of candidatesWithBothLegs) {
     const entry = indexer.getObligationEntry(c.obligationPubkey);
     if (!entry?.decoded) continue;
@@ -228,15 +230,30 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
       c.ttlContext = ttlContext;
       withPairAwareTtlContext++;
     }
+    const evContext = buildPlanAwareEvContext({
+      decoded: entry.decoded,
+      reserveCache,
+      oracleCache,
+      selectedBorrowReservePubkey: c.repayReservePubkey,
+      selectedCollateralReservePubkey: c.collateralReservePubkey,
+      selectedBorrowMint: c.primaryBorrowMint,
+      selectedCollateralMint: c.primaryCollateralMint,
+    });
+    if (evContext) {
+      c.evContext = evContext;
+      withPlanAwareEvContext++;
+    }
   }
 
   logger.info(
     {
-      executableCandidates: candidatesWithBothLegs.length,
-      withPairAwareTtlContext,
-      legacyFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPairAwareTtlContext),
-    },
-    'TTL context enrichment summary for executable candidates'
+        executableCandidates: candidatesWithBothLegs.length,
+        withPairAwareTtlContext,
+        withPlanAwareEvContext,
+        legacyFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPairAwareTtlContext),
+        legacyEvFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPlanAwareEvContext),
+      },
+      'TTL context enrichment summary for executable candidates'
   );
 
   if (scoredForSelection.length !== candidatesWithBothLegs.length) {

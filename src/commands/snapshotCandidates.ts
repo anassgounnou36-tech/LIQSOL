@@ -15,6 +15,7 @@ import { explainHealth } from "../math/healthBreakdown.js";
 import { SF_SCALE } from "../math/fractionScale.js";
 import { divBigintToNumber } from "../utils/bn.js";
 import { buildPairAwareTtlContext } from "../predict/ttlContext.js";
+import { buildPlanAwareEvContext } from "../predict/evContext.js";
 
 const ratio = (a?: number, b?: number) =>
   (a && b && b > 0) ? (a / b).toFixed(4) : 'n/a';
@@ -289,6 +290,7 @@ async function main() {
     // Only emit candidates with BOTH repay/collateral legs present
     const candidatesWithBothLegs = scoredForSelection.filter(c => c.repayReservePubkey && c.collateralReservePubkey);
     let withPairAwareTtlContext = 0;
+    let withPlanAwareEvContext = 0;
     for (const c of candidatesWithBothLegs) {
       const entry = indexer.getObligationEntry(c.obligationPubkey);
       if (!entry?.decoded) continue;
@@ -301,13 +303,28 @@ async function main() {
         c.ttlContext = ttlContext;
         withPairAwareTtlContext++;
       }
+      const evContext = buildPlanAwareEvContext({
+        decoded: entry.decoded,
+        reserveCache,
+        oracleCache,
+        selectedBorrowReservePubkey: c.repayReservePubkey,
+        selectedCollateralReservePubkey: c.collateralReservePubkey,
+        selectedBorrowMint: c.primaryBorrowMint,
+        selectedCollateralMint: c.primaryCollateralMint,
+      });
+      if (evContext) {
+        c.evContext = evContext;
+        withPlanAwareEvContext++;
+      }
     }
 
     logger.info(
       {
         executableCandidates: candidatesWithBothLegs.length,
         withPairAwareTtlContext,
+        withPlanAwareEvContext,
         legacyFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPairAwareTtlContext),
+        legacyEvFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPlanAwareEvContext),
       },
       'TTL context enrichment summary for executable candidates'
     );

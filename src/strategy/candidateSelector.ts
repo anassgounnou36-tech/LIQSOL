@@ -6,8 +6,9 @@
  */
 
 import { scoreHazard } from '../predict/hazardScorer.js';
-import { computeEV, EvParams } from '../predict/evCalculator.js';
+import { estimatePlanEv, type PlanEvParams } from '../predict/evCalculator.js';
 import type { PairAwareTtlContext } from '../predict/ttlContext.js';
+import type { PlanAwareEvContext } from '../predict/evContext.js';
 import { estimateTtl } from '../predict/ttlEstimator.js';
 
 export interface ScoredObligation {
@@ -60,6 +61,7 @@ export interface ScoredObligation {
   hybridDisabledReason?: string;
   assets?: string[];
   ttlContext?: PairAwareTtlContext;
+  evContext?: PlanAwareEvContext;
   // optionally: underlying detail for validation
 }
 
@@ -70,6 +72,13 @@ export interface Candidate extends ScoredObligation {
   priceMoveToLiquidationPct?: number; // heuristic for SOL/USDC pairs (optional for PR8)
   hazard?: number; // PR 8.5: hazard score when using EV ranking
   ev?: number; // PR 8.5: expected value when using EV ranking
+  evModel?: 'selected-leg-dynamic-bonus' | 'legacy-flat';
+  evRepayCapUsd?: number;
+  evGrossBonusPct?: number;
+  evNetBonusPct?: number;
+  evProfitUsd?: number;
+  evCostUsd?: number;
+  evSwapRequired?: boolean;
   forecast?: { // PR 8.6: forecast object with EV, TTL, and rank
     evScore: number;
     timeToLiquidation: string;
@@ -88,7 +97,7 @@ export interface CandidateSelectorConfig {
   useEvRanking?: boolean; // default false
   minBorrowUsd?: number; // default 10
   hazardAlpha?: number; // default 25
-  evParams?: EvParams; // EV calculation parameters
+  evParams?: PlanEvParams; // EV calculation parameters
   // PR 8.6: Forecast caching and TTL parameters
   forecastTtlMs?: number; // default 300000 (5 minutes)
   ttlVolatileMovePctPerMin?: number; // default 0.2
@@ -196,7 +205,8 @@ export function selectCandidates(
         // Use healthRatioRaw if available for more precise calculations
         const hr = c.healthRatioRaw ?? c.healthRatio;
         const hazard = scoreHazard(hr, alpha);
-        const ev = computeEV(c.borrowValueUsd, hazard, evParams);
+        const evEstimate = estimatePlanEv(c, hazard, evParams);
+        const ev = evEstimate.ev;
         
         // PR 8.6: Forecast TTL caching
         const key = c.obligationPubkey;
@@ -235,6 +245,13 @@ export function selectCandidates(
           ...c, 
           hazard, 
           ev, 
+          evModel: evEstimate.breakdown.model,
+          evRepayCapUsd: evEstimate.breakdown.repayCapUsd,
+          evGrossBonusPct: evEstimate.breakdown.grossBonusPct,
+          evNetBonusPct: evEstimate.breakdown.netBonusPct,
+          evProfitUsd: evEstimate.breakdown.profitUsd,
+          evCostUsd: evEstimate.breakdown.costUsd,
+          evSwapRequired: evEstimate.breakdown.swapRequired,
           forecast: {
             evScore: ev,
             timeToLiquidation: ttlString,
