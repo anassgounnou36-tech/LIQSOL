@@ -33,6 +33,14 @@ import {
 type Status = 'PASS' | 'WARN' | 'FAIL';
 const DETERMINISTIC_TEST_TIMESTAMP_MS = 1_000_000;
 const DETERMINISTIC_TEST_HEALTH_RATIO = 1.012345;
+const ORDINARY_FULL_BUILD_FAILURE_SUBSTRINGS = [
+  'derived repay amount is zero',
+  'derived repay-amount is zero',
+  'borrow may be too small to liquidate',
+  'swap required',
+  'swap-required',
+  'tx too large',
+] as const;
 
 export type CliArgs = {
   planKey?: string;
@@ -121,8 +129,12 @@ const defaultDeps: LandingEdgeValidationDeps = {
 };
 
 function parseCliArgs(args: string[]): CliArgs {
+  const rawPlanKey = args.find((a) => a.startsWith('--plan-key='))?.split('=')[1];
+  if (rawPlanKey === '') {
+    throw new Error('--plan-key requires a non-empty value');
+  }
   return {
-    planKey: args.find((a) => a.startsWith('--plan-key='))?.split('=')[1],
+    planKey: rawPlanKey,
     json: args.includes('--json'),
     strictJito: args.includes('--strict-jito'),
     strictRecentFees: args.includes('--strict-recent-fees'),
@@ -152,12 +164,7 @@ function loadSigner(botKeypairPath: string): Keypair {
 
 function isOrdinaryFullBuildFailure(message: string): boolean {
   const lower = message.toLowerCase();
-  return (
-    lower.includes('derived repay amount is zero') ||
-    lower.includes('borrow may be too small to liquidate') ||
-    lower.includes('swap required') ||
-    lower.includes('tx too large')
-  );
+  return ORDINARY_FULL_BUILD_FAILURE_SUBSTRINGS.some((token) => lower.includes(token));
 }
 
 async function quoteFeeForPath(args: {
@@ -167,7 +174,7 @@ async function quoteFeeForPath(args: {
   env: LandingEdgeEnv;
   staticCuPrice: number;
   strictRecentFees: boolean;
-  required: boolean;
+  treatAsRequired: boolean;
   deps: LandingEdgeValidationDeps;
 }): Promise<FeeQuoteSummary> {
   try {
@@ -192,8 +199,12 @@ async function quoteFeeForPath(args: {
       note = 'recent-fees fallback detected';
     }
     if (!Number.isFinite(quote.recommendedMicroLamports) || quote.recommendedMicroLamports < 0) {
-      status = args.required ? 'FAIL' : 'WARN';
-      note = note ?? 'non-finite or negative recommended microLamports';
+      status = args.treatAsRequired ? 'FAIL' : 'WARN';
+      note =
+        note ??
+        (Number.isFinite(quote.recommendedMicroLamports)
+          ? 'recommended microLamports is negative'
+          : 'recommended microLamports is non-finite');
     }
     return {
       pathLabel: args.path.pathLabel,
@@ -213,7 +224,7 @@ async function quoteFeeForPath(args: {
       observedSamples: 0,
       observedNonZeroSamples: 0,
       recommendedMicroLamports: -1,
-      status: args.required ? 'FAIL' : 'WARN',
+      status: args.treatAsRequired ? 'FAIL' : 'WARN',
       note: err instanceof Error ? err.message : String(err),
     };
   }
@@ -403,7 +414,7 @@ export async function runLandingEdgeValidationWithPlan(args: {
       env: args.env,
       staticCuPrice,
       strictRecentFees: args.cli.strictRecentFees,
-      required: true,
+      treatAsRequired: true,
       deps,
     })
   );
@@ -440,7 +451,7 @@ export async function runLandingEdgeValidationWithPlan(args: {
           env: args.env,
           staticCuPrice,
           strictRecentFees: args.cli.strictRecentFees,
-          required: false,
+          treatAsRequired: false,
           deps,
         })
       );
@@ -553,4 +564,3 @@ if (isDirectRun) {
     process.exit(1);
   });
 }
-

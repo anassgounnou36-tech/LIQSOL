@@ -8,6 +8,8 @@ import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { loadEnv } from '../config/env.js';
 import { buildKaminoLiquidationIxs } from '../kamino/liquidationBuilder.js';
 
+const VALIDATION_DUST_AMOUNT_UI = '0.000001';
+
 export interface PreLiquidationValidationBuild {
   instructions: TransactionInstruction[];
   labels: string[];
@@ -33,7 +35,9 @@ export async function buildPreLiquidationValidationPath(args: {
     liquidatorPubkey: args.feePayer,
     expectedRepayReservePubkey: new PublicKey(args.plan.repayReservePubkey),
     expectedCollateralReservePubkey: new PublicKey(args.plan.collateralReservePubkey),
-    repayAmountUi: '0.000001',
+    // This fixed dust value bypasses dynamic repay-amount derivation so validation
+    // can always build pre-liquidation refresh/farms instructions deterministically.
+    repayAmountUi: VALIDATION_DUST_AMOUNT_UI,
   });
 
   const labels: string[] = [];
@@ -48,4 +52,3 @@ export async function buildPreLiquidationValidationPath(args: {
     source: 'pre-liquidation-refresh',
   };
 }
-
