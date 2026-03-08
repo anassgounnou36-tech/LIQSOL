@@ -4,13 +4,20 @@
  * Validates the structure and integrity of data/candidates.json
  * - Checks file exists
  * - Validates candidate structure and numeric fields
- * - Ensures candidates are sorted by EV descending (when available) or priorityScore descending
+ * - Ensures candidates are sorted by EV-bucket policy (when EV fields are available) or priorityScore descending
  * - Verifies no NaN/Infinity values in key fields
  */
 
 import fs from "fs";
 
 const CANDIDATES_FILE = "data/candidates.json";
+const BUCKET_ORDER: Record<string, number> = {
+  "liquidatable": 0,
+  "near-ready": 1,
+  "medium-horizon": 2,
+  "far-horizon": 3,
+  "legacy-or-unknown": 4,
+};
 
 function main() {
   console.log("PR8 Candidate Validator");
@@ -101,16 +108,34 @@ function main() {
 
   const allHaveFiniteEv = candidates.every((c) => typeof c.ev === "number" && Number.isFinite(c.ev));
   if (allHaveFiniteEv) {
+    let sawRankBucket = false;
     for (let i = 1; i < candidates.length; i++) {
-      if (candidates[i].ev > candidates[i - 1].ev) {
+      const prevBucket = BUCKET_ORDER[candidates[i - 1].rankBucket ?? "legacy-or-unknown"] ?? 4;
+      const currBucket = BUCKET_ORDER[candidates[i].rankBucket ?? "legacy-or-unknown"] ?? 4;
+      if (candidates[i - 1].rankBucket || candidates[i].rankBucket) {
+        sawRankBucket = true;
+      }
+      if (currBucket < prevBucket) {
         throw new Error(
-          `ERROR: Candidates not sorted by ev descending at index ${i}:\n` +
+          `ERROR: Candidates not sorted by rank bucket at index ${i}:\n` +
+          `  [${i - 1}] bucket: ${candidates[i - 1].rankBucket ?? "legacy-or-unknown"} (${prevBucket})\n` +
+          `  [${i}] bucket: ${candidates[i].rankBucket ?? "legacy-or-unknown"} (${currBucket})`
+        );
+      }
+      if (currBucket === prevBucket && candidates[i].ev > candidates[i - 1].ev) {
+        throw new Error(
+          `ERROR: Same-bucket candidates not sorted by ev descending at index ${i}:\n` +
+          `  bucket: ${candidates[i].rankBucket ?? "legacy-or-unknown"}\n` +
           `  [${i - 1}] ev: ${candidates[i - 1].ev}\n` +
           `  [${i}] ev: ${candidates[i].ev}`
         );
       }
     }
-    console.log("✓ Candidates sorted by EV descending");
+    if (sawRankBucket) {
+      console.log("✓ Candidates sorted by bucket priority, then EV descending within bucket");
+    } else {
+      console.log("✓ Candidates sorted by EV descending");
+    }
   } else {
     for (let i = 1; i < candidates.length; i++) {
       if (candidates[i].priorityScore > candidates[i - 1].priorityScore) {

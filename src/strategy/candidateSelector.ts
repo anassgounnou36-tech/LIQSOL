@@ -79,9 +79,11 @@ export interface Candidate extends ScoredObligation {
   evProfitUsd?: number;
   evCostUsd?: number;
   evSwapRequired?: boolean;
+  rankBucket?: 'liquidatable' | 'near-ready' | 'medium-horizon' | 'far-horizon' | 'legacy-or-unknown';
   forecast?: { // PR 8.6: forecast object with EV, TTL, and rank
     evScore: number;
     timeToLiquidation: string;
+    ttlMinutes?: number | null;
     rank?: number;
     model?: string;
     confidence?: 'high' | 'medium' | 'low';
@@ -136,6 +138,45 @@ function setCachedForecast(key: string, f: ForecastEntry) {
   forecastCache.set(key, f);
 }
 
+function parseTtlMinutes(ttlStr?: string): number | null {
+  if (!ttlStr || ttlStr === 'unknown') return null;
+  const m = /^(?:(\d+)m)?(?:(\d+)s)?$/.exec(ttlStr);
+  if (!m) return null;
+  const minutes = Number(m[1] || 0);
+  const seconds = Number(m[2] || 0);
+  return minutes + seconds / 60;
+}
+
+const BUCKET_ORDER = {
+  'liquidatable': 0,
+  'near-ready': 1,
+  'medium-horizon': 2,
+  'far-horizon': 3,
+  'legacy-or-unknown': 4,
+} as const;
+
+function classifyRankBucket(
+  candidate: Candidate,
+  nearThreshold: number,
+  ttlMinutes: number | null,
+): Candidate['rankBucket'] {
+  const healthRatio = Number(candidate.healthRatio ?? 0);
+  const liquidatable = candidate.liquidationEligible === true || healthRatio < 1;
+  if (liquidatable) {
+    return 'liquidatable';
+  }
+  if (healthRatio <= nearThreshold || (ttlMinutes !== null && ttlMinutes <= 10)) {
+    return 'near-ready';
+  }
+  if (ttlMinutes !== null && ttlMinutes <= 60) {
+    return 'medium-horizon';
+  }
+  if (candidate.forecast?.model !== 'legacy-global') {
+    return 'far-horizon';
+  }
+  return 'legacy-or-unknown';
+}
+
 /**
  * Select and rank candidates from scored obligations.
  * 
@@ -149,8 +190,9 @@ function setCachedForecast(key: string, f: ForecastEntry) {
  * - EV mode (useEvRanking=true):
  *   - Compute hazard score based on health ratio
  *   - Compute expected value (EV) based on hazard, position size, and liquidation parameters
+ *   - Assign urgency bucket (liquidatable, near-ready, medium-horizon, far-horizon, legacy/unknown)
  *   - Filter by minBorrowUsd (unless liquidatable)
- *   - Sort by EV descending
+ *   - Sort bucket-first, then EV within bucket
  * 
  * @param scored Array of scored obligations
  * @param config Configuration options
@@ -264,7 +306,36 @@ export function selectCandidates(
         };
       })
       .filter((c) => c.liquidationEligible || c.borrowValueUsd >= minBorrow)
-      .sort((a, b) => (b.ev ?? 0) - (a.ev ?? 0));
+      .map((c) => {
+        const ttlMinutes = parseTtlMinutes(c.forecast?.timeToLiquidation);
+        const rankBucket = classifyRankBucket(c, near, ttlMinutes);
+        return {
+          ...c,
+          rankBucket,
+          forecast: {
+            ...(c.forecast ?? { evScore: c.ev ?? 0, timeToLiquidation: 'unknown' }),
+            ttlMinutes,
+          },
+        };
+      })
+      .sort((a, b) => {
+        const aBucket = BUCKET_ORDER[a.rankBucket ?? 'legacy-or-unknown'];
+        const bBucket = BUCKET_ORDER[b.rankBucket ?? 'legacy-or-unknown'];
+        if (aBucket !== bBucket) return aBucket - bBucket;
+
+        const evDiff = (b.ev ?? 0) - (a.ev ?? 0);
+        if (evDiff !== 0) return evDiff;
+
+        const aTtl = a.forecast?.ttlMinutes;
+        const bTtl = b.forecast?.ttlMinutes;
+        if (aTtl !== null && aTtl !== undefined && bTtl !== null && bTtl !== undefined) {
+          if (aTtl !== bTtl) return aTtl - bTtl;
+        }
+
+        if (a.healthRatio !== b.healthRatio) return a.healthRatio - b.healthRatio;
+        if (a.priorityScore !== b.priorityScore) return b.priorityScore - a.priorityScore;
+        return a.obligationPubkey.localeCompare(b.obligationPubkey);
+      });
 
     // PR 8.6: Inject rank after final sort
     return withEvAndForecast.map((c, idx) => ({

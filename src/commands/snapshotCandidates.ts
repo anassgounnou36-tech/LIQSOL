@@ -368,7 +368,7 @@ async function main() {
     console.log(`\nCandidates liquidatable: ${candLiquidatable}`);
     console.log(`Candidates near-threshold (<= ${nearArg}): ${candNear}\n`);
     const header = useEvRanking
-      ? "Rank | Priority     | EV         | Hazard   | Forecast TTL | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(protocol) | HR(recomputed-manual) | HR(klend-sdk-verified) | Gate source | Health source | Obligation"
+      ? "Rank | Priority     | EV         | Hazard   | Forecast TTL | Bucket | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(protocol) | HR(recomputed-manual) | HR(klend-sdk-verified) | Gate source | Health source | Obligation"
       : "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(protocol) | HR(recomputed-manual) | HR(klend-sdk-verified) | Gate source | Obligation";
     console.log(header);
     console.log("Note: Borrow/Collateral values are risk-adjusted (borrowFactor × USD, liquidationThreshold × USD)");
@@ -393,8 +393,18 @@ async function main() {
         const evStr = c.ev !== undefined ? c.ev.toFixed(4).padStart(10) : "n/a".padStart(10);
         const hazardStr = c.hazard !== undefined ? c.hazard.toFixed(4).padStart(8) : "n/a".padStart(8);
         const forecastTtlStr = (c.forecast?.timeToLiquidation ?? "n/a").padEnd(12);
+        const bucketShort = c.rankBucket === 'liquidatable'
+          ? 'liq'
+          : c.rankBucket === 'near-ready'
+            ? 'near'
+            : c.rankBucket === 'medium-horizon'
+              ? 'mid'
+              : c.rankBucket === 'far-horizon'
+                ? 'far'
+                : 'legacy';
+        const bucketStr = bucketShort.padEnd(6);
         console.log(
-          `${rank} | ${priorityStr} | ${evStr} | ${hazardStr} | ${forecastTtlStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrVerified} | ${gateSource} | ${healthSource} | ${obligationStr}`
+          `${rank} | ${priorityStr} | ${evStr} | ${hazardStr} | ${forecastTtlStr} | ${bucketStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrVerified} | ${gateSource} | ${healthSource} | ${obligationStr}`
         );
       } else {
         const distanceStr = c.distanceToLiquidation.toFixed(4).padStart(8);
@@ -405,6 +415,17 @@ async function main() {
     });
 
     console.log("\n");
+    const bucketCounts = topCandidates.reduce<Record<string, number>>((acc, candidate) => {
+      const bucket = candidate.rankBucket ?? 'legacy-or-unknown';
+      acc[bucket] = (acc[bucket] ?? 0) + 1;
+      return acc;
+    }, {});
+    console.log("=== RANK BUCKET SUMMARY (TOP CANDIDATES) ===\n");
+    for (const bucket of ['liquidatable', 'near-ready', 'medium-horizon', 'far-horizon', 'legacy-or-unknown']) {
+      console.log(`  ${bucket}: ${bucketCounts[bucket] ?? 0}`);
+    }
+    console.log("\n");
+
     const modelCounts = topCandidates.reduce<Record<string, number>>((acc, candidate) => {
       const model = candidate.forecast?.model;
       if (!model) return acc;
