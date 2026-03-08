@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
 import type { BuiltPlanTx } from "../execute/planTxBuilder.js";
 import {
-  evaluateJitoTipMutation,
   extractValidationPaths,
   pickPrimaryValidationPath,
+  verifyJitoTipMutation,
 } from "../execute/landingEdgeValidation.js";
 
 function makeIx(): TransactionInstruction {
@@ -69,8 +69,8 @@ describe("landing edge validation helpers", () => {
     ).toBe("atomic");
   });
 
-  it("evaluateJitoTipMutation detects rpc unchanged and jito +1 expectation", () => {
-    const expectedAdd = evaluateJitoTipMutation({
+  it("verifyJitoTipMutation detects rpc unchanged and jito +1 expectation", () => {
+    const expectedAdd = verifyJitoTipMutation({
       baseInstructionCount: 5,
       rpcInstructionCount: 5,
       jitoInstructionCount: 6,
@@ -80,7 +80,7 @@ describe("landing edge validation helpers", () => {
     expect(expectedAdd.rpcUnchanged).toBe(true);
     expect(expectedAdd.jitoExpectedDeltaMatches).toBe(true);
 
-    const expectedNoAdd = evaluateJitoTipMutation({
+    const expectedNoAdd = verifyJitoTipMutation({
       baseInstructionCount: 5,
       rpcInstructionCount: 5,
       jitoInstructionCount: 5,

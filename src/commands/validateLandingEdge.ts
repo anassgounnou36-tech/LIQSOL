@@ -1,13 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { Keypair, PublicKey, SystemProgram, type TransactionInstruction } from '@solana/web3.js';
+import { Keypair, PublicKey, SystemProgram } from '@solana/web3.js';
 import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
 import { getConnection } from '../solana/connection.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { buildPlanTransactions } from '../execute/planTxBuilder.js';
-import { extractValidationPaths, pickPrimaryValidationPath, evaluateJitoTipMutation } from '../execute/landingEdgeValidation.js';
+import { extractValidationPaths, pickPrimaryValidationPath, verifyJitoTipMutation } from '../execute/landingEdgeValidation.js';
 import { getPlanCooldownAnchorMs, setKlendHealthyCooldown, shouldSkipForKlendHealthyCooldown, type KlendHealthyCooldownEntry } from '../execute/klendHealthyCooldown.js';
 import { quotePriorityFeeMicroLamports } from '../execute/priorityFeePolicy.js';
 import { fetchJitoTipAccounts } from '../execute/jitoSender.js';
@@ -15,6 +15,8 @@ import { withOptionalJitoTipInstruction } from '../execute/executor.js';
 import { buildVersionedTx } from '../execute/versionedTx.js';
 
 type Status = 'PASS' | 'WARN' | 'FAIL';
+const DETERMINISTIC_TEST_TIMESTAMP_MS = 1_000_000;
+const DETERMINISTIC_TEST_HEALTH_RATIO = 1.012345;
 
 type FeeQuoteSummary = {
   pathLabel: string;
@@ -60,6 +62,7 @@ function loadSigner(botKeypairPath: string): Keypair {
 async function main() {
   const args = parseCliArgs(process.argv.slice(2));
   const env = loadEnv();
+  const staticCuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
   const connection = getConnection();
   const signer = loadSigner(env.BOT_KEYPAIR_PATH);
   const market = new PublicKey(env.KAMINO_MARKET_PUBKEY);
@@ -98,11 +101,18 @@ async function main() {
   }
 
   const cooldownMap = new Map<string, KlendHealthyCooldownEntry>();
-  const cooldownNowMs = 1_000_000;
+  const cooldownNowMs = DETERMINISTIC_TEST_TIMESTAMP_MS;
   const cooldownMs = Number(env.EXEC_KLEND_HEALTHY_COOLDOWN_MS);
   const planKey = String(selectedPlan.key);
   const anchorMs = getPlanCooldownAnchorMs(selectedPlan);
-  setKlendHealthyCooldown(cooldownMap, planKey, anchorMs, cooldownNowMs, cooldownMs, 1.012345);
+  setKlendHealthyCooldown(
+    cooldownMap,
+    planKey,
+    anchorMs,
+    cooldownNowMs,
+    cooldownMs,
+    DETERMINISTIC_TEST_HEALTH_RATIO
+  );
   const cooldownSameAnchorBeforeExpiry = !!shouldSkipForKlendHealthyCooldown(
     cooldownMap,
     planKey,
@@ -143,7 +153,7 @@ async function main() {
         connection,
         instructions: pathEntry.instructions,
         payer: signer.publicKey,
-        staticMicroLamports: Number(process.env.EXEC_CU_PRICE ?? 0),
+        staticMicroLamports: staticCuPrice,
         mode: env.EXEC_PRIORITY_FEE_MODE,
         percentile: Number(env.EXEC_PRIORITY_FEE_PERCENTILE),
         floorMicroLamports: Number(env.EXEC_PRIORITY_FEE_FLOOR_MICROLAMPORTS),
@@ -206,8 +216,6 @@ async function main() {
   let tipAdded = false;
   let compiled = false;
   let jitoNote: string | undefined;
-  let rpcInstructions: TransactionInstruction[] = primaryPath.instructions;
-  let jitoInstructions: TransactionInstruction[] = primaryPath.instructions;
   try {
     const tipAccounts = await fetchJitoTipAccounts({
       bundlesUrl: env.JITO_BLOCK_ENGINE_BUNDLES_URL,
@@ -223,7 +231,7 @@ async function main() {
 
   if (tipFetchOk) {
     try {
-      rpcInstructions = await withOptionalJitoTipInstruction({
+      const rpcInstructions = await withOptionalJitoTipInstruction({
         instructions: primaryPath.instructions,
         broadcast: true,
         sendMode: 'rpc',
@@ -231,7 +239,7 @@ async function main() {
         tipLamports,
         bundlesUrl: env.JITO_BLOCK_ENGINE_BUNDLES_URL,
       });
-      jitoInstructions = await withOptionalJitoTipInstruction({
+      const jitoInstructions = await withOptionalJitoTipInstruction({
         instructions: primaryPath.instructions,
         broadcast: true,
         sendMode: 'jito',
@@ -239,7 +247,7 @@ async function main() {
         tipLamports,
         bundlesUrl: env.JITO_BLOCK_ENGINE_BUNDLES_URL,
       });
-      const tipEval = evaluateJitoTipMutation({
+      const tipEval = verifyJitoTipMutation({
         baseInstructionCount: primaryPath.instructions.length,
         rpcInstructionCount: rpcInstructions.length,
         jitoInstructionCount: jitoInstructions.length,
@@ -249,7 +257,7 @@ async function main() {
       const transferProgramMatch =
         !tipEval.tipShouldBeAdded ||
         jitoInstructions[jitoInstructions.length - 1]?.programId.equals(SystemProgram.programId) === true;
-      tipAdded = tipEval.tipShouldBeAdded && jitoInstructions.length === primaryPath.instructions.length + 1;
+      tipAdded = tipEval.tipShouldBeAdded && tipEval.jitoExpectedDeltaMatches;
       if (!tipEval.rpcUnchanged || !tipEval.jitoExpectedDeltaMatches || !transferProgramMatch) {
         jitoStatus = 'FAIL';
         jitoNote = 'tip mutation expectation failed';

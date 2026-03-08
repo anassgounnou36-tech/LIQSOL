@@ -43,7 +43,7 @@ export function pickPrimaryValidationPath(paths: ValidationPath[]): ValidationPa
   );
 }
 
-export function evaluateJitoTipMutation(args: {
+export function verifyJitoTipMutation(args: {
   baseInstructionCount: number;
   rpcInstructionCount: number;
   jitoInstructionCount: number;
