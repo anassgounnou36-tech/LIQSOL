@@ -5,6 +5,19 @@
 import { describe, it, expect } from "vitest";
 import { selectCandidates, type ScoredObligation } from "../src/strategy/candidateSelector.js";
 
+function makePairAwareFarTtlContext() {
+  return {
+    deposits: [{ mint: "volatile-a", usdRaw: 800, usdWeighted: 640, shareOfWeightedSide: 1, assetClass: "volatile" as const }],
+    borrows: [{ mint: "volatile-b", usdRaw: 600, usdWeighted: 600, shareOfWeightedSide: 1, assetClass: "volatile" as const }],
+    totalCollateralUsdAdj: 640,
+    totalBorrowUsdAdj: 600,
+    totalCollateralUsdRaw: 800,
+    totalBorrowUsdRaw: 600,
+    activeDepositCount: 1,
+    activeBorrowCount: 1,
+  };
+}
+
 describe("PR8 Candidate Selector", () => {
   it("should prioritize liquidatable accounts highest", () => {
     const scored: ScoredObligation[] = [
@@ -374,16 +387,7 @@ describe("PR8 Candidate Selector", () => {
           liquidationEligible: false,
           borrowValueUsd: 1000,
           collateralValueUsd: 1500,
-          ttlContext: {
-            deposits: [{ mint: "volatile-a", usdRaw: 800, usdWeighted: 640, shareOfWeightedSide: 1, assetClass: "volatile" }],
-            borrows: [{ mint: "volatile-b", usdRaw: 600, usdWeighted: 600, shareOfWeightedSide: 1, assetClass: "volatile" }],
-            totalCollateralUsdAdj: 640,
-            totalBorrowUsdAdj: 600,
-            totalCollateralUsdRaw: 800,
-            totalBorrowUsdRaw: 600,
-            activeDepositCount: 1,
-            activeBorrowCount: 1,
-          },
+          ttlContext: makePairAwareFarTtlContext(),
         },
         {
           obligationPubkey: "legacy_far",

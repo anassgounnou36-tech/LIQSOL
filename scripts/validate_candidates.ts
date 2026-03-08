@@ -18,6 +18,7 @@ const BUCKET_ORDER: Record<string, number> = {
   "far-horizon": 3,
   "legacy-or-unknown": 4,
 };
+const LEGACY_BUCKET_ORDER = BUCKET_ORDER["legacy-or-unknown"];
 
 function main() {
   console.log("PR8 Candidate Validator");
@@ -110,8 +111,8 @@ function main() {
   if (allHaveFiniteEv) {
     let sawRankBucket = false;
     for (let i = 1; i < candidates.length; i++) {
-      const prevBucket = BUCKET_ORDER[candidates[i - 1].rankBucket ?? "legacy-or-unknown"] ?? 4;
-      const currBucket = BUCKET_ORDER[candidates[i].rankBucket ?? "legacy-or-unknown"] ?? 4;
+      const prevBucket = BUCKET_ORDER[candidates[i - 1].rankBucket ?? "legacy-or-unknown"] ?? LEGACY_BUCKET_ORDER;
+      const currBucket = BUCKET_ORDER[candidates[i].rankBucket ?? "legacy-or-unknown"] ?? LEGACY_BUCKET_ORDER;
       if (candidates[i - 1].rankBucket || candidates[i].rankBucket) {
         sawRankBucket = true;
       }

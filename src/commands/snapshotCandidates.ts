@@ -17,6 +17,14 @@ import { divBigintToNumber } from "../utils/bn.js";
 import { buildPairAwareTtlContext } from "../predict/ttlContext.js";
 import { buildPlanAwareEvContext } from "../predict/evContext.js";
 
+const rankBucketLabels: Record<string, string> = {
+  'liquidatable': 'liq',
+  'near-ready': 'near',
+  'medium-horizon': 'mid',
+  'far-horizon': 'far',
+  'legacy-or-unknown': 'legacy',
+};
+
 const ratio = (a?: number, b?: number) =>
   (a && b && b > 0) ? (a / b).toFixed(4) : 'n/a';
 
@@ -393,15 +401,7 @@ async function main() {
         const evStr = c.ev !== undefined ? c.ev.toFixed(4).padStart(10) : "n/a".padStart(10);
         const hazardStr = c.hazard !== undefined ? c.hazard.toFixed(4).padStart(8) : "n/a".padStart(8);
         const forecastTtlStr = (c.forecast?.timeToLiquidation ?? "n/a").padEnd(12);
-        const bucketShort = c.rankBucket === 'liquidatable'
-          ? 'liq'
-          : c.rankBucket === 'near-ready'
-            ? 'near'
-            : c.rankBucket === 'medium-horizon'
-              ? 'mid'
-              : c.rankBucket === 'far-horizon'
-                ? 'far'
-                : 'legacy';
+        const bucketShort = rankBucketLabels[c.rankBucket ?? 'legacy-or-unknown'] ?? 'legacy';
         const bucketStr = bucketShort.padEnd(6);
         console.log(
           `${rank} | ${priorityStr} | ${evStr} | ${hazardStr} | ${forecastTtlStr} | ${bucketStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrVerified} | ${gateSource} | ${healthSource} | ${obligationStr}`

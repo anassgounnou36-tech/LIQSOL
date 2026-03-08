@@ -328,7 +328,7 @@ export function selectCandidates(
 
         const aTtl = a.forecast?.ttlMinutes;
         const bTtl = b.forecast?.ttlMinutes;
-        if (aTtl !== null && aTtl !== undefined && bTtl !== null && bTtl !== undefined) {
+        if (aTtl != null && bTtl != null) {
           if (aTtl !== bTtl) return aTtl - bTtl;
         }
 
