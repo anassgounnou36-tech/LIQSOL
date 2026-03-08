@@ -2,7 +2,7 @@
 import fs from 'fs';
 import path from 'path';
 import { filterCandidatesWithStats, type FilterParams, normalizeCandidates } from '../scheduler/txFilters.js';
-import { type EvParams } from '../predict/evCalculator.js';
+import { type PlanEvParams } from '../predict/evCalculator.js';
 
 /**
  * Audit Pipeline Command
@@ -98,12 +98,15 @@ function main() {
   }
 
   // Build filter params from env
-  const evParams: EvParams = {
+  const evParams: PlanEvParams = {
     closeFactor: getEnvNum('EV_CLOSE_FACTOR', 0.5),
     liquidationBonusPct: getEnvNum('EV_LIQUIDATION_BONUS_PCT', 0.05),
     flashloanFeePct: getEnvNum('EV_FLASHLOAN_FEE_PCT', 0.002),
     fixedGasUsd: getEnvNum('EV_FIXED_GAS_USD', 0.5),
     slippageBufferPct: process.env.EV_SLIPPAGE_BUFFER_PCT !== undefined ? getEnvNum('EV_SLIPPAGE_BUFFER_PCT', 0) : undefined,
+    minLiquidationBonusPctFallback: getEnvNum('EV_MIN_LIQUIDATION_BONUS_PCT', 0.02),
+    bonusFullSeverityHrGap: getEnvNum('EV_BONUS_FULLY_SEVERE_HR_GAP', 0.10),
+    sameMintSlippageBufferPct: getEnvNum('EV_SAME_MINT_SLIPPAGE_BUFFER_PCT', 0),
   };
 
   const filterParams: FilterParams = {
@@ -138,6 +141,30 @@ function main() {
   console.log('  Force-Included:');
   console.log(`    Liquidatable now:           ${stats.forcedIn.liquidatable}`);
   console.log('');
+
+  const evDiagnostics = candidates
+    .filter((c) =>
+      c.evModel !== undefined ||
+      c.evRepayCapUsd !== undefined ||
+      c.evGrossBonusPct !== undefined ||
+      c.evNetBonusPct !== undefined ||
+      c.evCostUsd !== undefined ||
+      c.evSwapRequired !== undefined
+    )
+    .slice(0, 10)
+    .map((c) => ({
+      key: c.key ?? c.obligationPubkey ?? 'unknown',
+      evModel: c.evModel ?? 'n/a',
+      evRepayCapUsd: c.evRepayCapUsd ?? 'n/a',
+      evGrossBonusPct: c.evGrossBonusPct ?? 'n/a',
+      evNetBonusPct: c.evNetBonusPct ?? 'n/a',
+      evCostUsd: c.evCostUsd ?? 'n/a',
+      evSwapRequired: c.evSwapRequired ?? 'n/a',
+    }));
+  if (evDiagnostics.length > 0) {
+    console.log('  EV Diagnostics (candidate metadata):');
+    console.table(evDiagnostics);
+  }
 }
 
 main();

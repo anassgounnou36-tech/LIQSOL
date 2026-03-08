@@ -5,6 +5,19 @@
 import { describe, it, expect } from "vitest";
 import { selectCandidates, type ScoredObligation } from "../src/strategy/candidateSelector.js";
 
+function makePairAwareFarTtlContext() {
+  return {
+    deposits: [{ mint: "volatile-a", usdRaw: 800, usdWeighted: 640, shareOfWeightedSide: 1, assetClass: "volatile" as const }],
+    borrows: [{ mint: "volatile-b", usdRaw: 600, usdWeighted: 600, shareOfWeightedSide: 1, assetClass: "volatile" as const }],
+    totalCollateralUsdAdj: 640,
+    totalBorrowUsdAdj: 600,
+    totalCollateralUsdRaw: 800,
+    totalBorrowUsdRaw: 600,
+    activeDepositCount: 1,
+    activeBorrowCount: 1,
+  };
+}
+
 describe("PR8 Candidate Selector", () => {
   it("should prioritize liquidatable accounts highest", () => {
     const scored: ScoredObligation[] = [
@@ -251,23 +264,23 @@ describe("PR8 Candidate Selector", () => {
       expect(candidates[1].ev).toBeDefined();
     });
 
-    it("should sort by EV descending when useEvRanking is enabled", () => {
+    it("should sort by EV descending inside the same bucket when useEvRanking is enabled", () => {
       const scored: ScoredObligation[] = [
         {
-          obligationPubkey: "low_ev",
+          obligationPubkey: "near_low_ev",
           ownerPubkey: "owner1",
-          healthRatio: 1.15,
+          healthRatio: 1.01,
           liquidationEligible: false,
-          borrowValueUsd: 5000,
-          collateralValueUsd: 5750,
+          borrowValueUsd: 100,
+          collateralValueUsd: 101,
         },
         {
-          obligationPubkey: "high_ev",
+          obligationPubkey: "near_high_ev",
           ownerPubkey: "owner2",
-          healthRatio: 0.95,
-          liquidationEligible: true,
-          borrowValueUsd: 10000,
-          collateralValueUsd: 9500,
+          healthRatio: 1.015,
+          liquidationEligible: false,
+          borrowValueUsd: 5000,
+          collateralValueUsd: 5075,
         },
       ];
 
@@ -283,9 +296,126 @@ describe("PR8 Candidate Selector", () => {
         },
       });
 
-      // High EV should be first
-      expect(candidates[0].obligationPubkey).toBe("high_ev");
+      // Same-bucket EV ordering should be descending
+      expect(candidates[0].rankBucket).toBe("near-ready");
+      expect(candidates[1].rankBucket).toBe("near-ready");
+      expect(candidates[0].obligationPubkey).toBe("near_high_ev");
       expect(candidates[0].ev).toBeGreaterThan(candidates[1].ev || 0);
+    });
+
+    it("near-ready candidate can rank above far-horizon candidate even with lower EV", () => {
+      const scored: ScoredObligation[] = [
+        {
+          obligationPubkey: "near_lower_ev",
+          ownerPubkey: "owner1",
+          healthRatio: 1.0083,
+          liquidationEligible: false,
+          borrowValueUsd: 100,
+          collateralValueUsd: 100.83,
+        },
+        {
+          obligationPubkey: "far_higher_ev",
+          ownerPubkey: "owner2",
+          healthRatio: 1.1186,
+          liquidationEligible: false,
+          borrowValueUsd: 1_000_000,
+          collateralValueUsd: 1_118_600,
+        },
+      ];
+
+      const candidates = selectCandidates(scored, {
+        useEvRanking: true,
+        nearThreshold: 1.02,
+        minBorrowUsd: 10,
+        hazardAlpha: 25,
+        evParams: {
+          closeFactor: 0.5,
+          liquidationBonusPct: 0.05,
+          flashloanFeePct: 0.002,
+          fixedGasUsd: 0.5,
+        },
+      });
+
+      expect(candidates[0].obligationPubkey).toBe("near_lower_ev");
+      expect(candidates[0].rankBucket).toBe("near-ready");
+      expect(candidates[1].ev).toBeGreaterThan(candidates[0].ev || 0);
+    });
+
+    it("liquidatable candidates always rank above non-liquidatable candidates", () => {
+      const scored: ScoredObligation[] = [
+        {
+          obligationPubkey: "non_liq_big_ev",
+          ownerPubkey: "owner1",
+          healthRatio: 1.2,
+          liquidationEligible: false,
+          borrowValueUsd: 500_000,
+          collateralValueUsd: 600_000,
+        },
+        {
+          obligationPubkey: "liq_small_ev",
+          ownerPubkey: "owner2",
+          healthRatio: 0.99,
+          liquidationEligible: true,
+          borrowValueUsd: 100,
+          collateralValueUsd: 99,
+        },
+      ];
+
+      const candidates = selectCandidates(scored, {
+        useEvRanking: true,
+        minBorrowUsd: 10,
+        hazardAlpha: 25,
+        evParams: {
+          closeFactor: 0.5,
+          liquidationBonusPct: 0.05,
+          flashloanFeePct: 0.002,
+          fixedGasUsd: 0.5,
+        },
+      });
+
+      expect(candidates[0].obligationPubkey).toBe("liq_small_ev");
+      expect(candidates[0].rankBucket).toBe("liquidatable");
+      expect(candidates[1].rankBucket).not.toBe("liquidatable");
+    });
+
+    it("legacy-global TTL candidates rank behind pair-aware candidates in EV mode", () => {
+      const scored: ScoredObligation[] = [
+        {
+          obligationPubkey: "pair_aware_far",
+          ownerPubkey: "owner1",
+          healthRatio: 1.5,
+          liquidationEligible: false,
+          borrowValueUsd: 1000,
+          collateralValueUsd: 1500,
+          ttlContext: makePairAwareFarTtlContext(),
+        },
+        {
+          obligationPubkey: "legacy_far",
+          ownerPubkey: "owner2",
+          healthRatio: 1.5,
+          liquidationEligible: false,
+          borrowValueUsd: 5000,
+          collateralValueUsd: 7500,
+        },
+      ];
+
+      const candidates = selectCandidates(scored, {
+        useEvRanking: true,
+        minBorrowUsd: 10,
+        hazardAlpha: 25,
+        evParams: {
+          closeFactor: 0.5,
+          liquidationBonusPct: 0.05,
+          flashloanFeePct: 0.002,
+          fixedGasUsd: 0.5,
+        },
+      });
+
+      const pairAwareIdx = candidates.findIndex((c) => c.obligationPubkey === "pair_aware_far");
+      const legacyIdx = candidates.findIndex((c) => c.obligationPubkey === "legacy_far");
+      expect(pairAwareIdx).toBeGreaterThanOrEqual(0);
+      expect(legacyIdx).toBeGreaterThanOrEqual(0);
+      expect(pairAwareIdx).toBeLessThan(legacyIdx);
     });
 
     it("should filter by minBorrowUsd unless liquidatable in EV mode", () => {

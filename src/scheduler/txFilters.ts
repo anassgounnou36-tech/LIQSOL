@@ -1,5 +1,5 @@
 import { scoreHazard } from '../predict/hazardScorer.js';
-import { computeEV, type EvParams } from '../predict/evCalculator.js';
+import { estimatePlanEv, type PlanEvParams } from '../predict/evCalculator.js';
 import { estimateTtl } from '../predict/ttlEstimator.js';
 
 export interface FilterParams {
@@ -7,7 +7,7 @@ export interface FilterParams {
   maxTtlMin: number;
   minHazard: number;
   hazardAlpha: number;
-  evParams: EvParams;
+  evParams: PlanEvParams;
   ttlDropPerMinPct: number;
   ttlVolatileMovePctPerMin?: number;
   ttlStableMovePctPerMin?: number;
@@ -53,7 +53,7 @@ export function filterCandidates(raw: any[], p: FilterParams): any[] {
       const hr = Number(c.healthRatioRaw ?? c.healthRatio ?? 0);
       const hazard = c.hazard ?? scoreHazard(hr, p.hazardAlpha);
       const borrowUsd = Number(c.borrowValueUsd ?? 0);
-      const ev = c.ev ?? computeEV(borrowUsd, hazard, p.evParams);
+      const ev = c.ev ?? estimatePlanEv(c, hazard, p.evParams).ev;
       const volatileMovePctPerMin = p.ttlVolatileMovePctPerMin ?? p.ttlDropPerMinPct;
       const ttlStr = c.forecast?.timeToLiquidation ??
         estimateTtl(c, {
@@ -95,7 +95,7 @@ export function filterCandidatesWithStats(raw: any[], p: FilterParams): { filter
     const hr = Number(c.healthRatioRaw ?? c.healthRatio ?? 0);
     const hazard = c.hazard ?? scoreHazard(hr, p.hazardAlpha);
     const borrowUsd = Number(c.borrowValueUsd ?? 0);
-    const ev = c.ev ?? computeEV(borrowUsd, hazard, p.evParams);
+    const ev = c.ev ?? estimatePlanEv(c, hazard, p.evParams).ev;
     const volatileMovePctPerMin = p.ttlVolatileMovePctPerMin ?? p.ttlDropPerMinPct;
     const ttlStr = c.forecast?.timeToLiquidation ??
       estimateTtl(c, {

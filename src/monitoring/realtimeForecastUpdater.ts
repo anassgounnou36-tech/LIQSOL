@@ -10,6 +10,7 @@ import { refreshSubset } from '../forecast/forecastManager.js';
 import { EventRefreshOrchestrator } from './eventRefreshOrchestrator.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { logger } from '../observability/logger.js';
+import { buildPlanAwareEvContext, type PlanAwareEvContext } from '../predict/evContext.js';
 
 type CandidateLike = {
   key?: string;
@@ -25,6 +26,7 @@ type CandidateLike = {
   collateralReservePubkey?: string;
   primaryBorrowMint?: string;
   primaryCollateralMint?: string;
+  evContext?: PlanAwareEvContext;
 };
 
 export class RealtimeForecastUpdater {
@@ -95,7 +97,7 @@ export class RealtimeForecastUpdater {
       borrows: decoded.borrows,
       reserves: this.reserveCache.byMint,
       prices: this.oracleCache,
-      options: { exposeRawHr: true },
+      options: { includeBreakdown: true, exposeRawHr: true },
     });
 
     if (!health.scored) {
@@ -109,6 +111,24 @@ export class RealtimeForecastUpdater {
       return;
     }
 
+    let evContext: PlanAwareEvContext | undefined = existing.evContext;
+    if (
+      existing.repayReservePubkey &&
+      existing.collateralReservePubkey &&
+      existing.primaryBorrowMint &&
+      existing.primaryCollateralMint
+    ) {
+      evContext = buildPlanAwareEvContext({
+        decoded,
+        reserveCache: this.reserveCache,
+        oracleCache: this.oracleCache,
+        selectedBorrowReservePubkey: existing.repayReservePubkey,
+        selectedCollateralReservePubkey: existing.collateralReservePubkey,
+        selectedBorrowMint: existing.primaryBorrowMint,
+        selectedCollateralMint: existing.primaryCollateralMint,
+      });
+    }
+
     this.candidatesByKey.set(key, {
       ...existing,
       key,
@@ -120,6 +140,7 @@ export class RealtimeForecastUpdater {
       collateralValueUsd: health.collateralValue,
       liquidationEligible: isLiquidatable(health.healthRatio),
       assets: this.deriveAssets(decoded) ?? existing.assets,
+      evContext,
     });
   }
 

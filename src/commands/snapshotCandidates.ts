@@ -15,6 +15,15 @@ import { explainHealth } from "../math/healthBreakdown.js";
 import { SF_SCALE } from "../math/fractionScale.js";
 import { divBigintToNumber } from "../utils/bn.js";
 import { buildPairAwareTtlContext } from "../predict/ttlContext.js";
+import { buildPlanAwareEvContext } from "../predict/evContext.js";
+
+const rankBucketLabels: Record<string, string> = {
+  'liquidatable': 'liq',
+  'near-ready': 'near',
+  'medium-horizon': 'mid',
+  'far-horizon': 'far',
+  'legacy-or-unknown': 'legacy',
+};
 
 const ratio = (a?: number, b?: number) =>
   (a && b && b > 0) ? (a / b).toFixed(4) : 'n/a';
@@ -289,6 +298,7 @@ async function main() {
     // Only emit candidates with BOTH repay/collateral legs present
     const candidatesWithBothLegs = scoredForSelection.filter(c => c.repayReservePubkey && c.collateralReservePubkey);
     let withPairAwareTtlContext = 0;
+    let withPlanAwareEvContext = 0;
     for (const c of candidatesWithBothLegs) {
       const entry = indexer.getObligationEntry(c.obligationPubkey);
       if (!entry?.decoded) continue;
@@ -301,13 +311,28 @@ async function main() {
         c.ttlContext = ttlContext;
         withPairAwareTtlContext++;
       }
+      const evContext = buildPlanAwareEvContext({
+        decoded: entry.decoded,
+        reserveCache,
+        oracleCache,
+        selectedBorrowReservePubkey: c.repayReservePubkey,
+        selectedCollateralReservePubkey: c.collateralReservePubkey,
+        selectedBorrowMint: c.primaryBorrowMint,
+        selectedCollateralMint: c.primaryCollateralMint,
+      });
+      if (evContext) {
+        c.evContext = evContext;
+        withPlanAwareEvContext++;
+      }
     }
 
     logger.info(
       {
         executableCandidates: candidatesWithBothLegs.length,
         withPairAwareTtlContext,
+        withPlanAwareEvContext,
         legacyFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPairAwareTtlContext),
+        legacyEvFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPlanAwareEvContext),
       },
       'TTL context enrichment summary for executable candidates'
     );
@@ -351,7 +376,7 @@ async function main() {
     console.log(`\nCandidates liquidatable: ${candLiquidatable}`);
     console.log(`Candidates near-threshold (<= ${nearArg}): ${candNear}\n`);
     const header = useEvRanking
-      ? "Rank | Priority     | EV         | Hazard   | Forecast TTL | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(protocol) | HR(recomputed-manual) | HR(klend-sdk-verified) | Gate source | Health source | Obligation"
+      ? "Rank | Priority     | EV         | Hazard   | Forecast TTL | Bucket | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(protocol) | HR(recomputed-manual) | HR(klend-sdk-verified) | Gate source | Health source | Obligation"
       : "Rank | Priority     | Distance | Liquidatable | Near Threshold | Borrow (adj) | Collateral (adj) | HR(chosen) | HR(protocol) | HR(recomputed-manual) | HR(klend-sdk-verified) | Gate source | Obligation";
     console.log(header);
     console.log("Note: Borrow/Collateral values are risk-adjusted (borrowFactor × USD, liquidationThreshold × USD)");
@@ -376,8 +401,10 @@ async function main() {
         const evStr = c.ev !== undefined ? c.ev.toFixed(4).padStart(10) : "n/a".padStart(10);
         const hazardStr = c.hazard !== undefined ? c.hazard.toFixed(4).padStart(8) : "n/a".padStart(8);
         const forecastTtlStr = (c.forecast?.timeToLiquidation ?? "n/a").padEnd(12);
+        const bucketShort = rankBucketLabels[c.rankBucket ?? 'legacy-or-unknown'] ?? 'legacy';
+        const bucketStr = bucketShort.padEnd(6);
         console.log(
-          `${rank} | ${priorityStr} | ${evStr} | ${hazardStr} | ${forecastTtlStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrVerified} | ${gateSource} | ${healthSource} | ${obligationStr}`
+          `${rank} | ${priorityStr} | ${evStr} | ${hazardStr} | ${forecastTtlStr} | ${bucketStr} | ${liquidatableStr} | ${nearThresholdStr} | ${borrowValueStr} | ${collateralValueStr} | ${hrChosen} | ${hrProto} | ${hrRecomp} | ${hrVerified} | ${gateSource} | ${healthSource} | ${obligationStr}`
         );
       } else {
         const distanceStr = c.distanceToLiquidation.toFixed(4).padStart(8);
@@ -388,6 +415,17 @@ async function main() {
     });
 
     console.log("\n");
+    const bucketCounts = topCandidates.reduce<Record<string, number>>((acc, candidate) => {
+      const bucket = candidate.rankBucket ?? 'legacy-or-unknown';
+      acc[bucket] = (acc[bucket] ?? 0) + 1;
+      return acc;
+    }, {});
+    console.log("=== RANK BUCKET SUMMARY (TOP CANDIDATES) ===\n");
+    for (const bucket of ['liquidatable', 'near-ready', 'medium-horizon', 'far-horizon', 'legacy-or-unknown']) {
+      console.log(`  ${bucket}: ${bucketCounts[bucket] ?? 0}`);
+    }
+    console.log("\n");
+
     const modelCounts = topCandidates.reduce<Record<string, number>>((acc, candidate) => {
       const model = candidate.forecast?.model;
       if (!model) return acc;

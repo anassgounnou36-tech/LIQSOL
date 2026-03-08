@@ -20,9 +20,12 @@ type RankingEnv = Pick<
   | 'TTL_MAX_DROP_PCT'
   | 'EV_CLOSE_FACTOR'
   | 'EV_LIQUIDATION_BONUS_PCT'
+  | 'EV_MIN_LIQUIDATION_BONUS_PCT'
+  | 'EV_BONUS_FULLY_SEVERE_HR_GAP'
   | 'EV_FLASHLOAN_FEE_PCT'
   | 'EV_FIXED_GAS_USD'
   | 'EV_SLIPPAGE_BUFFER_PCT'
+  | 'EV_SAME_MINT_SLIPPAGE_BUFFER_PCT'
 >;
 
 type VerificationEnv = Pick<
@@ -39,6 +42,7 @@ export function buildCandidateSelectorConfigFromEnv(
   nearThreshold: number
 ): CandidateSelectorConfig {
   const slippageBuffer = Number(env.EV_SLIPPAGE_BUFFER_PCT);
+  const sameMintSlippageBuffer = Number(env.EV_SAME_MINT_SLIPPAGE_BUFFER_PCT);
   return {
     nearThreshold,
     useEvRanking: env.USE_EV_RANKING === 'true',
@@ -57,6 +61,11 @@ export function buildCandidateSelectorConfigFromEnv(
       flashloanFeePct: Number(env.EV_FLASHLOAN_FEE_PCT),
       fixedGasUsd: Number(env.EV_FIXED_GAS_USD),
       slippageBufferPct: Number.isFinite(slippageBuffer) ? slippageBuffer : undefined,
+      minLiquidationBonusPctFallback: Number(env.EV_MIN_LIQUIDATION_BONUS_PCT),
+      bonusFullSeverityHrGap: Number(env.EV_BONUS_FULLY_SEVERE_HR_GAP),
+      sameMintSlippageBufferPct: Number.isFinite(sameMintSlippageBuffer)
+        ? sameMintSlippageBuffer
+        : undefined,
     },
   };
 }

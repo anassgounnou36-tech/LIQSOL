@@ -23,6 +23,12 @@ export interface DecodedReserve {
   liquidationThreshold: number;
   /** Liquidation bonus in basis points */
   liquidationBonus: number;
+  /** Minimum liquidation bonus in basis points (reserve config) */
+  minLiquidationBonusBps: number | null;
+  /** Maximum liquidation bonus in basis points (reserve config) */
+  maxLiquidationBonusBps: number | null;
+  /** Protocol liquidation fee cut in percent points (reserve config) */
+  protocolLiquidationFeePct: number | null;
   /** Borrow factor as a percentage (0-100+) for risk-adjusted debt valuation */
   borrowFactor: number;
   /** Available liquidity amount (raw, not adjusted for decimals) */

@@ -46,9 +46,12 @@ export const EnvSchema = z.object({
   HAZARD_ALPHA: z.string().optional().default('25'),
   EV_CLOSE_FACTOR: z.string().optional().default('0.5'),
   EV_LIQUIDATION_BONUS_PCT: z.string().optional().default('0.05'),
+  EV_MIN_LIQUIDATION_BONUS_PCT: z.string().optional().default('0.02'),
+  EV_BONUS_FULLY_SEVERE_HR_GAP: z.string().optional().default('0.10'),
   EV_FLASHLOAN_FEE_PCT: z.string().optional().default('0.002'),
   EV_FIXED_GAS_USD: z.string().optional().default('0.5'),
   EV_SLIPPAGE_BUFFER_PCT: z.string().optional(), // optional, no default
+  EV_SAME_MINT_SLIPPAGE_BUFFER_PCT: z.string().optional().default('0'),
 
   // PR 8.6: Forecast caching and TTL parameters
   FORECAST_TTL_MS: z.string().optional().default('300000'),
