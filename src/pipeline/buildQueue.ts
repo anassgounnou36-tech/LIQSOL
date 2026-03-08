@@ -3,7 +3,7 @@ import path from 'path';
 import { filterCandidatesWithStats, normalizeCandidates } from '../scheduler/txFilters.js';
 import { buildPlanFromCandidate, type FlashloanPlan } from '../scheduler/txBuilder.js';
 import { enqueuePlans, replaceQueue } from '../scheduler/txScheduler.js';
-import { type EvParams } from '../predict/evCalculator.js';
+import { type PlanEvParams } from '../predict/evCalculator.js';
 import { logger } from '../observability/logger.js';
 
 export interface BuildQueueOptions {
@@ -18,7 +18,7 @@ export interface BuildQueueOptions {
   ttlMaxMovePct?: number;
   ttlDropPerMinPct?: number;
   ttlMaxDropPct?: number;
-  evParams?: EvParams;
+  evParams?: PlanEvParams;
   flashloanMint?: string;
   mode?: 'replace' | 'merge'; // New: support replace mode for production
 }
@@ -62,6 +62,9 @@ export async function buildQueue(options: BuildQueueOptions = {}): Promise<void>
       flashloanFeePct: getEnvNum('EV_FLASHLOAN_FEE_PCT', 0.002),
       fixedGasUsd: getEnvNum('EV_FIXED_GAS_USD', 0.5),
       slippageBufferPct: getOptionalEnvNum('EV_SLIPPAGE_BUFFER_PCT'),
+      minLiquidationBonusPctFallback: getEnvNum('EV_MIN_LIQUIDATION_BONUS_PCT', 0.02),
+      bonusFullSeverityHrGap: getEnvNum('EV_BONUS_FULLY_SEVERE_HR_GAP', 0.10),
+      sameMintSlippageBufferPct: getOptionalEnvNum('EV_SAME_MINT_SLIPPAGE_BUFFER_PCT') ?? 0,
     },
     flashloanMint = 'USDC',
     mode = (process.env.QUEUE_BUILD_MODE as 'replace' | 'merge') || 'replace', // Default to replace for production

@@ -44,9 +44,12 @@ function makeEnv(overrides: Record<string, string | number | undefined> = {}) {
     TTL_MAX_DROP_PCT: "20",
     EV_CLOSE_FACTOR: "0.5",
     EV_LIQUIDATION_BONUS_PCT: "0.05",
+    EV_MIN_LIQUIDATION_BONUS_PCT: "0.02",
+    EV_BONUS_FULLY_SEVERE_HR_GAP: "0.10",
     EV_FLASHLOAN_FEE_PCT: "0.002",
     EV_FIXED_GAS_USD: "0.5",
     EV_SLIPPAGE_BUFFER_PCT: undefined,
+    EV_SAME_MINT_SLIPPAGE_BUFFER_PCT: "0",
     LIQSOL_RECOMPUTED_VERIFY_BACKEND: "klend-sdk",
     LIQSOL_RECOMPUTED_VERIFY_TOP_K: 10,
     LIQSOL_RECOMPUTED_VERIFY_CONCURRENCY: 1,
@@ -89,9 +92,12 @@ describe("candidate ranking flow alignment", () => {
         TTL_MAX_DROP_PCT: "11",
         EV_CLOSE_FACTOR: "0.33",
         EV_LIQUIDATION_BONUS_PCT: "0.06",
+        EV_MIN_LIQUIDATION_BONUS_PCT: "0.03",
+        EV_BONUS_FULLY_SEVERE_HR_GAP: "0.12",
         EV_FLASHLOAN_FEE_PCT: "0.004",
         EV_FIXED_GAS_USD: "0.75",
         EV_SLIPPAGE_BUFFER_PCT: "0.08",
+        EV_SAME_MINT_SLIPPAGE_BUFFER_PCT: "0.01",
       }),
       1.015
     );
@@ -112,6 +118,9 @@ describe("candidate ranking flow alignment", () => {
         flashloanFeePct: 0.004,
         fixedGasUsd: 0.75,
         slippageBufferPct: 0.08,
+        minLiquidationBonusPctFallback: 0.03,
+        bonusFullSeverityHrGap: 0.12,
+        sameMintSlippageBufferPct: 0.01,
       },
     });
 
@@ -202,6 +211,24 @@ describe("candidate ranking flow alignment", () => {
 
     expect(filesUsingHelper.some((p) => p.endsWith(path.join("pipeline", "buildCandidates.ts")))).toBe(true);
     expect(filesUsingHelper.some((p) => p.endsWith(path.join("commands", "snapshotCandidates.ts")))).toBe(true);
+  });
+
+  it("buildCandidates.ts and snapshotCandidates.ts both enrich executable candidates with evContext", () => {
+    const buildCandidatesSource = fs.readFileSync(
+      path.join(srcRoot, "pipeline", "buildCandidates.ts"),
+      "utf8"
+    );
+    const snapshotCandidatesSource = fs.readFileSync(
+      path.join(srcRoot, "commands", "snapshotCandidates.ts"),
+      "utf8"
+    );
+
+    for (const source of [buildCandidatesSource, snapshotCandidatesSource]) {
+      expect(source).toContain("buildPlanAwareEvContext");
+      expect(source).toContain("c.evContext = evContext");
+      expect(source).toContain("withPlanAwareEvContext");
+      expect(source).toContain("legacyEvFallbackCandidates");
+    }
   });
 
   it("EV ranking adds TTL forecast model metadata when ttlContext is present", async () => {

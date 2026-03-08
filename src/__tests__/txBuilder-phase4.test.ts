@@ -43,4 +43,51 @@ describe('txBuilder Phase 4 guards', () => {
 
     expect(plan.assets).toEqual(['mint-x', 'mint-y']);
   });
+
+  it('recomputePlanFields preserves candidate EV metadata when present', () => {
+    const before: FlashloanPlan = {
+      planVersion: 2,
+      key: 'obligation-3',
+      obligationPubkey: 'obligation-3',
+      mint: 'USDC',
+      amountUsd: 100,
+      repayMint: 'borrow-mint',
+      collateralMint: 'collateral-mint',
+      ev: 1,
+      hazard: 0.2,
+      ttlMin: 2,
+      createdAtMs: 1,
+      ttlComputedAtMs: 1,
+      ttlComputedMin: 2,
+      evModel: 'legacy-flat',
+      evRepayCapUsd: 50,
+      evGrossBonusPct: 0.05,
+      evNetBonusPct: 0.05,
+      evProfitUsd: 2.5,
+      evCostUsd: 1.0,
+      evSwapRequired: false,
+    };
+
+    const after = recomputePlanFields(before, {
+      borrowValueUsd: 90,
+      healthRatioRaw: 0.95,
+      primaryBorrowMint: 'borrow-mint',
+      primaryCollateralMint: 'collateral-mint',
+      evModel: 'selected-leg-dynamic-bonus',
+      evRepayCapUsd: 45,
+      evGrossBonusPct: 0.03,
+      evNetBonusPct: 0.027,
+      evProfitUsd: 1.2,
+      evCostUsd: 0.8,
+      evSwapRequired: true,
+    });
+
+    expect(after.evModel).toBe('selected-leg-dynamic-bonus');
+    expect(after.evRepayCapUsd).toBe(45);
+    expect(after.evGrossBonusPct).toBe(0.03);
+    expect(after.evNetBonusPct).toBe(0.027);
+    expect(after.evProfitUsd).toBe(1.2);
+    expect(after.evCostUsd).toBe(0.8);
+    expect(after.evSwapRequired).toBe(true);
+  });
 });

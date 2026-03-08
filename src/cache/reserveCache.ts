@@ -44,6 +44,12 @@ export interface ReserveCacheEntry {
   liquidationThreshold: number;
   /** Liquidation bonus (basis points) */
   liquidationBonus: number;
+  /** Minimum liquidation bonus in basis points (reserve config) */
+  minLiquidationBonusBps: number | null;
+  /** Maximum liquidation bonus in basis points (reserve config) */
+  maxLiquidationBonusBps: number | null;
+  /** Protocol liquidation fee cut in percent points (reserve config) */
+  protocolLiquidationFeePct: number | null;
   /** Borrow factor (percentage 0-100) for risk-adjusted debt valuation */
   borrowFactor: number;
   /** Array of oracle public keys for price feeds */
@@ -571,6 +577,9 @@ export async function loadReserves(
       loanToValue: decoded.loanToValueRatio,
       liquidationThreshold: decoded.liquidationThreshold,
       liquidationBonus: decoded.liquidationBonus,
+      minLiquidationBonusBps: decoded.minLiquidationBonusBps,
+      maxLiquidationBonusBps: decoded.maxLiquidationBonusBps,
+      protocolLiquidationFeePct: decoded.protocolLiquidationFeePct,
       borrowFactor: decoded.borrowFactor,
       oraclePubkeys,
       liquidityDecimals: decoded.liquidityDecimals,

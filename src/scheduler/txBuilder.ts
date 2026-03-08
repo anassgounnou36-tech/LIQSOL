@@ -1,7 +1,8 @@
 import { scoreHazard } from '../predict/hazardScorer.js';
-import { computeEV, type EvParams } from '../predict/evCalculator.js';
+import { estimatePlanEv, type PlanEvParams } from '../predict/evCalculator.js';
 import { estimateTtl } from '../predict/ttlEstimator.js';
 import { parseTtlMinutes } from '../predict/forecastTTLManager.js';
+import type { PlanAwareEvContext } from '../predict/evContext.js';
 
 /**
  * Compute absolute predicted liquidation timestamp from TTL minutes
@@ -53,6 +54,13 @@ export interface FlashloanPlan {
   prevEv?: number; // optional: previous EV for audit
   liquidationEligible?: boolean; // PR10+: whether obligation is currently liquidatable
   assets?: string[];
+  evModel?: 'selected-leg-dynamic-bonus' | 'legacy-flat';
+  evRepayCapUsd?: number;
+  evGrossBonusPct?: number;
+  evNetBonusPct?: number;
+  evProfitUsd?: number;
+  evCostUsd?: number;
+  evSwapRequired?: boolean;
 }
 
 export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'USDC'): FlashloanPlan {
@@ -110,6 +118,13 @@ export function buildPlanFromCandidate(c: any, defaultMint: 'USDC' | 'SOL' = 'US
     ttlRequiredMovePct: c.forecast?.requiredMovePct,
     liquidationEligible: c.liquidationEligible ?? false,
     assets: Array.isArray(c.assets) ? c.assets : undefined,
+    evModel: c.evModel,
+    evRepayCapUsd: c.evRepayCapUsd,
+    evGrossBonusPct: c.evGrossBonusPct,
+    evNetBonusPct: c.evNetBonusPct,
+    evProfitUsd: c.evProfitUsd,
+    evCostUsd: c.evCostUsd,
+    evSwapRequired: c.evSwapRequired,
   };
 }
 
@@ -125,12 +140,15 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
   const amountUsd = Number(candidateLike.borrowValueUsd ?? plan.amountUsd);
   const amountUi = mint === 'USDC' ? amountUsd.toFixed(2) : plan.amountUi;
   
-  const evParams: EvParams = {
+  const evParams: PlanEvParams = {
     closeFactor: Number(process.env.EV_CLOSE_FACTOR ?? 0.5),
     liquidationBonusPct: Number(process.env.EV_LIQUIDATION_BONUS_PCT ?? 0.05),
     flashloanFeePct: Number(process.env.EV_FLASHLOAN_FEE_PCT ?? 0.002),
     fixedGasUsd: Number(process.env.EV_FIXED_GAS_USD ?? 0.5),
     slippageBufferPct: process.env.EV_SLIPPAGE_BUFFER_PCT ? Number(process.env.EV_SLIPPAGE_BUFFER_PCT) : undefined,
+    minLiquidationBonusPctFallback: Number(process.env.EV_MIN_LIQUIDATION_BONUS_PCT ?? 0.02),
+    bonusFullSeverityHrGap: Number(process.env.EV_BONUS_FULLY_SEVERE_HR_GAP ?? 0.10),
+    sameMintSlippageBufferPct: Number(process.env.EV_SAME_MINT_SLIPPAGE_BUFFER_PCT ?? 0),
   };
   
   // Safely compute hazard: use candidate HR if available, otherwise fallback to plan.hazard
@@ -139,7 +157,15 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     ? scoreHazard(Number(candidateLike.healthRatioRaw ?? candidateLike.healthRatio ?? 0), Number(process.env.HAZARD_ALPHA ?? 25))
     : Number(plan.hazard ?? 0);
   
-  const ev = computeEV(amountUsd, hazard, evParams);
+  const candidateForEv = {
+    borrowValueUsd: amountUsd,
+    healthRatio: candidateLike.healthRatio,
+    healthRatioRaw: candidateLike.healthRatioRaw,
+    liquidationEligible: candidateLike.liquidationEligible,
+    evContext: candidateLike.evContext as PlanAwareEvContext | undefined,
+  };
+  const evEstimate = estimatePlanEv(candidateForEv, hazard, evParams);
+  const ev = evEstimate.ev;
   const forecastTtlString = candidateLike.forecast?.timeToLiquidation;
   const ttlEstimate = forecastTtlString
     ? null
@@ -196,5 +222,12 @@ export function recomputePlanFields(plan: FlashloanPlan, candidateLike: any): Fl
     collateralReservePubkey: candidateLike.collateralReservePubkey ?? plan.collateralReservePubkey,
     liquidationEligible: candidateLike.liquidationEligible ?? plan.liquidationEligible ?? false,
     assets: candidateLike?.assets ?? plan.assets,
+    evModel: candidateLike.evModel ?? evEstimate.breakdown.model,
+    evRepayCapUsd: candidateLike.evRepayCapUsd ?? evEstimate.breakdown.repayCapUsd,
+    evGrossBonusPct: candidateLike.evGrossBonusPct ?? evEstimate.breakdown.grossBonusPct,
+    evNetBonusPct: candidateLike.evNetBonusPct ?? evEstimate.breakdown.netBonusPct,
+    evProfitUsd: candidateLike.evProfitUsd ?? evEstimate.breakdown.profitUsd,
+    evCostUsd: candidateLike.evCostUsd ?? evEstimate.breakdown.costUsd,
+    evSwapRequired: candidateLike.evSwapRequired ?? evEstimate.breakdown.swapRequired,
   };
 }
