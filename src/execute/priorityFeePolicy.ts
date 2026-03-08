@@ -116,7 +116,7 @@ export async function quotePriorityFeeMicroLamports(args: {
     const sampleSet = nonZero.length > 0 ? nonZero : values;
     const percentileValue = percentileNearestRank(sampleSet, percentile);
     const recommendedMicroLamports = clamp(
-      Math.max(staticPrice, percentileValue, floor),
+      Math.max(staticPrice, percentileValue),
       floor,
       cap
     );

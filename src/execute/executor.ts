@@ -804,8 +804,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
             healthRatioSdk: null,
           };
         }
-        const promoted = verification.healthRatioSdk < 1;
-        if (!promoted && Number.isFinite(verification.healthRatioSdk)) {
+        const finiteHealthRatioSdk = Number.isFinite(verification.healthRatioSdk);
+        const promoted = finiteHealthRatioSdk && verification.healthRatioSdk < 1;
+        if (finiteHealthRatioSdk && !promoted) {
           const planKey = String(targetToVerify.plan.key);
           const anchorMs = getPlanCooldownAnchorMs(targetToVerify.plan);
           setKlendHealthyCooldown(
@@ -1286,14 +1287,23 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       signer,
       async ({ blockhash, cuLimit, cuPrice }) => {
         const rebuilt = withUpdatedComputeBudget(atomicIxs, atomicLabels, cuLimit, cuPrice);
-        const finalInstructions = await withOptionalJitoTipInstruction({
-          instructions: rebuilt.instructions,
-          broadcast,
-          sendMode,
-          signer: signer.publicKey,
-          tipLamports: jitoTipLamports,
-          bundlesUrl: jitoBundlesUrl,
-        });
+        let finalInstructions = rebuilt.instructions;
+        try {
+          finalInstructions = await withOptionalJitoTipInstruction({
+            instructions: rebuilt.instructions,
+            broadcast,
+            sendMode,
+            signer: signer.publicKey,
+            tipLamports: jitoTipLamports,
+            bundlesUrl: jitoBundlesUrl,
+          });
+        } catch (err) {
+          throw new Error(
+            `Failed to append Jito tip for atomic transaction rebuild: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        }
         const rebuildAtomicLuts = dedupeLookupTables([
           ...atomicLookupTables,
           executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
@@ -1567,14 +1577,23 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         signer,
         async ({ blockhash, cuLimit, cuPrice }) => {
           const rebuilt = withUpdatedComputeBudget(ixs, labels, cuLimit, cuPrice);
-          const finalInstructions = await withOptionalJitoTipInstruction({
-            instructions: rebuilt.instructions,
-            broadcast,
-            sendMode,
-            signer: signer.publicKey,
-            tipLamports: jitoTipLamports,
-            bundlesUrl: jitoBundlesUrl,
-          });
+          let finalInstructions = rebuilt.instructions;
+          try {
+            finalInstructions = await withOptionalJitoTipInstruction({
+              instructions: rebuilt.instructions,
+              broadcast,
+              sendMode,
+              signer: signer.publicKey,
+              tipLamports: jitoTipLamports,
+              bundlesUrl: jitoBundlesUrl,
+            });
+          } catch (err) {
+            throw new Error(
+              `Failed to append Jito tip for main transaction rebuild: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          }
           const rebuildMainLuts = dedupeLookupTables([
             ...swapLookupTables,
             executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
