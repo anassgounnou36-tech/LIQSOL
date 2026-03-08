@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { AddressLookupTableAccount, Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction } from '@solana/web3.js';
+import { AddressLookupTableAccount, Connection, Keypair, VersionedTransaction, TransactionMessage, PublicKey, TransactionInstruction, SystemProgram } from '@solana/web3.js';
 import { getConnection } from '../solana/connection.js';
 import { loadEnv } from '../config/env.js';
 import { normalizeWslPath } from '../utils/path.js';
@@ -17,6 +17,10 @@ import { Presubmitter } from '../presubmit/presubmitter.js';
 import { isTxTooLarge } from './txSize.js';
 import { collectLutCandidateAddresses, createExecutorLut, extendExecutorLut, loadExecutorLut } from '../solana/executorLutManager.js';
 import { getKlendSdkVerifier } from '../engine/klendSdkVerifier.js';
+import { getPlanCooldownAnchorMs, setKlendHealthyCooldown, shouldSkipForKlendHealthyCooldown, type KlendHealthyCooldownEntry } from './klendHealthyCooldown.js';
+import { quotePriorityFeeMicroLamports } from './priorityFeePolicy.js';
+import { fetchJitoTipAccounts, sendTransactionViaJito } from './jitoSender.js';
+import type { TxSendTransport } from './broadcastRetry.js';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
@@ -28,6 +32,7 @@ let startupFeePayerCheckDone = false;
 let cachedAtaRentLamports: number | undefined;
 const dryRunSetupRequiredCache = new Map<string, number>();
 const obligationHealthyCooldown = new Map<string, number>(); // planKey -> absolute expiry timestamp (ms)
+const klendHealthyCooldown = new Map<string, KlendHealthyCooldownEntry>();
 let presubmitterSingleton: Presubmitter | undefined;
 let executorLutWarmupAttempted = false;
 
@@ -106,6 +111,31 @@ function withUpdatedComputeBudget(
     instructions: [...instructions.slice(0, start), ...computeIxs, ...instructions.slice(end)],
     labels: [...labels.slice(0, start), ...computeLabels, ...labels.slice(end)],
   };
+}
+
+export async function withOptionalJitoTipInstruction(args: {
+  instructions: TransactionInstruction[];
+  broadcast: boolean;
+  sendMode: 'rpc' | 'jito';
+  signer: PublicKey;
+  tipLamports: number;
+  bundlesUrl: string;
+}): Promise<TransactionInstruction[]> {
+  const { instructions, broadcast, sendMode, signer, tipLamports, bundlesUrl } = args;
+  if (!broadcast || sendMode !== 'jito' || tipLamports <= 0) {
+    return instructions;
+  }
+  const tipAccounts = await fetchJitoTipAccounts({ bundlesUrl });
+  if (tipAccounts.length === 0) return instructions;
+  const target = tipAccounts[Math.floor(Math.random() * tipAccounts.length)];
+  return [
+    ...instructions,
+    SystemProgram.transfer({
+      fromPubkey: signer,
+      toPubkey: new PublicKey(target),
+      lamports: tipLamports,
+    }),
+  ];
 }
 
 function formatWindowEndingAtLiquidation(tx: VersionedTransaction, liquidateIdx: number, kinds: Array<{ kind: string }>): string {
@@ -501,6 +531,50 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const signer = Keypair.fromSecretKey(Uint8Array.from(secret));
     const market = new PublicKey(env.KAMINO_MARKET_PUBKEY || '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF');
     const programId = new PublicKey(env.KAMINO_KLEND_PROGRAM_ID || 'KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD');
+    const sendMode = env.EXEC_SEND_MODE;
+    const jitoBundleOnly = env.JITO_BUNDLE_ONLY === 'true';
+    const jitoTipLamports = Math.max(0, Number(env.JITO_TIP_LAMPORTS ?? 0));
+    const jitoTxUrl = env.JITO_BLOCK_ENGINE_TX_URL;
+    const jitoBundlesUrl = env.JITO_BLOCK_ENGINE_BUNDLES_URL;
+    const sendTransport: TxSendTransport | undefined =
+      broadcast && !dry && sendMode === 'jito'
+        ? {
+            sendSignedTransaction: async (tx) => {
+              const result = await sendTransactionViaJito({
+                tx,
+                txUrl: jitoTxUrl,
+                bundleOnly: jitoBundleOnly,
+              });
+              console.log(
+                `[Executor] send-mode=${sendMode} bundleOnly=${jitoBundleOnly} tipLamports=${jitoTipLamports} bundleId=${result.bundleId ?? 'n/a'}`
+              );
+              return result;
+            },
+          }
+        : undefined;
+    const staticCuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
+    const priorityFeeMode = env.EXEC_PRIORITY_FEE_MODE;
+    const priorityFeePercentile = Number(env.EXEC_PRIORITY_FEE_PERCENTILE ?? 75);
+    const priorityFeeFloor = Number(env.EXEC_PRIORITY_FEE_FLOOR_MICROLAMPORTS ?? 10000);
+    const priorityFeeCap = Number(env.EXEC_PRIORITY_FEE_CAP_MICROLAMPORTS ?? 250000);
+    const priorityFeeSampleAccountsLimit = Number(env.EXEC_PRIORITY_FEE_SAMPLE_ACCOUNTS_LIMIT ?? 64);
+    const quoteInitialCuPrice = async (instructions: TransactionInstruction[], pathLabel: string): Promise<number> => {
+      const quote = await quotePriorityFeeMicroLamports({
+        connection,
+        instructions,
+        payer: signer.publicKey,
+        staticMicroLamports: staticCuPrice,
+        mode: priorityFeeMode,
+        percentile: priorityFeePercentile,
+        floorMicroLamports: priorityFeeFloor,
+        capMicroLamports: priorityFeeCap,
+        maxAccounts: priorityFeeSampleAccountsLimit,
+      });
+      console.log(
+        `[Executor] priority-fee path=${pathLabel} mode=${quote.mode} writableAccounts=${quote.writableAccountsSampled} samples=${quote.observedSamples} nonZeroSamples=${quote.observedNonZeroSamples} microLamports=${quote.recommendedMicroLamports}`
+      );
+      return quote.recommendedMicroLamports;
+    };
 
     const lutManageEnabled = (env.EXECUTOR_LUT_MANAGE ?? 'false') === 'true';
     const desiredExecutorLutAddress = env.EXECUTOR_LUT_ADDRESS || getExecutorLutAddress();
@@ -691,6 +765,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       env.EXEC_KLEND_VERIFY_ENABLED === 'true';
     const klendVerifyWindowMin = Number(env.EXEC_KLEND_VERIFY_TTL_WINDOW_MIN);
     const klendVerifyTopK = Number(env.EXEC_KLEND_VERIFY_TOPK);
+    const klendHealthyCooldownMs = Number(env.EXEC_KLEND_HEALTHY_COOLDOWN_MS);
     await applyKlendSdkNearReadyGate({
       candidates,
       tooEarlyNearReadyCandidates,
@@ -730,6 +805,18 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           };
         }
         const promoted = verification.healthRatioSdk < 1;
+        if (!promoted && Number.isFinite(verification.healthRatioSdk)) {
+          const planKey = String(targetToVerify.plan.key);
+          const anchorMs = getPlanCooldownAnchorMs(targetToVerify.plan);
+          setKlendHealthyCooldown(
+            klendHealthyCooldown,
+            planKey,
+            anchorMs,
+            Date.now(),
+            klendHealthyCooldownMs,
+            verification.healthRatioSdk
+          );
+        }
         console.log(
           `[Executor] klend-verify obligation=${targetToVerify.plan.obligationPubkey} ttlRemainingMin=${targetToVerify.ttlRemainingMin.toFixed(3)} hr=${verification.healthRatioSdk.toFixed(6)} promoted=${promoted} reason=${promoted ? 'eligible' : 'healthy'}`
         );
@@ -781,6 +868,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
   for (let attemptIdx = 0; attemptIdx < Math.min(maxAttempts, candidates.length); attemptIdx++) {
     const target = candidates[attemptIdx];
     const planKey = String(target.key);
+    const anchorMs = getPlanCooldownAnchorMs(target);
     console.log(`\n[Executor] ═══ Attempt ${attemptIdx + 1}/${Math.min(maxAttempts, candidates.length)}: ${String(target.key).slice(0, 8)}... ═══`);
     
     // PR2: Validate plan version and required fields
@@ -815,6 +903,20 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
     if (isBlocked(planKey)) {
       console.log(`[Executor] Skipping blocked plan ${String(target.key).slice(0, 8)} (insufficient-rent cooldown)`);
+      continue;
+    }
+
+    const klendCooldownEntry = shouldSkipForKlendHealthyCooldown(
+      klendHealthyCooldown,
+      planKey,
+      anchorMs,
+      Date.now()
+    );
+    if (klendCooldownEntry) {
+      const remainingMs = Math.max(0, klendCooldownEntry.untilMs - Date.now());
+      console.log(
+        `[Executor] Skipping ${planKey} due to klend-healthy cooldown remainingMs=${remainingMs} sdkHr=${klendCooldownEntry.healthRatioSdk.toFixed(6)}`
+      );
       continue;
     }
 
@@ -1139,6 +1241,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           instructions: setupIxs,
           signer,
         });
+        const setupInitialCuPrice = await quoteInitialCuPrice(setupIxs, 'setup-only');
         const setupAttempts = await sendWithBoundedRetry(
           connection,
           setupTx,
@@ -1147,10 +1250,11 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           {
             maxAttempts: 2,
             cuLimit: 200_000,
-            cuPrice: Number(process.env.EXEC_CU_PRICE ?? 0),
+            cuPrice: setupInitialCuPrice,
             cuLimitBumpFactor: 1.5,
             cuPriceBumpMicrolamports: 50000,
-          }
+          },
+          sendTransport
         );
         console.log(formatAttemptResults(setupAttempts));
         const finalSetupAttempt = setupAttempts[setupAttempts.length - 1];
@@ -1176,12 +1280,20 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
     const atomicMaxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_PLAN ?? 2);
     const atomicCuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
-    const atomicCuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
+    const atomicCuPrice = await quoteInitialCuPrice(atomicIxs, 'atomic');
     const atomicAttempts = await sendWithRebuildRetry(
       connection,
       signer,
       async ({ blockhash, cuLimit, cuPrice }) => {
         const rebuilt = withUpdatedComputeBudget(atomicIxs, atomicLabels, cuLimit, cuPrice);
+        const finalInstructions = await withOptionalJitoTipInstruction({
+          instructions: rebuilt.instructions,
+          broadcast,
+          sendMode,
+          signer: signer.publicKey,
+          tipLamports: jitoTipLamports,
+          bundlesUrl: jitoBundlesUrl,
+        });
         const rebuildAtomicLuts = dedupeLookupTables([
           ...atomicLookupTables,
           executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
@@ -1189,7 +1301,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         return buildVersionedTx({
           payer: signer.publicKey,
           blockhash,
-          instructions: rebuilt.instructions,
+          instructions: finalInstructions,
           lookupTables: rebuildAtomicLuts,
           signer,
         });
@@ -1200,7 +1312,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         cuPrice: atomicCuPrice,
         cuLimitBumpFactor: 1.5,
         cuPriceBumpMicrolamports: 50000,
-      }
+      },
+      sendTransport
     );
     console.log(formatAttemptResults(atomicAttempts));
     const finalAtomicAttempt = atomicAttempts[atomicAttempts.length - 1];
@@ -1444,7 +1557,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     // Get retry config from env (reuse CU settings from buildFullTransaction)
     const maxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_PLAN ?? 2);
     const cuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
-    const cuPrice = Number(process.env.EXEC_CU_PRICE ?? 0);
+    const cuPrice = await quoteInitialCuPrice(ixs, 'main');
     
     console.log(`[Executor] Retry config: maxAttempts=${maxAttempts}, cuLimit=${cuLimit}, cuPrice=${cuPrice}`);
     
@@ -1454,6 +1567,14 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         signer,
         async ({ blockhash, cuLimit, cuPrice }) => {
           const rebuilt = withUpdatedComputeBudget(ixs, labels, cuLimit, cuPrice);
+          const finalInstructions = await withOptionalJitoTipInstruction({
+            instructions: rebuilt.instructions,
+            broadcast,
+            sendMode,
+            signer: signer.publicKey,
+            tipLamports: jitoTipLamports,
+            bundlesUrl: jitoBundlesUrl,
+          });
           const rebuildMainLuts = dedupeLookupTables([
             ...swapLookupTables,
             executorLut && executorLut.state.addresses.length > 0 ? executorLut : undefined,
@@ -1461,7 +1582,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           return buildVersionedTx({
             payer: signer.publicKey,
             blockhash,
-            instructions: rebuilt.instructions,
+            instructions: finalInstructions,
             lookupTables: rebuildMainLuts,
             signer,
           });
@@ -1472,7 +1593,8 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           cuPrice,
           cuLimitBumpFactor: 1.5,
           cuPriceBumpMicrolamports: 50000,
-        }
+        },
+        sendTransport
       );
       
       // Log all attempts
