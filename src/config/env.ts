@@ -136,6 +136,18 @@ export const EnvSchema = z.object({
   PRESUBMIT_TTL_MS: z.string().optional().default('60000'),
   PRE_RESERVE_REFRESH_MODE: z.enum(['all', 'primary', 'auto']).optional().default('auto'),
   ALLOW_UNSAFE_PRIMARY_REFRESH: z.string().optional().default('false'),
+  METRICS_ENABLED: z.string().optional().default('true'),
+  METRICS_DIR: z.string().optional().default('data/metrics'),
+  TELEGRAM_ENABLED: z.string().optional().default('false'),
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_CHAT_ID: z.string().optional(),
+  TELEGRAM_NOTIFY_QUEUE_ADDED: z.string().optional().default('true'),
+  TELEGRAM_NOTIFY_EXECUTION_STARTED: z.string().optional().default('true'),
+  TELEGRAM_NOTIFY_EXECUTION_RESULTS: z.string().optional().default('true'),
+  TELEGRAM_NOTIFY_FAILURES: z.string().optional().default('true'),
+  TELEGRAM_NOTIFY_MIN_EV: z.string().optional().default('0'),
+  TELEGRAM_NOTIFY_MAX_QUEUE_PER_REFRESH: z.string().optional().default('3'),
+  TELEGRAM_DISABLE_NOTIFICATION: z.string().optional().default('false'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -159,6 +171,13 @@ export function loadReadonlyEnv(injectedEnv?: Record<string, string | undefined>
     throw new Error(`Invalid .env:\n${msg}`);
   }
 
+  if (
+    parsed.data.TELEGRAM_ENABLED === 'true' &&
+    (!parsed.data.TELEGRAM_BOT_TOKEN || !parsed.data.TELEGRAM_CHAT_ID)
+  ) {
+    throw new Error('Invalid .env:\nTELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when TELEGRAM_ENABLED=true');
+  }
+
   return parsed.data;
 }
 
@@ -173,6 +192,13 @@ export function loadEnv(injectedEnv?: Record<string, string | undefined>): Env {
   if (!parsed.success) {
     const msg = parsed.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("\n");
     throw new Error(`Invalid .env:\n${msg}`);
+  }
+
+  if (
+    parsed.data.TELEGRAM_ENABLED === 'true' &&
+    (!parsed.data.TELEGRAM_BOT_TOKEN || !parsed.data.TELEGRAM_CHAT_ID)
+  ) {
+    throw new Error('Invalid .env:\nTELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when TELEGRAM_ENABLED=true');
   }
 
   // In tests, allow BOT_KEYPAIR_PATH to be dummy if you want; otherwise keep strict.

@@ -5,6 +5,8 @@ import { buildPlanFromCandidate, type FlashloanPlan } from '../scheduler/txBuild
 import { enqueuePlans, replaceQueue } from '../scheduler/txScheduler.js';
 import { type PlanEvParams } from '../predict/evCalculator.js';
 import { logger } from '../observability/logger.js';
+import { emitBotEvent, makePlanFingerprint } from '../observability/botTelemetry.js';
+import { maybeNotifyForBotEvent } from '../notify/notificationRouter.js';
 
 export interface BuildQueueOptions {
   candidatesPath?: string;
@@ -69,6 +71,18 @@ export async function buildQueue(options: BuildQueueOptions = {}): Promise<void>
     flashloanMint = 'USDC',
     mode = (process.env.QUEUE_BUILD_MODE as 'replace' | 'merge') || 'replace', // Default to replace for production
   } = options;
+  const resolvedOutputPath = path.resolve(outputPath);
+  let previousQueue: FlashloanPlan[] = [];
+  if (fs.existsSync(resolvedOutputPath)) {
+    try {
+      previousQueue = JSON.parse(fs.readFileSync(resolvedOutputPath, 'utf8')) as FlashloanPlan[];
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err), resolvedOutputPath },
+        'Failed to parse previous queue file for telemetry diff',
+      );
+    }
+  }
 
   // Load candidates
   const candidatesFile = path.resolve(candidatesPath);
@@ -148,6 +162,48 @@ export async function buildQueue(options: BuildQueueOptions = {}): Promise<void>
   } else {
     queued = enqueuePlans(validPlans);
     logger.info('Plans merged into queue (merge mode)');
+  }
+
+  await emitBotEvent({
+    ts: new Date().toISOString(),
+    kind: 'queue-refresh-summary',
+    candidateCount: stats.total,
+    filteredCount: stats.filtered,
+    validPlanCount: validPlans.length,
+    queueSize: queued.length,
+    reasons: stats.reasons as Record<string, number>,
+  });
+
+  const previousFingerprints = new Set(previousQueue.map((plan) => makePlanFingerprint(plan)));
+  const newlyAdded = queued
+    .filter((plan) => !previousFingerprints.has(makePlanFingerprint(plan)))
+    .sort((a, b) => Number(b.ev ?? 0) - Number(a.ev ?? 0));
+  const maxQueuePerRefreshRaw = Number(process.env.TELEGRAM_NOTIFY_MAX_QUEUE_PER_REFRESH);
+  const maxQueuePerRefresh =
+    Number.isFinite(maxQueuePerRefreshRaw) && maxQueuePerRefreshRaw >= 0
+      ? maxQueuePerRefreshRaw
+      : 3;
+
+  for (const plan of newlyAdded.slice(0, maxQueuePerRefresh)) {
+    const event = {
+      ts: new Date().toISOString(),
+      kind: 'queue-opportunity-added' as const,
+      planKey: plan.key,
+      obligationPubkey: plan.obligationPubkey,
+      repayMint: plan.repayMint,
+      collateralMint: plan.collateralMint,
+      ev: Number(plan.ev ?? 0),
+      ttlMin: plan.ttlMin ?? null,
+      ttlStr: plan.ttlStr ?? null,
+      hazard: Number(plan.hazard ?? 0),
+      queueSize: queued.length,
+      estimatedProfitUsd: plan.evProfitUsd ?? null,
+      estimatedCostUsd: plan.evCostUsd ?? null,
+      estimatedNetUsd: (plan.evProfitUsd ?? 0) - (plan.evCostUsd ?? 0),
+      expectedValueUsd: plan.ev,
+    };
+    await emitBotEvent(event);
+    await maybeNotifyForBotEvent(event);
   }
   
   logger.info(
