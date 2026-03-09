@@ -16,6 +16,7 @@ import { SF_SCALE } from "../math/fractionScale.js";
 import { divBigintToNumber } from "../utils/bn.js";
 import { buildPairAwareTtlContext } from "../predict/ttlContext.js";
 import { buildPlanAwareEvContext } from "../predict/evContext.js";
+import { filterCandidatesBySelectedLegUsd } from "../strategy/selectedLegFilters.js";
 
 const rankBucketLabels: Record<string, string> = {
   'liquidatable': 'liq',
@@ -60,6 +61,8 @@ async function main() {
   const envTop = Number(env.CAND_TOP);
   const envNear = Number(env.CAND_NEAR);
   const envValidate = Number(env.CAND_VALIDATE_SAMPLES);
+  const minSelectedRepayUsd = Number(env.MIN_SELECTED_REPAY_USD);
+  const minSelectedCollateralUsd = Number(env.MIN_SELECTED_COLLATERAL_USD);
 
   // Parse command-line arguments (override env if provided)
   const args = process.argv.slice(2);
@@ -326,15 +329,29 @@ async function main() {
       }
     }
 
+    const { passed: economicallyExecutableCandidates, stats: selectedLegFilterStats } =
+      filterCandidatesBySelectedLegUsd(candidatesWithBothLegs, {
+        minSelectedRepayUsd,
+        minSelectedCollateralUsd,
+      });
+
     logger.info(
       {
-        executableCandidates: candidatesWithBothLegs.length,
+        structurallyExecutableCandidates: candidatesWithBothLegs.length,
+        economicallyExecutableCandidates: economicallyExecutableCandidates.length,
+        selectedLegFilterRejected:
+          candidatesWithBothLegs.length - economicallyExecutableCandidates.length,
+        selectedLegFilterMissingEvContext: selectedLegFilterStats.missingEvContext,
+        selectedLegRepayTooSmall: selectedLegFilterStats.repayTooSmall,
+        selectedLegCollateralTooSmall: selectedLegFilterStats.collateralTooSmall,
         withPairAwareTtlContext,
         withPlanAwareEvContext,
         legacyFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPairAwareTtlContext),
         legacyEvFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPlanAwareEvContext),
+        minSelectedRepayUsd,
+        minSelectedCollateralUsd,
       },
-      'TTL context enrichment summary for executable candidates'
+      'TTL/EV enrichment complete (structurally executable = both legs selected, economically executable = selected legs pass USD minimums)'
     );
 
     if (scoredForSelection.length !== candidatesWithBothLegs.length) {
@@ -351,7 +368,7 @@ async function main() {
     // Select and rank candidates
     logger.info("Selecting and ranking candidates...");
     const { rankedCandidates, topCandidates } = await rankCandidatesWithBoundedKlendVerification({
-      scoredCandidates: candidatesWithBothLegs,
+      scoredCandidates: economicallyExecutableCandidates,
       nearThreshold: nearArg,
       topN: topArg,
       env,
@@ -543,6 +560,10 @@ async function main() {
           if (c.forecast?.driverMint) console.log(`    Forecast driver mint: ${c.forecast.driverMint}`);
           if (c.forecast?.requiredMovePct !== undefined) {
             console.log(`    Forecast required move (%): ${c.forecast.requiredMovePct.toFixed(4)}`);
+          }
+          if (c.evContext) {
+            console.log(`    Selected repay USD: $${c.evContext.selectedBorrowUsdRaw.toFixed(2)}`);
+            console.log(`    Selected collateral USD: $${c.evContext.selectedCollateralUsdRaw.toFixed(2)}`);
           }
 
           // Protocol SF cross-check

@@ -12,6 +12,7 @@ import { SOL_MINT, USDC_MINT } from '../constants/mints.js';
 import { logger } from '../observability/logger.js';
 import { buildPairAwareTtlContext } from '../predict/ttlContext.js';
 import { buildPlanAwareEvContext } from '../predict/evContext.js';
+import { filterCandidatesBySelectedLegUsd } from '../strategy/selectedLegFilters.js';
 
 export interface BuildCandidatesOptions {
   marketPubkey: PublicKey;
@@ -42,6 +43,8 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
   const rpcUrl = env.RPC_PRIMARY;
   const yellowstoneUrl = env.YELLOWSTONE_GRPC_URL;
   const yellowstoneToken = env.YELLOWSTONE_X_TOKEN;
+  const minSelectedRepayUsd = Number(env.MIN_SELECTED_REPAY_USD);
+  const minSelectedCollateralUsd = Number(env.MIN_SELECTED_COLLATERAL_USD);
 
   // Parse allowlist mints (execution-only filter)
   const allowedLiquidityMints = execAllowlistMints && execAllowlistMints.length > 0
@@ -245,15 +248,29 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
     }
   }
 
+  const { passed: economicallyExecutableCandidates, stats: selectedLegFilterStats } =
+    filterCandidatesBySelectedLegUsd(candidatesWithBothLegs, {
+      minSelectedRepayUsd,
+      minSelectedCollateralUsd,
+    });
+
   logger.info(
     {
-        executableCandidates: candidatesWithBothLegs.length,
-        withPairAwareTtlContext,
-        withPlanAwareEvContext,
-        legacyFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPairAwareTtlContext),
-        legacyEvFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPlanAwareEvContext),
-      },
-      'TTL context enrichment summary for executable candidates'
+      structurallyExecutableCandidates: candidatesWithBothLegs.length,
+      economicallyExecutableCandidates: economicallyExecutableCandidates.length,
+      selectedLegFilterRejected:
+        candidatesWithBothLegs.length - economicallyExecutableCandidates.length,
+      selectedLegFilterMissingEvContext: selectedLegFilterStats.missingEvContext,
+      selectedLegRepayTooSmall: selectedLegFilterStats.repayTooSmall,
+      selectedLegCollateralTooSmall: selectedLegFilterStats.collateralTooSmall,
+      withPairAwareTtlContext,
+      withPlanAwareEvContext,
+      legacyFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPairAwareTtlContext),
+      legacyEvFallbackCandidates: Math.max(0, candidatesWithBothLegs.length - withPlanAwareEvContext),
+      minSelectedRepayUsd,
+      minSelectedCollateralUsd,
+    },
+    'TTL/EV enrichment complete (structurally executable = both legs selected, economically executable = selected legs pass USD minimums)'
   );
 
   if (scoredForSelection.length !== candidatesWithBothLegs.length) {
@@ -270,7 +287,7 @@ export async function buildCandidates(options: BuildCandidatesOptions): Promise<
   // Select and rank candidates
   logger.info('Selecting and ranking candidates...');
   const { rankedCandidates, topCandidates } = await rankCandidatesWithBoundedKlendVerification({
-    scoredCandidates: candidatesWithBothLegs,
+    scoredCandidates: economicallyExecutableCandidates,
     nearThreshold,
     topN,
     env,

@@ -36,6 +36,8 @@ function makeEnv(overrides: Record<string, string | number | undefined> = {}) {
   return {
     USE_EV_RANKING: "false",
     MIN_BORROW_USD: "10",
+    MIN_SELECTED_REPAY_USD: "0",
+    MIN_SELECTED_COLLATERAL_USD: "0",
     HAZARD_ALPHA: "25",
     FORECAST_TTL_MS: "300000",
     TTL_VOLATILE_MOVE_PCT_PER_MIN: undefined,
@@ -228,6 +230,31 @@ describe("candidate ranking flow alignment", () => {
       expect(source).toContain("c.evContext = evContext");
       expect(source).toContain("withPlanAwareEvContext");
       expect(source).toContain("legacyEvFallbackCandidates");
+      expect(source).toContain("filterCandidatesBySelectedLegUsd");
+      expect(source).toContain("economicallyExecutableCandidates");
+      expect(source).toContain("selectedLegFilterMissingEvContext");
+    }
+  });
+
+  it("buildCandidates.ts and snapshotCandidates.ts apply selected-leg filtering after evContext enrichment", () => {
+    const buildCandidatesSource = fs.readFileSync(
+      path.join(srcRoot, "pipeline", "buildCandidates.ts"),
+      "utf8"
+    );
+    const snapshotCandidatesSource = fs.readFileSync(
+      path.join(srcRoot, "commands", "snapshotCandidates.ts"),
+      "utf8"
+    );
+
+    for (const source of [buildCandidatesSource, snapshotCandidatesSource]) {
+      const evAssign = source.indexOf("c.evContext = evContext");
+      const selectedLegFilter = source.indexOf("filterCandidatesBySelectedLegUsd");
+      const rankCall = source.indexOf("rankCandidatesWithBoundedKlendVerification");
+
+      expect(evAssign).toBeGreaterThan(-1);
+      expect(selectedLegFilter).toBeGreaterThan(evAssign);
+      expect(rankCall).toBeGreaterThan(selectedLegFilter);
+      expect(source).toContain("scoredCandidates: economicallyExecutableCandidates");
     }
   });
 
@@ -291,5 +318,25 @@ describe("candidate ranking flow alignment", () => {
 
     expect(result.rankedCandidates[0]?.obligationPubkey).toBe("liq");
     expect(result.rankedCandidates[0]?.ev).toBeUndefined();
+  });
+
+  it("MIN_BORROW_USD still filters by total borrow when selected-leg thresholds are zero", () => {
+    const ranked = candidateSelector.selectCandidates(
+      [makeScored("small-non-liq", 1.1, 50), makeScored("big-non-liq", 1.1, 150)],
+      {
+        ...buildCandidateSelectorConfigFromEnv(
+          makeEnv({
+            USE_EV_RANKING: "true",
+            MIN_BORROW_USD: "100",
+            MIN_SELECTED_REPAY_USD: "0",
+            MIN_SELECTED_COLLATERAL_USD: "0",
+          }),
+          1.02
+        ),
+      }
+    );
+
+    expect(ranked.some((c) => c.obligationPubkey === "small-non-liq")).toBe(false);
+    expect(ranked.some((c) => c.obligationPubkey === "big-non-liq")).toBe(true);
   });
 });
