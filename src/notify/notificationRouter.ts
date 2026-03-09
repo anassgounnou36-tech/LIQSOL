@@ -1,5 +1,6 @@
 import type { BotEvent } from '../observability/botTelemetry.js';
 import { recordTelegramSendResult } from '../observability/botTelemetry.js';
+import { logger } from '../observability/logger.js';
 import { escapeTelegramHtml, sendTelegramMessage } from './telegram.js';
 
 const SUCCESS_STATUSES = new Set(['confirmed', 'atomic-sent', 'setup-completed']);
@@ -148,10 +149,10 @@ export async function maybeNotifyForBotEvent(event: BotEvent): Promise<void> {
       return;
     }
     await recordTelegramSendResult({ ok: false, error: result.description });
-    console.warn(`[Notify] Telegram send failed: ${result.description ?? 'unknown error'}`);
+    logger.warn({ err: result.description ?? 'unknown error' }, '[Notify] Telegram send failed');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await recordTelegramSendResult({ ok: false, error: msg });
-    console.warn(`[Notify] Telegram send error: ${msg}`);
+    logger.warn({ err: msg }, '[Notify] Telegram send error');
   }
 }

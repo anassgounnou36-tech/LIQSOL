@@ -893,7 +893,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const planKey = String(target.key);
     const anchorMs = getPlanCooldownAnchorMs(target);
     console.log(`\n[Executor] ═══ Attempt ${attemptIdx + 1}/${Math.min(maxAttempts, candidates.length)}: ${String(target.key).slice(0, 8)}... ═══`);
-    
+
     // PR2: Validate plan version and required fields
     try {
       validatePlanVersion(target);

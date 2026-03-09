@@ -178,7 +178,7 @@ export async function buildQueue(options: BuildQueueOptions = {}): Promise<void>
   const newlyAdded = queued
     .filter((plan) => !previousFingerprints.has(makePlanFingerprint(plan)))
     .sort((a, b) => Number(b.ev ?? 0) - Number(a.ev ?? 0));
-  const maxQueuePerRefreshRaw = Number(process.env.TELEGRAM_NOTIFY_MAX_QUEUE_PER_REFRESH ?? 3);
+  const maxQueuePerRefreshRaw = Number(process.env.TELEGRAM_NOTIFY_MAX_QUEUE_PER_REFRESH);
   const maxQueuePerRefresh =
     Number.isFinite(maxQueuePerRefreshRaw) && maxQueuePerRefreshRaw >= 0
       ? maxQueuePerRefreshRaw
