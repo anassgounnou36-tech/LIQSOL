@@ -248,8 +248,12 @@ describe("candidate ranking flow alignment", () => {
 
     for (const source of [buildCandidatesSource, snapshotCandidatesSource]) {
       const evAssign = source.indexOf("c.evContext = evContext");
-      const selectedLegFilter = source.indexOf("filterCandidatesBySelectedLegUsd");
-      const rankCall = source.indexOf("rankCandidatesWithBoundedKlendVerification");
+      const selectedLegFilter = source.indexOf(
+        "const { passed: economicallyExecutableCandidates"
+      );
+      const rankCall = source.indexOf(
+        "const { rankedCandidates, topCandidates } = await rankCandidatesWithBoundedKlendVerification"
+      );
 
       expect(evAssign).toBeGreaterThan(-1);
       expect(selectedLegFilter).toBeGreaterThan(evAssign);
