@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { applyKlendSdkNearReadyGate } from "../execute/executor.js";
+import {
+  getPlanCooldownAnchorMs,
+  setKlendHealthyCooldown,
+  shouldSkipForKlendHealthyCooldown,
+} from "../execute/klendHealthyCooldown.js";
 
 function makePlan(key: string, ev: number, ttlMin = 1) {
   return {
@@ -96,3 +101,53 @@ describe("executor klend near-ready gate", () => {
   });
 });
 
+describe("executor klend healthy cooldown", () => {
+  it("healthy verifier result sets cooldown", () => {
+    const map = new Map();
+    const plan = makePlan("A", 10, 1);
+    const nowMs = 1_000;
+    const anchorMs = getPlanCooldownAnchorMs(plan);
+    setKlendHealthyCooldown(map, plan.key, anchorMs, nowMs, 15_000, 1.03);
+
+    const active = shouldSkipForKlendHealthyCooldown(map, plan.key, anchorMs, nowMs + 1);
+    expect(active?.healthRatioSdk).toBeCloseTo(1.03);
+    expect(active?.untilMs).toBe(nowMs + 15_000);
+  });
+
+  it("same plan is skipped before cooldown expiry when anchor is unchanged", () => {
+    const map = new Map();
+    const plan = makePlan("A", 10, 1);
+    const nowMs = 5_000;
+    const anchorMs = getPlanCooldownAnchorMs(plan);
+    setKlendHealthyCooldown(map, plan.key, anchorMs, nowMs, 3_000, 1.05);
+
+    const active = shouldSkipForKlendHealthyCooldown(map, plan.key, anchorMs, nowMs + 2_500);
+    expect(active).toBeDefined();
+  });
+
+  it("changed anchor invalidates cooldown", () => {
+    const map = new Map();
+    const plan = makePlan("A", 10, 1);
+    const nowMs = 5_000;
+    const anchorMs = getPlanCooldownAnchorMs(plan);
+    setKlendHealthyCooldown(map, plan.key, anchorMs, nowMs, 3_000, 1.05);
+
+    const changedAnchorMs = anchorMs + 1;
+    const active = shouldSkipForKlendHealthyCooldown(map, plan.key, changedAnchorMs, nowMs + 500);
+    expect(active).toBeUndefined();
+  });
+
+  it("promoted result does not set cooldown", () => {
+    const map = new Map();
+    const plan = makePlan("A", 10, 1);
+    const nowMs = 5_000;
+    const anchorMs = getPlanCooldownAnchorMs(plan);
+    const promoted = true;
+    if (!promoted) {
+      setKlendHealthyCooldown(map, plan.key, anchorMs, nowMs, 3_000, 0.99);
+    }
+
+    const active = shouldSkipForKlendHealthyCooldown(map, plan.key, anchorMs, nowMs + 1);
+    expect(active).toBeUndefined();
+  });
+});

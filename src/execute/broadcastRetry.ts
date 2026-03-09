@@ -35,6 +35,10 @@ export interface BroadcastRetryConfig {
   cuPriceBumpMicrolamports?: number; // Add this to CU price on priority issues (default: 50000)
 }
 
+export interface TxSendTransport {
+  sendSignedTransaction(tx: VersionedTransaction): Promise<{ signature: string; bundleId?: string }>;
+}
+
 /**
  * Classify error message to determine failure type
  */
@@ -81,7 +85,8 @@ export async function sendWithBoundedRetry(
   tx: VersionedTransaction,
   signer: Keypair,
   message: TransactionMessage,
-  config: BroadcastRetryConfig
+  config: BroadcastRetryConfig,
+  transport?: TxSendTransport
 ): Promise<SendAttemptResult[]> {
   const attempts: SendAttemptResult[] = [];
   let currentTx = tx;
@@ -95,10 +100,15 @@ export async function sendWithBoundedRetry(
     
     try {
       // Send transaction
-      const signature = await connection.sendTransaction(currentTx, {
-        skipPreflight: false,
-        maxRetries: 0, // We handle retries ourselves
-      });
+      const sendResult = transport
+        ? await transport.sendSignedTransaction(currentTx)
+        : {
+            signature: await connection.sendTransaction(currentTx, {
+              skipPreflight: false,
+              maxRetries: 0, // We handle retries ourselves
+            }),
+          };
+      const signature = sendResult.signature;
       
       const sendMs = Date.now() - attemptStart;
       console.log(`[Broadcast] Transaction sent in ${sendMs}ms`);
@@ -303,7 +313,8 @@ export async function sendWithRebuildRetry(
   connection: Connection,
   signer: Keypair,
   buildTx: (args: { blockhash: string; cuLimit: number; cuPrice: number }) => Promise<VersionedTransaction>,
-  config: BroadcastRetryConfig
+  config: BroadcastRetryConfig,
+  transport?: TxSendTransport
 ): Promise<SendAttemptResult[]> {
   const attempts: SendAttemptResult[] = [];
   let currentCuLimit = config.cuLimit ?? Number(process.env.EXEC_CU_LIMIT ?? 600_000);
@@ -320,10 +331,15 @@ export async function sendWithRebuildRetry(
       });
       tx.sign([signer]);
 
-      const signature = await connection.sendTransaction(tx, {
-        skipPreflight: false,
-        maxRetries: 0,
-      });
+      const sendResult = transport
+        ? await transport.sendSignedTransaction(tx)
+        : {
+            signature: await connection.sendTransaction(tx, {
+              skipPreflight: false,
+              maxRetries: 0,
+            }),
+          };
+      const signature = sendResult.signature;
 
       const confirmResult = await confirmSignatureByPolling(connection, signature, {
         intervalMs: DEFAULT_POLL_INTERVAL_MS,
