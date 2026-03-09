@@ -21,6 +21,9 @@ import { getPlanCooldownAnchorMs, setKlendHealthyCooldown, shouldSkipForKlendHea
 import { quotePriorityFeeMicroLamports } from './priorityFeePolicy.js';
 import { fetchJitoTipAccounts, sendTransactionViaJito } from './jitoSender.js';
 import type { TxSendTransport } from './broadcastRetry.js';
+import type { BotEvent } from '../observability/botTelemetry.js';
+import { emitBotEvent } from '../observability/botTelemetry.js';
+import { maybeNotifyForBotEvent } from '../notify/notificationRouter.js';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
@@ -462,6 +465,25 @@ export interface ExecutorResult {
   status: string;
   signature?: string;
   [key: string]: unknown;
+}
+
+export function buildExecutionResultEvent(
+  base: Omit<BotEvent, 'kind' | 'ts' | 'status'>,
+  status: string,
+  extra?: {
+    signature?: string;
+    slot?: number;
+    chainFeeLamports?: number | null;
+    note?: string;
+  },
+): BotEvent {
+  return {
+    ts: new Date().toISOString(),
+    kind: 'execution-attempt-result',
+    ...base,
+    status,
+    ...extra,
+  };
 }
 
 // Tick mutex to prevent overlapping executor runs
@@ -944,6 +966,71 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       continue; // Skip to next candidate
     }
 
+    function buildPlanEventBase(targetPlan: FlashloanPlan, dryMode: boolean, broadcastMode: boolean) {
+      return {
+        planKey: targetPlan.key,
+        obligationPubkey: targetPlan.obligationPubkey,
+        ownerPubkey: targetPlan.ownerPubkey,
+        repayMint: targetPlan.repayMint,
+        collateralMint: targetPlan.collateralMint,
+        ev: Number(targetPlan.ev ?? 0),
+        ttlMin: targetPlan.ttlMin ?? null,
+        ttlStr: targetPlan.ttlStr ?? null,
+        hazard: Number(targetPlan.hazard ?? 0),
+        broadcast: broadcastMode,
+        dry: dryMode,
+        estimatedProfitUsd: targetPlan.evProfitUsd ?? null,
+        estimatedCostUsd: targetPlan.evCostUsd ?? null,
+        estimatedNetUsd:
+          targetPlan.evProfitUsd != null && targetPlan.evCostUsd != null
+            ? Number(targetPlan.evProfitUsd) - Number(targetPlan.evCostUsd)
+            : null,
+        expectedValueUsd: Number(targetPlan.ev ?? 0),
+      };
+    }
+
+    const planEventBase = buildPlanEventBase(target, dry, broadcast);
+    const startedEvent: BotEvent = {
+      ts: new Date().toISOString(),
+      kind: 'execution-attempt-started',
+      ...planEventBase,
+    };
+    await emitBotEvent(startedEvent);
+    await maybeNotifyForBotEvent(startedEvent);
+
+    async function finalizeTargetResult(
+      status: string,
+      extra?: {
+        signature?: string;
+        slot?: number;
+        chainFeeLamports?: number | null;
+        note?: string;
+      },
+      resultExtras?: Record<string, unknown>,
+    ): Promise<ExecutorResult> {
+      const finalExtra = { ...(extra ?? {}) };
+      if (
+        finalExtra.signature &&
+        (status === 'confirmed' || status === 'atomic-sent' || status === 'setup-completed')
+      ) {
+        try {
+          const tx = await connection.getTransaction(finalExtra.signature, {
+            commitment: 'confirmed',
+            maxSupportedTransactionVersion: 0,
+          });
+          finalExtra.chainFeeLamports = tx?.meta?.fee ?? null;
+          finalExtra.slot = tx?.slot ?? finalExtra.slot;
+        } catch {
+          finalExtra.chainFeeLamports = null;
+        }
+      }
+
+      const event = buildExecutionResultEvent(planEventBase, status, finalExtra);
+      await emitBotEvent(event);
+      await maybeNotifyForBotEvent(event);
+      return { status, ...finalExtra, ...(resultExtras ?? {}) };
+    }
+    
     // Execute this candidate (wrapped in try-catch for error handling)
     try {
       console.log('[Executor] Building full transaction...');
@@ -1100,7 +1187,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     }
 
     if (!selected) {
-      return { status: 'tx-too-large', attemptedProfiles };
+      return finalizeTargetResult('tx-too-large', undefined, { attemptedProfiles });
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -1109,12 +1196,12 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     if (errMsg === 'OBLIGATION_HEALTHY') {
       console.error('[Executor] ℹ️  6016 ObligationHealthy - plan skipped');
       obligationHealthyCooldown.set(planKey, Date.now() + OBLIGATION_HEALTHY_COOLDOWN_MS);
-      return { status: 'obligation-healthy' };
+      return finalizeTargetResult('obligation-healthy', { note: 'OBLIGATION_HEALTHY' });
     }
     
     console.error('[Executor] ❌ Failed to build transaction:', errMsg);
     console.error('[Executor] This plan will be skipped. Bot will continue with next cycle.');
-    return { status: 'build-failed' };
+    return finalizeTargetResult('build-failed', { note: errMsg });
   }
   
   const buildMs = Date.now() - buildStart;
@@ -1122,7 +1209,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
   if (metadata.swapRequired && !metadata.swapReady && setupIxs.length === 0) {
     console.warn('[Executor] swap-required-missing: cross-mint liquidation has no swap instructions');
-    return { status: 'swap-required-missing' };
+    return finalizeTargetResult('swap-required-missing');
   }
   
   // TX Size Fix: Handle setup transaction if needed
@@ -1167,7 +1254,11 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           `[Executor] Setup blocked (insufficient-rent): ${(feePayerLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL < ${(requiredLamports / LAMPORTS_PER_SOL).toFixed(4)} SOL`
         );
       }
-      return { status: 'blocked-insufficient-rent', planKey, requiredLamports, feePayerLamports };
+      return finalizeTargetResult('blocked-insufficient-rent', undefined, {
+        planKey,
+        requiredLamports,
+        feePayerLamports,
+      });
     }
     
     const atomicBh = await connection.getLatestBlockhash();
@@ -1189,7 +1280,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       const customCode = extractCustomCode(atomicSim.value.err);
       if (customCode === 6016) {
         obligationHealthyCooldown.set(planKey, Date.now() + OBLIGATION_HEALTHY_COOLDOWN_MS);
-        return { status: 'obligation-healthy' };
+        return finalizeTargetResult('obligation-healthy', { note: 'atomic-sim-6016' });
       }
 
       const swapWasSkippedForSetup = metadata.swapRequired && !metadata.swapReady;
@@ -1227,7 +1318,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         if (healthCheckCode === 6016) {
           console.log('[Executor] Setup-only skipped: refresh-only preflight returned 6016 ObligationHealthy');
           obligationHealthyCooldown.set(planKey, Date.now() + OBLIGATION_HEALTHY_COOLDOWN_MS);
-          return { status: 'obligation-healthy' };
+          return finalizeTargetResult('obligation-healthy', { note: 'setup-healthcheck-6016' });
         }
 
         const setupBh = await connection.getLatestBlockhash();
@@ -1261,22 +1352,24 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         const finalSetupAttempt = setupAttempts[setupAttempts.length - 1];
         if (finalSetupAttempt?.success) {
           for (const ata of missingAtas) markAtaCreated(ata.mint);
-          return { status: 'setup-completed', signature: finalSetupAttempt.signature };
+          return finalizeTargetResult('setup-completed', {
+            signature: finalSetupAttempt.signature,
+          });
         }
-        return { status: 'setup-failed' };
+        return finalizeTargetResult('setup-failed');
       }
 
       if (dry && dryRunSetupCacheTtlMs > 0) {
         dryRunSetupRequiredCache.set(planKey, Date.now() + dryRunSetupCacheTtlMs);
       }
-      return { status: dry ? 'dry-atomic-sim-failed' : 'atomic-preflight-failed' };
+      return finalizeTargetResult(dry ? 'dry-atomic-sim-failed' : 'atomic-preflight-failed');
     }
 
     if (dry || !broadcast) {
       if (dry && dryRunSetupCacheTtlMs > 0) {
         dryRunSetupRequiredCache.delete(planKey);
       }
-      return { status: 'dry-atomic-sim-ok' };
+      return finalizeTargetResult('dry-atomic-sim-ok');
     }
 
     const atomicMaxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_PLAN ?? 2);
@@ -1329,9 +1422,9 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const finalAtomicAttempt = atomicAttempts[atomicAttempts.length - 1];
     if (finalAtomicAttempt?.success) {
       for (const ata of missingAtas) markAtaCreated(ata.mint);
-      return { status: 'atomic-sent', signature: finalAtomicAttempt.signature };
+      return finalizeTargetResult('atomic-sent', { signature: finalAtomicAttempt.signature });
     }
-    return { status: 'atomic-preflight-failed' };
+    return finalizeTargetResult('atomic-preflight-failed');
   }
   
   // Assertion: Verify labels match instructions
@@ -1391,7 +1484,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       } else {
         console.error('  liquidation instruction not found');
       }
-      return { status: 'compiled-validation-failed' };
+      return finalizeTargetResult('compiled-validation-failed');
     }
   }
   const hasPostFarmAfterLiquidation = liquidateIdx >= 0 && liquidateIdx + 1 < decodedKinds.length && decodedKinds[liquidateIdx + 1].kind === 'refreshObligationFarmsForReserve';
@@ -1404,7 +1497,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     console.error('\n[Executor] Transaction build-time validation warning to prevent 6051/6009');
     console.error('[Executor] This indicates instruction assembly divergence.');
     console.error('[Executor] Skipping this plan and continuing with next cycle.\n');
-    return { status: 'compiled-validation-failed' };
+    return finalizeTargetResult('compiled-validation-failed');
   }
   
   console.log(validation.diagnostics);
@@ -1495,7 +1588,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
             console.error('     repaid, price moved favorably, or another bot liquidated it first.');
             console.error('\n  ✅ ACTION: Skipping this plan and continuing with next cycle.\n');
             console.error('═══════════════════════════════════════\n');
-            return { status: 'obligation-healthy' };
+            return finalizeTargetResult('obligation-healthy', { note: 'main-sim-6016' });
           }
           
           // If it's 6006, provide specific guidance
@@ -1552,14 +1645,14 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
         }
       }
       
-      return { status: 'sim-error' };
+      return finalizeTargetResult('sim-error');
     }
     
     console.log('[Executor] Simulation success:');
     console.log(`  CU used: ${sim.value.unitsConsumed ?? 'unknown'}`);
     console.log(`  Logs: ${sim.value.logs?.length ?? 0} entries`);
     
-    return { status: 'simulated' };
+    return finalizeTargetResult('simulated');
   } else {
     // Broadcast transaction with bounded retries
     console.log('[Executor] Broadcasting transaction with bounded retries...');
@@ -1624,10 +1717,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       
       if (finalAttempt && finalAttempt.success) {
         console.log('[Executor] Transaction confirmed successfully!');
-        return { 
-          status: 'confirmed', 
-          signature: finalAttempt.signature
-        };
+        return finalizeTargetResult('confirmed', { signature: finalAttempt.signature });
       } else {
         console.error('[Executor] All broadcast attempts failed for this plan');
         // Continue to next candidate instead of returning
