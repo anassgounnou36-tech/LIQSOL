@@ -43,6 +43,8 @@ export const EnvSchema = z.object({
   // PR 8.5: EV-based ranking configuration (opt-in)
   USE_EV_RANKING: z.string().optional().default('false'),
   MIN_BORROW_USD: z.string().optional().default('10'),
+  MIN_SELECTED_REPAY_USD: z.string().optional().default('0'),
+  MIN_SELECTED_COLLATERAL_USD: z.string().optional().default('0'),
   HAZARD_ALPHA: z.string().optional().default('25'),
   EV_CLOSE_FACTOR: z.string().optional().default('0.5'),
   EV_LIQUIDATION_BONUS_PCT: z.string().optional().default('0.05'),
