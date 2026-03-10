@@ -22,6 +22,9 @@ export interface ShadowWatchTarget {
   ev?: number;
   hazard?: number;
   rankBucket?: 'liquidatable' | 'near-ready' | 'medium-horizon' | 'far-horizon' | 'legacy-or-unknown';
+  predictedLiquidationAtMs?: number | string | null;
+  ttlComputedAtMs?: number | string | null;
+  createdAtMs?: number | string | null;
   forecast?: {
     ttlMinutes?: number | null;
     timeToLiquidation?: string;
@@ -67,6 +70,9 @@ function toShadowWatchTarget(raw: any): ShadowWatchTarget | null {
     ev: raw?.ev != null ? Number(raw.ev) : undefined,
     hazard: raw?.hazard != null ? Number(raw.hazard) : undefined,
     rankBucket: raw?.rankBucket,
+    predictedLiquidationAtMs: raw?.predictedLiquidationAtMs ?? raw?.predictedAtMs,
+    ttlComputedAtMs: raw?.ttlComputedAtMs,
+    createdAtMs: raw?.createdAtMs,
     forecast: raw?.forecast
       ? {
           ttlMinutes:

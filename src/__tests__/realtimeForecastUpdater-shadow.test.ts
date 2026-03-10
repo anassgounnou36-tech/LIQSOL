@@ -33,6 +33,7 @@ describe('RealtimeForecastUpdater shadow promotion flow', () => {
       queueEligible: 1,
       verifiedByKlend: 1,
       admittedByKlend: 1,
+      skippedByHealthyCooldown: 0,
       enqueued: 1,
       rejectedReasons: {},
     });

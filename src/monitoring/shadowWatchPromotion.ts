@@ -12,6 +12,12 @@ import { emitBotEvent, makePlanFingerprint } from '../observability/botTelemetry
 import { maybeNotifyForBotEvent } from '../notify/notificationRouter.js';
 import { logger } from '../observability/logger.js';
 import type { CandidateLike } from './realtimeForecastUpdater.js';
+import {
+  getShadowPromotionAnchorMs,
+  setShadowPromotionHealthyCooldown,
+  shouldSkipForShadowPromotionHealthyCooldown,
+  type ShadowPromotionHealthyCooldownEntry,
+} from './shadowPromotionHealthyCooldown.js';
 
 export interface ShadowPromotionResult {
   considered: number;
@@ -19,9 +25,12 @@ export interface ShadowPromotionResult {
   queueEligible: number;
   verifiedByKlend: number;
   admittedByKlend: number;
+  skippedByHealthyCooldown: number;
   enqueued: number;
   rejectedReasons: Record<string, number>;
 }
+
+const shadowPromotionHealthyCooldown = new Map<string, ShadowPromotionHealthyCooldownEntry>();
 
 type PromotionCandidate = ScoredObligation & {
   rankBucket?: 'liquidatable' | 'near-ready' | 'medium-horizon' | 'far-horizon' | 'legacy-or-unknown';
@@ -37,6 +46,9 @@ type PromotionCandidate = ScoredObligation & {
   healthSource?: string;
   healthSourceUsed?: string;
   healthSourceVerified?: string;
+  predictedLiquidationAtMs?: number | string | null;
+  ttlComputedAtMs?: number | string | null;
+  createdAtMs?: number | string | null;
 };
 
 export async function promoteWatchedCandidatesToQueue(args: {
@@ -90,6 +102,9 @@ export async function promoteWatchedCandidatesToQueue(args: {
       healthSource: item.healthSource,
       healthSourceUsed: item.healthSourceUsed,
       healthSourceVerified: item.healthSourceVerified,
+      predictedLiquidationAtMs: item.predictedLiquidationAtMs,
+      ttlComputedAtMs: item.ttlComputedAtMs,
+      createdAtMs: item.createdAtMs,
     };
     consideredCandidates.push(candidateForSelection);
   }
@@ -138,12 +153,14 @@ export async function promoteWatchedCandidatesToQueue(args: {
     shadowPromotionKlendMissingOwner: 0,
     shadowPromotionKlendHealthy: 0,
     shadowPromotionKlendVerifyError: 0,
+    shadowPromotionHealthyCooldown: 0,
     invalidPlans: 0,
   };
 
   const klendAdmissionCandidates: PromotionCandidate[] = [];
   let verifiedByKlend = 0;
   let admittedByKlend = 0;
+  let skippedByHealthyCooldown = 0;
   if (shadowPromotionVerifyEnabled) {
     const eligibleForAdmission = queueFilter.filtered.filter((candidate) => {
       const rankBucket = candidate.rankBucket;
@@ -165,6 +182,24 @@ export async function promoteWatchedCandidatesToQueue(args: {
 
     for (const candidate of admissionPool) {
       const obligationId = String(candidate.obligationPubkey ?? candidate.key ?? 'unknown');
+      const candidateKey = String(candidate.obligationPubkey ?? candidate.key ?? '');
+      const anchorMs = getShadowPromotionAnchorMs(candidate);
+      const nowMs = Date.now();
+      const activeCooldown = shouldSkipForShadowPromotionHealthyCooldown(
+        shadowPromotionHealthyCooldown,
+        candidateKey,
+        anchorMs,
+        nowMs,
+      );
+      if (activeCooldown) {
+        skippedByHealthyCooldown++;
+        rejectedReasons.shadowPromotionHealthyCooldown++;
+        const remainingMs = Math.max(0, activeCooldown.untilMs - nowMs);
+        logger.info(
+          `[ShadowPromotion] cooldown-skip obligation=${obligationId} remainingMs=${remainingMs} sdkHr=${activeCooldown.healthRatioSdk.toFixed(6)}`,
+        );
+        continue;
+      }
       if (!candidate.ownerPubkey) {
         rejectedReasons.shadowPromotionKlendMissingOwner++;
         logger.info(
@@ -202,6 +237,14 @@ export async function promoteWatchedCandidatesToQueue(args: {
         );
       } else {
         rejectedReasons.shadowPromotionKlendHealthy++;
+        setShadowPromotionHealthyCooldown(
+          shadowPromotionHealthyCooldown,
+          candidateKey,
+          anchorMs,
+          Date.now(),
+          Number(env.SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS ?? 15000),
+          verification.healthRatioSdk,
+        );
         logger.info(
           `[ShadowPromotion] klend-admission obligation=${obligationId} sdkHr=${verification.healthRatioSdk.toFixed(6)} admitted=false reason=healthy`,
         );
@@ -286,6 +329,7 @@ export async function promoteWatchedCandidatesToQueue(args: {
       queueEligible: queueFilter.filtered.length,
       verifiedByKlend,
       admittedByKlend,
+      skippedByHealthyCooldown,
       enqueued: newlyAdded.length,
       rejectedReasons,
     },
@@ -298,6 +342,7 @@ export async function promoteWatchedCandidatesToQueue(args: {
     queueEligible: queueFilter.filtered.length,
     verifiedByKlend,
     admittedByKlend,
+    skippedByHealthyCooldown,
     enqueued: newlyAdded.length,
     rejectedReasons,
   };

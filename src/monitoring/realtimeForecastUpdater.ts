@@ -35,6 +35,9 @@ export type CandidateLike = {
   primaryCollateralMint?: string;
   ttlContext?: PairAwareTtlContext;
   rankBucket?: 'liquidatable' | 'near-ready' | 'medium-horizon' | 'far-horizon' | 'legacy-or-unknown';
+  predictedLiquidationAtMs?: number | string | null;
+  ttlComputedAtMs?: number | string | null;
+  createdAtMs?: number | string | null;
   forecast?: {
     ttlMinutes?: number | null;
     timeToLiquidation?: string;
@@ -109,6 +112,7 @@ export class RealtimeForecastUpdater {
               queueEligible: result.queueEligible,
               verifiedByKlend: result.verifiedByKlend,
               admittedByKlend: result.admittedByKlend,
+              skippedByHealthyCooldown: result.skippedByHealthyCooldown,
               enqueued: result.enqueued,
               rejectedReasons: result.rejectedReasons,
             },

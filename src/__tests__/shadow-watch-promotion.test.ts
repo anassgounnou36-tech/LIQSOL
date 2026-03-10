@@ -16,6 +16,7 @@ const envState = vi.hoisted(() => ({
   SHADOW_PROMOTION_KLEND_VERIFY_ENABLED: 'true',
   SHADOW_PROMOTION_KLEND_VERIFY_TOPK: '5',
   SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN: '15',
+  SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS: '0',
 }));
 
 vi.mock('../config/env.js', () => ({
@@ -41,6 +42,7 @@ vi.mock('../config/env.js', () => ({
     SHADOW_PROMOTION_KLEND_VERIFY_ENABLED: envState.SHADOW_PROMOTION_KLEND_VERIFY_ENABLED,
     SHADOW_PROMOTION_KLEND_VERIFY_TOPK: envState.SHADOW_PROMOTION_KLEND_VERIFY_TOPK,
     SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN: envState.SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN,
+    SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS: envState.SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS,
     LIQSOL_RECOMPUTED_VERIFY_TTL_MS: '15000',
     RPC_PRIMARY: 'http://rpc.local',
   })),
@@ -124,6 +126,7 @@ describe('promoteWatchedCandidatesToQueue', () => {
     envState.SHADOW_PROMOTION_KLEND_VERIFY_ENABLED = 'true';
     envState.SHADOW_PROMOTION_KLEND_VERIFY_TOPK = '5';
     envState.SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN = '15';
+    envState.SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS = '0';
     mocks.loadQueue.mockReset();
     mocks.enqueuePlans.mockReset();
     mocks.selectCandidates.mockReset();
@@ -276,5 +279,35 @@ describe('promoteWatchedCandidatesToQueue', () => {
 
     expect(result.rejectedReasons.shadowPromotionKlendHealthy).toBe(1);
     expect(result.rejectedReasons.shadowPromotionNotInKlendVerifyTopK).toBe(1);
+  });
+
+  it('does not re-verify same healthy candidate while cooldown is active', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-10T00:00:00.000Z'));
+    envState.SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS = '15000';
+    const verify = vi.fn().mockResolvedValue({
+      ok: true,
+      healthRatioSdk: 1.02,
+      healthRatioSdkRaw: 1.02,
+    });
+    mocks.getKlendSdkVerifier.mockReturnValue({ verify });
+    const candidatesByKey = new Map([
+      ['k-cooldown', makeCandidate({
+        key: 'k-cooldown',
+        obligationPubkey: 'k-cooldown',
+        rankBucket: 'near-ready',
+        forecast: { ttlMinutes: 5 },
+        createdAtMs: 1111,
+      })],
+    ]);
+
+    const first = await promoteWatchedCandidatesToQueue({ keys: ['k-cooldown'], candidatesByKey });
+    const second = await promoteWatchedCandidatesToQueue({ keys: ['k-cooldown'], candidatesByKey });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(first.rejectedReasons.shadowPromotionKlendHealthy).toBe(1);
+    expect(second.skippedByHealthyCooldown).toBe(1);
+    expect(second.rejectedReasons.shadowPromotionHealthyCooldown).toBe(1);
+    vi.useRealTimers();
   });
 });
