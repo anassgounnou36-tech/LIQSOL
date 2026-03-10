@@ -31,6 +31,8 @@ describe('RealtimeForecastUpdater shadow promotion flow', () => {
       considered: 1,
       ranked: 1,
       queueEligible: 1,
+      verifiedByKlend: 1,
+      admittedByKlend: 1,
       enqueued: 1,
       rejectedReasons: {},
     });

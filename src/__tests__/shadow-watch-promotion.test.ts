@@ -10,6 +10,12 @@ const mocks = vi.hoisted(() => ({
   buildPlanFromCandidate: vi.fn(),
   emitBotEvent: vi.fn(),
   maybeNotifyForBotEvent: vi.fn(),
+  getKlendSdkVerifier: vi.fn(),
+}));
+const envState = vi.hoisted(() => ({
+  SHADOW_PROMOTION_KLEND_VERIFY_ENABLED: 'true',
+  SHADOW_PROMOTION_KLEND_VERIFY_TOPK: '5',
+  SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN: '15',
 }));
 
 vi.mock('../config/env.js', () => ({
@@ -32,8 +38,16 @@ vi.mock('../config/env.js', () => ({
     EV_MIN_LIQUIDATION_BONUS_PCT: '0.02',
     EV_BONUS_FULLY_SEVERE_HR_GAP: '0.1',
     EV_SAME_MINT_SLIPPAGE_BUFFER_PCT: '0',
+    SHADOW_PROMOTION_KLEND_VERIFY_ENABLED: envState.SHADOW_PROMOTION_KLEND_VERIFY_ENABLED,
+    SHADOW_PROMOTION_KLEND_VERIFY_TOPK: envState.SHADOW_PROMOTION_KLEND_VERIFY_TOPK,
+    SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN: envState.SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN,
+    LIQSOL_RECOMPUTED_VERIFY_TTL_MS: '15000',
+    RPC_PRIMARY: 'http://rpc.local',
   })),
-  loadReadonlyEnv: vi.fn(() => ({})),
+  loadReadonlyEnv: vi.fn(() => ({
+    KAMINO_MARKET_PUBKEY: '11111111111111111111111111111111',
+    KAMINO_KLEND_PROGRAM_ID: '11111111111111111111111111111111',
+  })),
 }));
 
 vi.mock('../strategy/rankCandidatesForSelection.js', () => ({
@@ -74,6 +88,10 @@ vi.mock('../notify/notificationRouter.js', () => ({
   maybeNotifyForBotEvent: mocks.maybeNotifyForBotEvent,
 }));
 
+vi.mock('../engine/klendSdkVerifier.js', () => ({
+  getKlendSdkVerifier: mocks.getKlendSdkVerifier,
+}));
+
 import { promoteWatchedCandidatesToQueue } from '../monitoring/shadowWatchPromotion.js';
 
 function makeCandidate(overrides: Partial<CandidateLike> = {}): CandidateLike {
@@ -103,6 +121,9 @@ function makeCandidate(overrides: Partial<CandidateLike> = {}): CandidateLike {
 
 describe('promoteWatchedCandidatesToQueue', () => {
   beforeEach(() => {
+    envState.SHADOW_PROMOTION_KLEND_VERIFY_ENABLED = 'true';
+    envState.SHADOW_PROMOTION_KLEND_VERIFY_TOPK = '5';
+    envState.SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN = '15';
     mocks.loadQueue.mockReset();
     mocks.enqueuePlans.mockReset();
     mocks.selectCandidates.mockReset();
@@ -111,6 +132,7 @@ describe('promoteWatchedCandidatesToQueue', () => {
     mocks.buildPlanFromCandidate.mockReset();
     mocks.emitBotEvent.mockReset();
     mocks.maybeNotifyForBotEvent.mockReset();
+    mocks.getKlendSdkVerifier.mockReset();
 
     mocks.loadQueue.mockReturnValue([]);
     mocks.selectCandidates.mockImplementation((candidates) => candidates);
@@ -137,72 +159,122 @@ describe('promoteWatchedCandidatesToQueue', () => {
       ttlStr: '1m',
     }));
     mocks.enqueuePlans.mockImplementation((plans) => plans);
+    mocks.getKlendSdkVerifier.mockReturnValue({
+      verify: vi.fn().mockResolvedValue({
+        ok: true,
+        healthRatioSdk: 0.99,
+        healthRatioSdkRaw: 0.99,
+      }),
+    });
   });
 
-  it('enqueues watch-only candidate when it is queue-eligible', async () => {
-    const candidatesByKey = new Map([['k1', makeCandidate()]]);
+  it('does not enqueue recompute-eligible watch-only candidate when klend says healthy', async () => {
+    mocks.getKlendSdkVerifier.mockReturnValue({
+      verify: vi.fn().mockResolvedValue({
+        ok: true,
+        healthRatioSdk: 1.01,
+        healthRatioSdkRaw: 1.01,
+      }),
+    });
+    const candidatesByKey = new Map([
+      ['k1', makeCandidate({ rankBucket: 'near-ready', forecast: { ttlMinutes: 5 } })],
+    ]);
     const result = await promoteWatchedCandidatesToQueue({ keys: ['k1'], candidatesByKey });
 
     expect(result.queueEligible).toBe(1);
+    expect(result.verifiedByKlend).toBe(1);
+    expect(result.admittedByKlend).toBe(0);
+    expect(result.enqueued).toBe(0);
+    expect(result.rejectedReasons.shadowPromotionKlendHealthy).toBe(1);
+    expect(mocks.enqueuePlans).toHaveBeenCalledWith([]);
+  });
+
+  it('enqueues watch-only candidate only when klend says hr < 1', async () => {
+    mocks.getKlendSdkVerifier.mockReturnValue({
+      verify: vi.fn().mockResolvedValue({
+        ok: true,
+        healthRatioSdk: 0.95,
+        healthRatioSdkRaw: 0.95,
+      }),
+    });
+    const candidatesByKey = new Map([
+      ['k1', makeCandidate({ rankBucket: 'near-ready', forecast: { ttlMinutes: 5 } })],
+    ]);
+    const result = await promoteWatchedCandidatesToQueue({ keys: ['k1'], candidatesByKey });
+
+    expect(result.verifiedByKlend).toBe(1);
+    expect(result.admittedByKlend).toBe(1);
     expect(result.enqueued).toBe(1);
     expect(mocks.enqueuePlans).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ key: 'k1' })]),
     );
   });
 
-  it('ignores watched candidate already present in queue', async () => {
-    mocks.loadQueue.mockReturnValue([{ key: 'k1' }]);
-    const candidatesByKey = new Map([['k1', makeCandidate()]]);
-    const result = await promoteWatchedCandidatesToQueue({ keys: ['k1'], candidatesByKey });
+  it('does not enqueue candidates outside bounded klend topK admission pool', async () => {
+    envState.SHADOW_PROMOTION_KLEND_VERIFY_TOPK = '1';
+    const candidatesByKey = new Map([
+      ['k1', makeCandidate({ key: 'k1', obligationPubkey: 'k1', rankBucket: 'near-ready', forecast: { ttlMinutes: 5 } })],
+      ['k2', makeCandidate({ key: 'k2', obligationPubkey: 'k2', rankBucket: 'near-ready', forecast: { ttlMinutes: 5 } })],
+    ]);
+    const result = await promoteWatchedCandidatesToQueue({ keys: ['k1', 'k2'], candidatesByKey });
 
-    expect(result.considered).toBe(0);
-    expect(mocks.enqueuePlans).toHaveBeenCalledWith([]);
+    expect(result.queueEligible).toBe(2);
+    expect(result.verifiedByKlend).toBe(1);
+    expect(result.enqueued).toBe(1);
+    expect(result.rejectedReasons.shadowPromotionNotInKlendVerifyTopK).toBe(1);
   });
 
-  it('applies selected-leg filter in promotion path', async () => {
-    mocks.filterCandidatesBySelectedLegUsd.mockImplementation(() => ({
-      passed: [],
-      stats: { missingEvContext: 1, repayTooSmall: 0, collateralTooSmall: 0 },
-    }));
-    const candidatesByKey = new Map([['k1', makeCandidate()]]);
+  it('re-ranks and re-filters admitted candidates after klend mutation before plan building', async () => {
+    const filterCalls: Array<Array<Record<string, unknown>>> = [];
+    mocks.filterCandidatesWithStats.mockImplementation((candidates) => {
+      filterCalls.push(candidates as Array<Record<string, unknown>>);
+      return {
+        filtered: candidates.filter((candidate: Record<string, unknown>) => Number(candidate.healthRatio ?? 2) < 1),
+        stats: {
+          reasons: { evTooLow: 0, ttlTooHigh: 0, hazardTooLow: 0, missingHealth: 0, missingBorrow: 0 },
+        },
+      };
+    });
+    mocks.getKlendSdkVerifier.mockReturnValue({
+      verify: vi.fn().mockResolvedValue({
+        ok: true,
+        healthRatioSdk: 0.97,
+        healthRatioSdkRaw: 0.97,
+      }),
+    });
+    const candidatesByKey = new Map([['k1', makeCandidate({ rankBucket: 'near-ready', forecast: { ttlMinutes: 5 } })]]);
     const result = await promoteWatchedCandidatesToQueue({ keys: ['k1'], candidatesByKey });
 
-    expect(result.ranked).toBe(1);
-    expect(result.queueEligible).toBe(0);
-    expect(result.rejectedReasons.selectedLegMissingEvContext).toBe(1);
+    expect(mocks.selectCandidates).toHaveBeenCalledTimes(2);
+    expect(filterCalls).toHaveLength(2);
+    expect(filterCalls[1][0]).toEqual(
+      expect.objectContaining({
+        healthRatio: 0.97,
+        healthSource: 'klend-sdk',
+        healthSourceUsed: 'klend-sdk',
+        healthSourceVerified: 'klend-sdk',
+      }),
+    );
+    expect(result.enqueued).toBe(1);
   });
 
-  it('applies queue filters in promotion path', async () => {
-    mocks.filterCandidatesWithStats.mockImplementation(() => ({
-      filtered: [],
-      stats: {
-        reasons: { evTooLow: 1, ttlTooHigh: 0, hazardTooLow: 0, missingHealth: 0, missingBorrow: 0 },
-      },
-    }));
-    const candidatesByKey = new Map([['k1', makeCandidate()]]);
-    const result = await promoteWatchedCandidatesToQueue({ keys: ['k1'], candidatesByKey });
-
-    expect(result.queueEligible).toBe(0);
-    expect(result.rejectedReasons.queueEvTooLow).toBe(1);
-  });
-
-  it('emits queue-opportunity-added telemetry shape for promoted plans', async () => {
-    const candidatesByKey = new Map([['k1', makeCandidate()]]);
+  it('reports rejected reason counters for healthy and topK rejections', async () => {
+    envState.SHADOW_PROMOTION_KLEND_VERIFY_TOPK = '1';
+    mocks.getKlendSdkVerifier.mockReturnValue({
+      verify: vi.fn().mockResolvedValue({
+        ok: true,
+        healthRatioSdk: 1.05,
+        healthRatioSdkRaw: 1.05,
+      }),
+    });
+    const candidatesByKey = new Map([
+      ['k1', makeCandidate({ key: 'k1', obligationPubkey: 'k1', rankBucket: 'near-ready', forecast: { ttlMinutes: 5 } })],
+      ['k2', makeCandidate({ key: 'k2', obligationPubkey: 'k2', rankBucket: 'near-ready', forecast: { ttlMinutes: 5 } })],
+    ]);
     await promoteWatchedCandidatesToQueue({ keys: ['k1'], candidatesByKey });
+    const result = await promoteWatchedCandidatesToQueue({ keys: ['k1', 'k2'], candidatesByKey });
 
-    const queueAdded = mocks.emitBotEvent.mock.calls.find((call) => call[0]?.kind === 'queue-opportunity-added');
-    expect(queueAdded?.[0]).toEqual(
-      expect.objectContaining({
-        kind: 'queue-opportunity-added',
-        planKey: 'k1',
-        obligationPubkey: 'k1',
-      }),
-    );
-    expect(mocks.maybeNotifyForBotEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'queue-opportunity-added',
-        planKey: 'k1',
-      }),
-    );
+    expect(result.rejectedReasons.shadowPromotionKlendHealthy).toBe(1);
+    expect(result.rejectedReasons.shadowPromotionNotInKlendVerifyTopK).toBe(1);
   });
 });

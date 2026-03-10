@@ -25,6 +25,9 @@ export type CandidateLike = {
   borrowValueUsd?: number;
   collateralValueUsd?: number;
   liquidationEligible?: boolean;
+  healthSource?: string;
+  healthSourceUsed?: string;
+  healthSourceVerified?: string;
   assets?: string[];
   repayReservePubkey?: string;
   collateralReservePubkey?: string;
@@ -97,6 +100,20 @@ export class RealtimeForecastUpdater {
         void promoteWatchedCandidatesToQueue({
           keys: watchOnlyBatch,
           candidatesByKey: this.candidatesByKey,
+        }).then((result) => {
+          logger.info(
+            {
+              watchOnlyKeys: watchOnlyBatch.length,
+              considered: result.considered,
+              ranked: result.ranked,
+              queueEligible: result.queueEligible,
+              verifiedByKlend: result.verifiedByKlend,
+              admittedByKlend: result.admittedByKlend,
+              enqueued: result.enqueued,
+              rejectedReasons: result.rejectedReasons,
+            },
+            'Shadow watch promotion flush result',
+          );
         }).catch((err) => {
           logger.warn({ err, watchOnlyBatch: watchOnlyBatch.length }, 'Shadow watch promotion failed');
         });
@@ -287,6 +304,9 @@ export class RealtimeForecastUpdater {
         borrowValueUsd: target.borrowValueUsd ?? existing?.borrowValueUsd,
         collateralValueUsd: target.collateralValueUsd ?? existing?.collateralValueUsd,
         liquidationEligible: target.liquidationEligible ?? existing?.liquidationEligible,
+        healthSource: target.healthSource ?? existing?.healthSource,
+        healthSourceUsed: target.healthSourceUsed ?? existing?.healthSourceUsed,
+        healthSourceVerified: target.healthSourceVerified ?? existing?.healthSourceVerified,
         repayReservePubkey: target.repayReservePubkey ?? existing?.repayReservePubkey,
         collateralReservePubkey: target.collateralReservePubkey ?? existing?.collateralReservePubkey,
         primaryBorrowMint: target.primaryBorrowMint ?? existing?.primaryBorrowMint,

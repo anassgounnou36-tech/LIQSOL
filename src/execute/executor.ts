@@ -990,13 +990,18 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     }
 
     const planEventBase = buildPlanEventBase(target, dry, broadcast);
-    const startedEvent: BotEvent = {
-      ts: new Date().toISOString(),
-      kind: 'execution-attempt-started',
-      ...planEventBase,
-    };
-    await emitBotEvent(startedEvent);
-    await maybeNotifyForBotEvent(startedEvent);
+    let startedEventEmitted = false;
+    async function emitExecutionStartedIfNeeded(): Promise<void> {
+      if (startedEventEmitted) return;
+      const startedEvent: BotEvent = {
+        ts: new Date().toISOString(),
+        kind: 'execution-attempt-started',
+        ...planEventBase,
+      };
+      await emitBotEvent(startedEvent);
+      await maybeNotifyForBotEvent(startedEvent);
+      startedEventEmitted = true;
+    }
 
     async function finalizeTargetResult(
       status: string,
@@ -1334,6 +1339,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
           signer,
         });
         const setupInitialCuPrice = await quoteInitialCuPrice(setupIxs, 'setup-only');
+        await emitExecutionStartedIfNeeded();
         const setupAttempts = await sendWithBoundedRetry(
           connection,
           setupTx,
@@ -1375,6 +1381,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const atomicMaxAttempts = Number(process.env.BOT_MAX_ATTEMPTS_PER_PLAN ?? 2);
     const atomicCuLimit = Number(process.env.EXEC_CU_LIMIT ?? 600_000);
     const atomicCuPrice = await quoteInitialCuPrice(atomicIxs, 'atomic');
+    await emitExecutionStartedIfNeeded();
     const atomicAttempts = await sendWithRebuildRetry(
       connection,
       signer,
@@ -1665,6 +1672,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     console.log(`[Executor] Retry config: maxAttempts=${maxAttempts}, cuLimit=${cuLimit}, cuPrice=${cuPrice}`);
     
     try {
+      await emitExecutionStartedIfNeeded();
       const attempts = await sendWithRebuildRetry(
         connection,
         signer,

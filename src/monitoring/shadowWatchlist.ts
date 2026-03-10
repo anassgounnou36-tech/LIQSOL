@@ -16,6 +16,9 @@ export interface ShadowWatchTarget {
   borrowValueUsd?: number;
   collateralValueUsd?: number;
   liquidationEligible?: boolean;
+  healthSource?: string;
+  healthSourceUsed?: string;
+  healthSourceVerified?: string;
   ev?: number;
   hazard?: number;
   rankBucket?: 'liquidatable' | 'near-ready' | 'medium-horizon' | 'far-horizon' | 'legacy-or-unknown';
@@ -58,6 +61,9 @@ function toShadowWatchTarget(raw: any): ShadowWatchTarget | null {
     borrowValueUsd: raw?.borrowValueUsd != null ? Number(raw.borrowValueUsd) : raw?.amountUsd != null ? Number(raw.amountUsd) : undefined,
     collateralValueUsd: raw?.collateralValueUsd != null ? Number(raw.collateralValueUsd) : undefined,
     liquidationEligible: raw?.liquidationEligible === true,
+    healthSource: raw?.healthSource,
+    healthSourceUsed: raw?.healthSourceUsed,
+    healthSourceVerified: raw?.healthSourceVerified,
     ev: raw?.ev != null ? Number(raw.ev) : undefined,
     hazard: raw?.hazard != null ? Number(raw.hazard) : undefined,
     rankBucket: raw?.rankBucket,
