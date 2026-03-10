@@ -242,7 +242,7 @@ export async function promoteWatchedCandidatesToQueue(args: {
           candidateKey,
           anchorMs,
           Date.now(),
-          Number(env.SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS ?? 15000),
+          Number(env.SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS),
           verification.healthRatioSdk,
         );
         logger.info(
