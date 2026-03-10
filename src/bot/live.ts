@@ -4,7 +4,7 @@ import { pathToFileURL } from 'url';
 import { loadEnv } from '../config/env.js';
 import { logger } from '../observability/logger.js';
 import { runInitialPipeline } from '../pipeline/runInitialPipeline.js';
-import { startBotStartupScheduler, reloadWatchlistFromQueue } from '../scheduler/botStartupScheduler.js';
+import { startBotStartupScheduler, reloadRealtimeWatchTargets } from '../scheduler/botStartupScheduler.js';
 
 function parseMintAllowlistCsv(s?: string): string[] | undefined {
   if (!s) return undefined;
@@ -163,8 +163,8 @@ export async function startIntegratedLiveRunner(opts: {
         flashloanMint: 'USDC',
       });
 
-      // Reload watchlist to update subscriptions with new queue
-      await reloadWatchlistFromQueue();
+      // Reload broader realtime watch targets (queue + shadow watchlist)
+      await reloadRealtimeWatchTargets();
 
       console.log('[Live] ✅ Periodic refresh complete');
     } catch (err) {

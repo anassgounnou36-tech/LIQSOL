@@ -1,6 +1,7 @@
 import { buildMintObligationMapping, type MintToKeys, type KeyToMints } from './mintObligationMapping.js';
 import { logger } from '../observability/logger.js';
-import type { FlashloanPlan } from '../scheduler/txBuilder.js';
+
+export type RefreshMappingItem = { key: string; assets?: string[] };
 
 export interface OrchestratorConfig {
   minPricePctChange: number; // not used in PR1 (no price decode), keep for future
@@ -88,8 +89,8 @@ export class EventRefreshOrchestrator {
   /**
    * Refresh asset mapping (e.g., when queue is rebuilt).
    */
-  refreshMapping(plans?: FlashloanPlan[]): void {
-    if (!plans) {
+  refreshMapping(items?: RefreshMappingItem[]): void {
+    if (!items) {
       const mapping = buildMintObligationMapping();
       this.mintToKeys = mapping.mintToKeys;
       this.keyToMints = mapping.keyToMints;
@@ -102,10 +103,10 @@ export class EventRefreshOrchestrator {
 
     const mintToKeys: MintToKeys = new Map();
     const keyToMints: KeyToMints = new Map();
-    for (const plan of plans) {
-      const key = String(plan.key ?? '');
+    for (const item of items) {
+      const key = String(item.key ?? '');
       if (!key) continue;
-      const assets = Array.isArray(plan.assets) ? plan.assets : [];
+      const assets = Array.isArray(item.assets) ? item.assets : [];
       for (const mint of assets) {
         if (!mintToKeys.has(mint)) mintToKeys.set(mint, new Set());
         mintToKeys.get(mint)!.add(key);
