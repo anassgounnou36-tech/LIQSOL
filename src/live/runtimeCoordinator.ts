@@ -92,7 +92,6 @@ export class RuntimeCoordinator {
     this.started = true;
     loadEnv();
     loadStartupSchedulerConfig();
-    process.env.LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS = String(this.config.promotionSummaryLogIntervalMs);
 
     if (this.config.realtimeEnabled) {
       try {
@@ -225,10 +224,10 @@ export class RuntimeCoordinator {
       programId: this.deps.programId,
       reserveCache,
       oracleCache,
+      promotionSummaryLogIntervalMs: this.config.promotionSummaryLogIntervalMs,
     });
     await updater.refreshMappingFromWatchTargets(currentSnapshot.allWatchTargets);
     await updater.bootstrapWatchObligations(obligationPubkeys);
-    process.env.LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS = String(this.config.promotionSummaryLogIntervalMs);
 
     const accountListener = new YellowstoneAccountListener({
       grpcUrl,

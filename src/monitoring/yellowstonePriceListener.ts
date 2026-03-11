@@ -94,7 +94,7 @@ export class YellowstonePriceListener extends EventEmitter {
           const accountInfo = data.account.account;
           if (!accountInfo) return;
           try {
-            const oraclePubkey = new PublicKey(Buffer.from(accountInfo.pubkey)).toString();
+            const accountPubkey = new PublicKey(Buffer.from(accountInfo.pubkey)).toString();
             const slot = Number(data.account.slot ?? 0);
             const ownerBytes = accountInfo.owner ? Buffer.from(accountInfo.owner) : undefined;
             const owner = ownerBytes && ownerBytes.length > 0 ? new PublicKey(ownerBytes).toString() : undefined;
@@ -102,7 +102,7 @@ export class YellowstonePriceListener extends EventEmitter {
             const dataBase64 = dataBytes && dataBytes.length > 0 ? dataBytes.toString('base64') : undefined;
             const writeVersionRaw = Number(data.account.writeVersion ?? accountInfo.writeVersion);
             const writeVersion = Number.isFinite(writeVersionRaw) ? writeVersionRaw : undefined;
-            this.onMessage(oraclePubkey, { slot, owner, dataBase64, writeVersion });
+            this.onMessage(accountPubkey, { slot, owner, dataBase64, writeVersion });
           } catch (err) {
             logger.error({ err }, 'Error processing oracle update');
           }

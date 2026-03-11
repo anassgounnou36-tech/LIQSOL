@@ -66,6 +66,7 @@ export class RealtimeForecastUpdater {
   private flushTimer: NodeJS.Timeout | null = null;
   private lastPromotionSummarySignature = '';
   private lastPromotionSummaryLoggedAtMs = 0;
+  private promotionSummaryLogIntervalMs: number;
 
   constructor(opts: {
     connection: Connection;
@@ -73,12 +74,14 @@ export class RealtimeForecastUpdater {
     programId: PublicKey;
     reserveCache: ReserveCache;
     oracleCache: OracleCache;
+    promotionSummaryLogIntervalMs?: number;
   }) {
     this.connection = opts.connection;
     this.marketPubkey = opts.marketPubkey;
     this.programId = opts.programId;
     this.reserveCache = opts.reserveCache;
     this.oracleCache = opts.oracleCache;
+    this.promotionSummaryLogIntervalMs = opts.promotionSummaryLogIntervalMs ?? Number(process.env.LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS ?? 10_000);
     this.orchestrator = new EventRefreshOrchestrator({}, (keys, reason) => {
       this.enqueueRefresh(keys, reason);
     });
@@ -108,9 +111,8 @@ export class RealtimeForecastUpdater {
           }).then((result) => {
             const signature = buildShadowPromotionSummarySignature(result);
             const now = Date.now();
-            const intervalMs = Number(process.env.LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS ?? 10_000);
             const signatureChanged = signature !== this.lastPromotionSummarySignature;
-            const shouldLog = signatureChanged || now - this.lastPromotionSummaryLoggedAtMs >= intervalMs;
+            const shouldLog = signatureChanged || now - this.lastPromotionSummaryLoggedAtMs >= this.promotionSummaryLogIntervalMs;
             if (!shouldLog) {
               return;
             }
