@@ -75,6 +75,14 @@ export const EnvSchema = z.object({
 
   // Live runner refresh interval
   LIVE_CANDIDATE_REFRESH_INTERVAL_MS: z.string().optional().default('120000'),
+  SHADOW_WATCH_ENABLED: z.string().optional().default('true'),
+  SHADOW_WATCH_TOPK: z.string().optional().default('50'),
+  SHADOW_WATCH_INCLUDE_MEDIUM_HORIZON: z.string().optional().default('true'),
+  SHADOW_WATCH_MAX_TTL_MIN: z.string().optional().default('60'),
+  SHADOW_PROMOTION_KLEND_VERIFY_ENABLED: z.string().optional().default('true'),
+  SHADOW_PROMOTION_KLEND_VERIFY_TOPK: z.string().optional().default('5'),
+  SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN: z.string().optional().default('15'),
+  SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS: z.string().optional().default('15000'),
   
   // Queue build mode (replace or merge)
   QUEUE_BUILD_MODE: z.enum(['replace', 'merge']).optional().default('replace'),

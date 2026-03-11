@@ -11,8 +11,12 @@ import { EventRefreshOrchestrator } from './eventRefreshOrchestrator.js';
 import type { FlashloanPlan } from '../scheduler/txBuilder.js';
 import { logger } from '../observability/logger.js';
 import { buildPlanAwareEvContext, type PlanAwareEvContext } from '../predict/evContext.js';
+import { buildPairAwareTtlContext, type PairAwareTtlContext } from '../predict/ttlContext.js';
+import { loadQueue } from '../scheduler/txScheduler.js';
+import type { ShadowWatchTarget } from './shadowWatchlist.js';
+import { promoteWatchedCandidatesToQueue } from './shadowWatchPromotion.js';
 
-type CandidateLike = {
+export type CandidateLike = {
   key?: string;
   obligationPubkey?: string;
   ownerPubkey?: string;
@@ -21,11 +25,30 @@ type CandidateLike = {
   borrowValueUsd?: number;
   collateralValueUsd?: number;
   liquidationEligible?: boolean;
+  healthSource?: string;
+  healthSourceUsed?: string;
+  healthSourceVerified?: string;
   assets?: string[];
   repayReservePubkey?: string;
   collateralReservePubkey?: string;
   primaryBorrowMint?: string;
   primaryCollateralMint?: string;
+  ttlContext?: PairAwareTtlContext;
+  rankBucket?: 'liquidatable' | 'near-ready' | 'medium-horizon' | 'far-horizon' | 'legacy-or-unknown';
+  predictedLiquidationAtMs?: number | string | null;
+  ttlComputedAtMs?: number | string | null;
+  createdAtMs?: number | string | null;
+  forecast?: {
+    ttlMinutes?: number | null;
+    timeToLiquidation?: string;
+    model?: string;
+    confidence?: 'high' | 'medium' | 'low';
+    driverMint?: string;
+    driverSide?: 'deposit' | 'borrow';
+    requiredMovePct?: number;
+  };
+  ev?: number;
+  hazard?: number;
   evContext?: PlanAwareEvContext;
 };
 
@@ -70,7 +93,35 @@ export class RealtimeForecastUpdater {
       this.pendingKeys.clear();
       this.pendingReason = undefined;
       if (batch.length === 0) return;
-      refreshSubset(batch, this.candidatesByKey, batchReason);
+      const queuedKeys = new Set(loadQueue().map((plan) => String(plan.key)));
+      const queuedBatch = batch.filter((key) => queuedKeys.has(key));
+      const watchOnlyBatch = batch.filter((key) => !queuedKeys.has(key));
+      if (queuedBatch.length > 0) {
+        refreshSubset(queuedBatch, this.candidatesByKey, batchReason);
+      }
+      if (watchOnlyBatch.length > 0) {
+        void promoteWatchedCandidatesToQueue({
+          keys: watchOnlyBatch,
+          candidatesByKey: this.candidatesByKey,
+        }).then((result) => {
+          logger.info(
+            {
+              watchOnlyKeys: watchOnlyBatch.length,
+              considered: result.considered,
+              ranked: result.ranked,
+              queueEligible: result.queueEligible,
+              verifiedByKlend: result.verifiedByKlend,
+              admittedByKlend: result.admittedByKlend,
+              skippedByHealthyCooldown: result.skippedByHealthyCooldown,
+              enqueued: result.enqueued,
+              rejectedReasons: result.rejectedReasons,
+            },
+            'Shadow watch promotion flush result',
+          );
+        }).catch((err) => {
+          logger.warn({ err, watchOnlyBatch: watchOnlyBatch.length }, 'Shadow watch promotion failed');
+        });
+      }
     }, 75);
   }
 
@@ -128,6 +179,11 @@ export class RealtimeForecastUpdater {
         selectedCollateralMint: existing.primaryCollateralMint,
       });
     }
+    const ttlContext = buildPairAwareTtlContext({
+      decoded,
+      reserveCache: this.reserveCache,
+      oracleCache: this.oracleCache,
+    });
 
     this.candidatesByKey.set(key, {
       ...existing,
@@ -140,11 +196,12 @@ export class RealtimeForecastUpdater {
       collateralValueUsd: health.collateralValue,
       liquidationEligible: isLiquidatable(health.healthRatio),
       assets: this.deriveAssets(decoded) ?? existing.assets,
+      ttlContext: ttlContext ?? existing.ttlContext,
       evContext,
     });
   }
 
-  async bootstrapQueueObligations(keys: string[]): Promise<void> {
+  async bootstrapWatchObligations(keys: string[]): Promise<void> {
     const uniqueKeys = Array.from(new Set(keys.filter(Boolean)));
     if (uniqueKeys.length === 0) return;
 
@@ -234,10 +291,10 @@ export class RealtimeForecastUpdater {
     }
   }
 
-  refreshMappingFromQueue(plans: FlashloanPlan[]): void {
+  async refreshMappingFromWatchTargets(targets: ShadowWatchTarget[]): Promise<void> {
     const nextKeys = new Set<string>();
-    for (const plan of plans) {
-      const key = String(plan.key ?? '');
+    for (const target of targets) {
+      const key = String(target.key ?? '');
       if (!key) continue;
       nextKeys.add(key);
       const existing = this.candidatesByKey.get(key);
@@ -245,14 +302,24 @@ export class RealtimeForecastUpdater {
         ...existing,
         key,
         obligationPubkey: key,
-        ownerPubkey: plan.ownerPubkey ?? existing?.ownerPubkey,
-        borrowValueUsd: plan.amountUsd ?? existing?.borrowValueUsd,
-        liquidationEligible: plan.liquidationEligible ?? existing?.liquidationEligible,
-        repayReservePubkey: plan.repayReservePubkey ?? existing?.repayReservePubkey,
-        collateralReservePubkey: plan.collateralReservePubkey ?? existing?.collateralReservePubkey,
-        primaryBorrowMint: plan.repayMint ?? existing?.primaryBorrowMint,
-        primaryCollateralMint: plan.collateralMint ?? existing?.primaryCollateralMint,
-        assets: plan.assets ?? existing?.assets,
+        ownerPubkey: target.ownerPubkey ?? existing?.ownerPubkey,
+        healthRatio: target.healthRatio ?? existing?.healthRatio,
+        healthRatioRaw: target.healthRatioRaw ?? existing?.healthRatioRaw,
+        borrowValueUsd: target.borrowValueUsd ?? existing?.borrowValueUsd,
+        collateralValueUsd: target.collateralValueUsd ?? existing?.collateralValueUsd,
+        liquidationEligible: target.liquidationEligible ?? existing?.liquidationEligible,
+        healthSource: target.healthSource ?? existing?.healthSource,
+        healthSourceUsed: target.healthSourceUsed ?? existing?.healthSourceUsed,
+        healthSourceVerified: target.healthSourceVerified ?? existing?.healthSourceVerified,
+        repayReservePubkey: target.repayReservePubkey ?? existing?.repayReservePubkey,
+        collateralReservePubkey: target.collateralReservePubkey ?? existing?.collateralReservePubkey,
+        primaryBorrowMint: target.primaryBorrowMint ?? existing?.primaryBorrowMint,
+        primaryCollateralMint: target.primaryCollateralMint ?? existing?.primaryCollateralMint,
+        assets: target.assets ?? existing?.assets,
+        ev: target.ev ?? existing?.ev,
+        hazard: target.hazard ?? existing?.hazard,
+        rankBucket: target.rankBucket ?? existing?.rankBucket,
+        forecast: target.forecast ?? existing?.forecast,
       });
     }
 
@@ -263,6 +330,34 @@ export class RealtimeForecastUpdater {
       if (!nextKeys.has(key)) this.decodedByKey.delete(key);
     }
 
-    this.orchestrator.refreshMapping(plans);
+    this.orchestrator.refreshMapping(
+      targets.map((target) => ({
+        key: target.key,
+        assets: target.assets,
+      })),
+    );
+  }
+
+  async refreshMappingFromQueue(plans: FlashloanPlan[]): Promise<void> {
+    await this.refreshMappingFromWatchTargets(
+      plans.map((plan) => ({
+        key: String(plan.key ?? ''),
+        obligationPubkey: String(plan.key ?? ''),
+        ownerPubkey: plan.ownerPubkey,
+        assets: plan.assets,
+        repayReservePubkey: plan.repayReservePubkey,
+        collateralReservePubkey: plan.collateralReservePubkey,
+        primaryBorrowMint: plan.repayMint,
+        primaryCollateralMint: plan.collateralMint,
+        borrowValueUsd: plan.amountUsd,
+        liquidationEligible: plan.liquidationEligible,
+        ev: plan.ev,
+        hazard: plan.hazard,
+      })),
+    );
+  }
+
+  async bootstrapQueueObligations(keys: string[]): Promise<void> {
+    await this.bootstrapWatchObligations(keys);
   }
 }

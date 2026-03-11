@@ -11,6 +11,7 @@ import { getConnection } from '../solana/connection.js';
 import { loadReserves, type ReserveCache } from '../cache/reserveCache.js';
 import { loadOracles, type OracleCache } from '../cache/oracleCache.js';
 import { logger } from '../observability/logger.js';
+import { loadShadowWatchTargets } from '../monitoring/shadowWatchlist.js';
 
 // Singleton guard to prevent double initialization
 let isInitialized = false;
@@ -32,9 +33,26 @@ function getEnvNum(key: string, def: number): number {
   return Number.isFinite(n) ? n : def;
 }
 
-function deriveObligationPubkeysFromQueue(): string[] {
-  const q = loadQueue();
-  return q.map(p => String(p.key)).filter(Boolean);
+function loadRealtimeWatchTargets() {
+  const shadowEnabled = (process.env.SHADOW_WATCH_ENABLED ?? 'true') !== 'false';
+  if (!shadowEnabled) {
+    const queueTargets = loadQueue().map((plan) => ({
+      key: String(plan.key),
+      obligationPubkey: String(plan.key),
+      ownerPubkey: plan.ownerPubkey,
+      assets: plan.assets,
+      repayReservePubkey: plan.repayReservePubkey,
+      collateralReservePubkey: plan.collateralReservePubkey,
+      primaryBorrowMint: plan.repayMint,
+      primaryCollateralMint: plan.collateralMint,
+      borrowValueUsd: plan.amountUsd,
+      liquidationEligible: plan.liquidationEligible,
+      ev: plan.ev,
+      hazard: plan.hazard,
+    }));
+    return { queueTargets, shadowOnlyTargets: [], allTargets: queueTargets };
+  }
+  return loadShadowWatchTargets();
 }
 
 async function deriveOraclePubkeysFromReserves(env: any): Promise<{ oraclePubkeys: string[]; reserveCache: ReserveCache; oracleCache: OracleCache }> {
@@ -74,8 +92,16 @@ async function initRealtime(): Promise<RealtimeForecastUpdater> {
       throw new Error('YELLOWSTONE_GRPC_URL is missing');
     }
 
-    const obligationPubkeys = deriveObligationPubkeysFromQueue();
-    logger.info({ count: obligationPubkeys.length }, 'Derived obligation pubkeys from queue');
+    const watchTargets = loadRealtimeWatchTargets();
+    const obligationPubkeys = watchTargets.allTargets.map((target) => target.obligationPubkey);
+    logger.info(
+      {
+        queueTargets: watchTargets.queueTargets.length,
+        shadowOnlyTargets: watchTargets.shadowOnlyTargets.length,
+        allWatchTargets: watchTargets.allTargets.length,
+      },
+      'Loaded realtime watch targets',
+    );
 
     const { oraclePubkeys, reserveCache, oracleCache } = await deriveOraclePubkeysFromReserves(env);
     logger.info({ count: oraclePubkeys.length }, 'Derived oracle pubkeys from reserves');
@@ -88,8 +114,8 @@ async function initRealtime(): Promise<RealtimeForecastUpdater> {
       reserveCache,
       oracleCache,
     });
-    updater.refreshMappingFromQueue(loadQueue());
-    await updater.bootstrapQueueObligations(obligationPubkeys);
+    await updater.refreshMappingFromWatchTargets(watchTargets.allTargets);
+    await updater.bootstrapWatchObligations(obligationPubkeys);
 
     const accountListener = new YellowstoneAccountListener({
       grpcUrl,
@@ -140,23 +166,33 @@ async function initRealtime(): Promise<RealtimeForecastUpdater> {
 }
 
 /**
- * Public API to reload watchlist from queue
- * Called after candidates/queue are rebuilt to update subscriptions
+ * Public API to reload watch targets after candidates/queue rebuild
  */
-export async function reloadWatchlistFromQueue(): Promise<void> {
-  const obligationPubkeys = deriveObligationPubkeysFromQueue();
-  logger.info({ count: obligationPubkeys.length }, 'Reloading obligation watchlist from queue');
+export async function reloadRealtimeWatchTargets(): Promise<void> {
+  const watchTargets = loadRealtimeWatchTargets();
+  const obligationPubkeys = watchTargets.allTargets.map((target) => target.obligationPubkey);
+  logger.info(
+    {
+      queueTargets: watchTargets.queueTargets.length,
+      shadowOnlyTargets: watchTargets.shadowOnlyTargets.length,
+      allWatchTargets: watchTargets.allTargets.length,
+    },
+    'Reloading realtime watch targets',
+  );
 
   if (accountListenerInstance) {
     accountListenerInstance.updateTargets(obligationPubkeys);
-    logger.info({ count: obligationPubkeys.length }, 'Account subscriptions reloaded');
+    logger.info({ allWatchTargets: obligationPubkeys.length }, 'Account subscriptions reloaded');
   }
-  
+
   if (realtimeUpdaterInstance) {
-    const queue = loadQueue();
-    realtimeUpdaterInstance.refreshMappingFromQueue(queue);
-    await realtimeUpdaterInstance.bootstrapQueueObligations(obligationPubkeys);
+    await realtimeUpdaterInstance.refreshMappingFromWatchTargets(watchTargets.allTargets);
+    await realtimeUpdaterInstance.bootstrapWatchObligations(obligationPubkeys);
   }
+}
+
+export async function reloadWatchlistFromQueue(): Promise<void> {
+  await reloadRealtimeWatchTargets();
 }
 
 export async function startBotStartupScheduler(): Promise<void> {
