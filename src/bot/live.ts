@@ -3,8 +3,8 @@ import { PublicKey } from '@solana/web3.js';
 import { pathToFileURL } from 'url';
 import { loadEnv } from '../config/env.js';
 import { logger } from '../observability/logger.js';
-import { runInitialPipeline } from '../pipeline/runInitialPipeline.js';
-import { startBotStartupScheduler, reloadRealtimeWatchTargets } from '../scheduler/botStartupScheduler.js';
+import { RuntimeCoordinator } from '../live/runtimeCoordinator.js';
+import { loadLiveRuntimeConfig } from '../live/runtimeConfig.js';
 
 function parseMintAllowlistCsv(s?: string): string[] | undefined {
   if (!s) return undefined;
@@ -34,7 +34,6 @@ function parseMintAllowlistCsv(s?: string): string[] | undefined {
 
 export async function startIntegratedLiveRunner(opts: {
   broadcast: boolean;
-  refreshIntervalMs: number;
 }): Promise<void> {
   console.log('╔════════════════════════════════════════════════╗');
   console.log('║  LIQSOL Bot - Professional Live Runner        ║');
@@ -89,9 +88,8 @@ export async function startIntegratedLiveRunner(opts: {
       : '  Execution allowlist: Disabled (all mints)'
   );
 
-  // Parse refresh interval
-  const refreshIntervalMs = opts.refreshIntervalMs;
-  console.log(`  Candidate Refresh: ${(refreshIntervalMs / 1000).toFixed(0)}s\n`);
+  const runtimeConfig = loadLiveRuntimeConfig();
+  console.log(`  Candidate Refresh: ${(runtimeConfig.rebuildIntervalMs / 1000).toFixed(0)}s\n`);
 
   // Set executor mode via env for scheduler
   if (broadcast) {
@@ -102,79 +100,21 @@ export async function startIntegratedLiveRunner(opts: {
     process.env.LIQSOL_BROADCAST = 'false';
   }
 
-  // Initial build: candidates + queue
-  console.log('[Live] Building initial candidates and queue...\n');
+  const coordinator = new RuntimeCoordinator(
+    { marketPubkey, programId, execAllowlistMints: execAllowlist },
+    {
+      rebuildIntervalMs: runtimeConfig.rebuildIntervalMs,
+      heartbeatIntervalMs: runtimeConfig.heartbeatIntervalMs,
+      tickDebounceMs: runtimeConfig.tickDebounceMs,
+      queueEmptyLogIntervalMs: runtimeConfig.queueEmptyLogIntervalMs,
+      promotionSummaryLogIntervalMs: runtimeConfig.promotionSummaryLogIntervalMs,
+      realtimeEnabled: runtimeConfig.realtimeEnabled,
+    },
+  );
 
-  try {
-    await runInitialPipeline({
-      marketPubkey,
-      programId,
-      execAllowlistMints: execAllowlist,
-      topN: Number(env.CAND_TOP ?? 50),
-      nearThreshold: Number(env.CAND_NEAR ?? 1.02),
-      flashloanMint: 'USDC',
-    });
-
-    console.log('\n[Live] ✅ Initial pipeline complete\n');
-  } catch (err) {
-    console.error('[Live] ❌ Failed to build initial candidates/queue:', err);
-    console.error('');
-    if (err instanceof Error) {
-      console.error(err.stack);
-    }
-    process.exit(1);
-  }
-
-  // Start scheduler with listeners (single initialization)
-  console.log('[Live] Starting scheduler with Yellowstone listeners...\n');
-
-  try {
-    // Start the scheduler (non-blocking, runs in background)
-    startBotStartupScheduler().catch((err) => {
-      console.error('[Live] Scheduler error:', err);
-      process.exit(1);
-    });
-  } catch (err) {
-    console.error('[Live] Failed to start scheduler:', err);
-    process.exit(1);
-  }
-
-  // Set up periodic candidate/queue refresh with mutex
-  console.log(`[Live] Setting up periodic refresh (${(refreshIntervalMs / 1000).toFixed(0)}s)...\n`);
-
-  let refreshInProgress = false; // Mutex to prevent overlapping refreshes
-
-  setInterval(async () => {
-    if (refreshInProgress) {
-      console.info('[Live] Refresh skipped: previous refresh still in progress');
-      return;
-    }
-    
-    refreshInProgress = true;
-    console.log('[Live] ═══ PERIODIC REFRESH START ═══');
-
-    try {
-      await runInitialPipeline({
-        marketPubkey,
-        programId,
-        execAllowlistMints: execAllowlist,
-        topN: Number(env.CAND_TOP ?? 50),
-        nearThreshold: Number(env.CAND_NEAR ?? 1.02),
-        flashloanMint: 'USDC',
-      });
-
-      // Reload broader realtime watch targets (queue + shadow watchlist)
-      await reloadRealtimeWatchTargets();
-
-      console.log('[Live] ✅ Periodic refresh complete');
-    } catch (err) {
-      console.error('[Live] ⚠️  Periodic refresh failed (will retry next cycle):', err);
-    } finally {
-      refreshInProgress = false;
-    }
-
-    console.log('[Live] ═══ PERIODIC REFRESH END ═══\n');
-  }, refreshIntervalMs);
+  console.log('[Live] Building initial candidates and queue via runtime coordinator...\n');
+  await coordinator.runPeriodicRebuild('live-startup');
+  await coordinator.start({ broadcast });
 
   logger.info('Live runner active - press Ctrl+C to stop');
 
@@ -191,10 +131,8 @@ export async function startIntegratedLiveRunner(opts: {
 }
 
 async function main() {
-  const env = loadEnv();
   await startIntegratedLiveRunner({
     broadcast: process.env.LIQSOL_BROADCAST === 'true',
-    refreshIntervalMs: Number(env.LIVE_CANDIDATE_REFRESH_INTERVAL_MS ?? 120000),
   });
 }
 

@@ -458,6 +458,7 @@ async function buildFullTransaction(
 interface ExecutorOpts {
   dry?: boolean;
   broadcast?: boolean;
+  queueEmptyLogIntervalMs?: number;
 }
 
 // ExecutorResult interface for consistent return type
@@ -488,6 +489,7 @@ export function buildExecutionResultEvent(
 
 // Tick mutex to prevent overlapping executor runs
 let tickInProgress = false;
+let lastQueueEmptyLogAtMs = 0;
 
 // Exported API for scheduler
 export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResult> {
@@ -540,7 +542,15 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
 
     const plans = loadPlans();
     if (!Array.isArray(plans) || plans.length === 0) {
-      console.log('No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
+      const queueEmptyLogIntervalMs = Math.max(
+        0,
+        Number(opts?.queueEmptyLogIntervalMs ?? process.env.LIVE_QUEUE_EMPTY_LOG_INTERVAL_MS ?? 30_000),
+      );
+      const now = Date.now();
+      if (now - lastQueueEmptyLogAtMs >= queueEmptyLogIntervalMs) {
+        console.log('No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
+        lastQueueEmptyLogAtMs = now;
+      }
       return { status: 'no-plans' };
     }
 

@@ -74,6 +74,15 @@ export const EnvSchema = z.object({
   SCHED_FORCE_INCLUDE_LIQUIDATABLE: z.string().optional().default('false'),
 
   // Live runner refresh interval
+  LIVE_REBUILD_INTERVAL_MS: z.string().optional().default('120000'),
+  LIVE_HEARTBEAT_INTERVAL_MS: z.string().optional().default('60000'),
+  LIVE_TICK_DEBOUNCE_MS: z.string().optional().default('200'),
+  LIVE_QUEUE_EMPTY_LOG_INTERVAL_MS: z.string().optional().default('30000'),
+  LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS: z.string().optional().default('10000'),
+  LIVE_REALTIME_ENABLED: z.string().optional().default('true'),
+  YELLOWSTONE_RECONNECT_BASE_MS: z.string().optional().default('1000'),
+  YELLOWSTONE_RECONNECT_MAX_MS: z.string().optional().default('30000'),
+  YELLOWSTONE_RESUBSCRIBE_SETTLE_MS: z.string().optional().default('250'),
   LIVE_CANDIDATE_REFRESH_INTERVAL_MS: z.string().optional().default('120000'),
   SHADOW_WATCH_ENABLED: z.string().optional().default('true'),
   SHADOW_WATCH_TOPK: z.string().optional().default('50'),

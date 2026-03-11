@@ -30,6 +30,19 @@ export interface ShadowPromotionResult {
   rejectedReasons: Record<string, number>;
 }
 
+export function buildShadowPromotionSummarySignature(result: ShadowPromotionResult): string {
+  return JSON.stringify({
+    considered: result.considered,
+    ranked: result.ranked,
+    queueEligible: result.queueEligible,
+    verifiedByKlend: result.verifiedByKlend,
+    admittedByKlend: result.admittedByKlend,
+    skippedByHealthyCooldown: result.skippedByHealthyCooldown,
+    enqueued: result.enqueued,
+    rejectedReasons: Object.entries(result.rejectedReasons).sort(([a], [b]) => a.localeCompare(b)),
+  });
+}
+
 const shadowPromotionHealthyCooldown = new Map<string, ShadowPromotionHealthyCooldownEntry>();
 
 type PromotionCandidate = ScoredObligation & {

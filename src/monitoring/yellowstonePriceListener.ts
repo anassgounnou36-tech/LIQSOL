@@ -5,28 +5,34 @@ import { logger } from '../observability/logger.js';
 import type { Duplex } from 'stream';
 
 export interface PriceUpdateEvent {
-  oraclePubkey: string; // oracle account pubkey updated
+  oraclePubkey: string;
   slot: number;
-  mint?: string; // resolved externally from oracle→mint mapping
+  mint?: string;
   owner?: string;
   dataBase64?: string;
   writeVersion?: number;
 }
 
 export interface PriceListenerOptions {
-  grpcUrl: string; // YELLOWSTONE_GRPC_URL
-  authToken?: string; // YELLOWSTONE_X_TOKEN (optional)
-  oraclePubkeys: string[]; // explicit oracle pubkeys to subscribe to
-  debounceMs?: number; // 100–250ms
+  grpcUrl: string;
+  authToken?: string;
+  oraclePubkeys: string[];
+  debounceMs?: number;
   reconnectMs?: number;
+  reconnectBaseMs?: number;
+  reconnectMaxMs?: number;
+  resubscribeSettleMs?: number;
 }
 
-// CommitmentLevel enum values from @triton-one/yellowstone-grpc
 const CommitmentLevel = {
   PROCESSED: 0,
   CONFIRMED: 1,
   FINALIZED: 2,
 } as const;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 export class YellowstonePriceListener extends EventEmitter {
   private opts: PriceListenerOptions;
@@ -34,14 +40,15 @@ export class YellowstonePriceListener extends EventEmitter {
   private reconnectCount = 0;
   private messagesReceived = 0;
   private lastMessageAt = 0;
-  
-  // Dedupe eviction: last (slot, writeVersion) per oracle pubkey (no memory leak)
   private lastSeenByOracle = new Map<string, { slot: number; writeVersion: number }>();
-  
   private pending: PriceUpdateEvent[] = [];
   private debounceTimer: NodeJS.Timeout | null = null;
   private client: YellowstoneClientInstance | null = null;
   private stream: Duplex | null = null;
+  private sessionHasData = false;
+  private sessionId = 0;
+  private plannedRestart = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: PriceListenerOptions) {
     super();
@@ -51,21 +58,19 @@ export class YellowstonePriceListener extends EventEmitter {
   async start(): Promise<void> {
     this.running = true;
     this.emit('ready', { endpoint: this.opts.grpcUrl, tracked: this.opts.oraclePubkeys.length });
-    await this.subscribe();
+    await this.subscribe('start');
   }
 
-  async subscribe(): Promise<void> {
+  private async subscribe(reason: string): Promise<void> {
     if (!this.running) return;
     const { grpcUrl, authToken, oraclePubkeys } = this.opts;
+    this.cleanupReconnectTimer();
+    this.cleanupStream();
+    this.sessionId += 1;
+    this.sessionHasData = false;
 
     try {
-      // Clean up existing stream before creating new one
-      this.cleanupStream();
-
-      // Create Yellowstone client
       this.client = await createYellowstoneClient(grpcUrl, authToken ?? '');
-
-      // Create subscription request with explicit oracle pubkeys
       const request = {
         commitment: CommitmentLevel.CONFIRMED,
         accounts: {
@@ -82,92 +87,65 @@ export class YellowstonePriceListener extends EventEmitter {
         entry: {},
       };
 
-      logger.debug({ oracleCount: oraclePubkeys.length }, 'Subscribing to explicit oracle pubkeys');
-
       this.stream = await this.client.subscribe();
-
       this.stream.on('data', (data: any) => {
         if (!this.running) return;
-
-        // Handle account updates (oracle price changes)
         if (data.account) {
           const accountInfo = data.account.account;
           if (!accountInfo) return;
-
           try {
-            const pubkeyBytes = Buffer.from(accountInfo.pubkey);
-            const pubkey = new PublicKey(pubkeyBytes);
+            const oraclePubkey = new PublicKey(Buffer.from(accountInfo.pubkey)).toString();
             const slot = Number(data.account.slot ?? 0);
-
-            let owner: string | undefined;
-            let dataBase64: string | undefined;
             const ownerBytes = accountInfo.owner ? Buffer.from(accountInfo.owner) : undefined;
-            if (ownerBytes && ownerBytes.length > 0) {
-              owner = new PublicKey(ownerBytes).toString();
-            }
+            const owner = ownerBytes && ownerBytes.length > 0 ? new PublicKey(ownerBytes).toString() : undefined;
             const dataBytes = accountInfo.data ? Buffer.from(accountInfo.data) : undefined;
-            if (dataBytes && dataBytes.length > 0) {
-              dataBase64 = dataBytes.toString('base64');
-            }
+            const dataBase64 = dataBytes && dataBytes.length > 0 ? dataBytes.toString('base64') : undefined;
             const writeVersionRaw = Number(data.account.writeVersion ?? accountInfo.writeVersion);
             const writeVersion = Number.isFinite(writeVersionRaw) ? writeVersionRaw : undefined;
-
-            this.onMessage(pubkey.toString(), { slot, owner, dataBase64, writeVersion });
+            this.onMessage(oraclePubkey, { slot, owner, dataBase64, writeVersion });
           } catch (err) {
             logger.error({ err }, 'Error processing oracle update');
           }
         }
-
-        // Handle ping updates (keep-alive)
-        if (data.ping) {
-          logger.debug('Received ping from Yellowstone gRPC');
-        }
       });
 
       this.stream.on('error', (err: Error) => {
-        logger.error({ err }, 'Yellowstone price stream error');
-        this.onError(err);
+        this.handleStreamFailure('error', err);
       });
-
       this.stream.on('end', () => {
-        logger.info('Yellowstone price stream ended');
-        this.reconnect();
+        this.handleStreamFailure('end');
       });
-
       this.stream.on('close', () => {
-        logger.info('Yellowstone price stream closed');
-        this.reconnect();
+        this.handleStreamFailure('close');
       });
 
-      // Write subscription request
       this.stream.write(request);
-
       this.emit('subscriptions-started', { count: oraclePubkeys.length });
-      logger.info({ count: oraclePubkeys.length }, 'Oracle subscriptions started');
-    } catch (e) {
-      this.onError(e as Error);
+      logger.info(
+        { listener: 'price', reason, targetCount: oraclePubkeys.length, sessionId: this.sessionId },
+        'Yellowstone price session started',
+      );
+    } catch (err) {
+      this.handleStreamFailure('error', err as Error);
     }
   }
 
-  private onMessage(oraclePubkey: string, msg: { slot: number; owner?: string; dataBase64?: string; writeVersion?: number }) {
+  private onMessage(
+    oraclePubkey: string,
+    msg: { slot: number; owner?: string; dataBase64?: string; writeVersion?: number },
+  ): void {
     if (!this.running) return;
     const slot = Number(msg.slot ?? 0);
-    
-    // Dedupe eviction: ignore stale/duplicate updates by (slot, writeVersion)
     const writeVersion = Number(msg.writeVersion ?? -1);
     const last = this.lastSeenByOracle.get(oraclePubkey);
-    const isNewer =
-      !last ||
-      slot > last.slot ||
-      (slot === last.slot && writeVersion > last.writeVersion);
+    const isNewer = !last || slot > last.slot || (slot === last.slot && writeVersion > last.writeVersion);
     if (!isNewer) return;
     this.lastSeenByOracle.set(oraclePubkey, { slot, writeVersion });
 
-    // Reset reconnect backoff after first successful message
-    if (this.messagesReceived === 0) {
+    if (!this.sessionHasData) {
+      this.sessionHasData = true;
       this.reconnectCount = 0;
     }
-
     this.messagesReceived++;
     this.lastMessageAt = Date.now();
     this.pending.push({
@@ -180,7 +158,7 @@ export class YellowstonePriceListener extends EventEmitter {
     this.coalesce();
   }
 
-  private coalesce() {
+  private coalesce(): void {
     const debounceMs = this.opts.debounceMs ?? 150;
     if (this.debounceTimer) return;
     this.debounceTimer = setTimeout(() => {
@@ -195,35 +173,76 @@ export class YellowstonePriceListener extends EventEmitter {
     }, debounceMs);
   }
 
-  private onError(err: Error) {
-    this.emit('error', err);
-    this.reconnect();
+  private handleStreamFailure(kind: 'error' | 'end' | 'close', err?: Error): void {
+    if (!this.running) return;
+    if (this.plannedRestart) return;
+    if (kind === 'error' && err) {
+      this.emit('error', err);
+    }
+    this.scheduleReconnect();
   }
 
-  private cleanupStream() {
-    // Best-effort destroy/close old stream to avoid leaks
+  private scheduleReconnect(): void {
+    if (!this.running) return;
+    this.cleanupReconnectTimer();
+    const base = this.opts.reconnectBaseMs ?? this.opts.reconnectMs ?? 1_000;
+    const max = this.opts.reconnectMaxMs ?? 30_000;
+    const delayMs = Math.min(max, base * Math.pow(2, this.reconnectCount));
+    this.reconnectCount++;
+    logger.info(
+      { listener: 'price', reconnectCount: this.reconnectCount, delayMs, sessionId: this.sessionId },
+      'Yellowstone listener reconnect scheduled',
+    );
+    this.cleanupStream();
+    this.reconnectTimer = setTimeout(() => {
+      void this.subscribe('reconnect');
+    }, delayMs);
+  }
+
+  private cleanupReconnectTimer(): void {
+    if (!this.reconnectTimer) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  private cleanupStream(): void {
+    const stream = this.stream;
+    this.stream = null;
     try {
-      if (this.stream) {
-        if (typeof this.stream.destroy === 'function') {
-          this.stream.destroy();
+      if (stream) {
+        stream.removeAllListeners();
+        if (typeof stream.destroy === 'function') {
+          stream.destroy();
         }
-        this.stream = null;
       }
     } catch {
       // ignore cleanup errors
     }
   }
 
-  private reconnect() {
+  updateTargets(oraclePubkeys: string[]): void {
+    this.opts.oraclePubkeys = oraclePubkeys;
     if (!this.running) return;
-    const base = this.opts.reconnectMs ?? 1000;
-    // Exponential backoff capped to 30s (increment happens before delay calculation)
-    const delay = Math.min(30000, base * Math.pow(2, this.reconnectCount));
-    this.reconnectCount++;
-    logger.info({ reconnectCount: this.reconnectCount, delayMs: delay }, 'Reconnecting price listener');
-    // Cleanup before resubscribe
+    void this.restartPlanned();
+  }
+
+  private async restartPlanned(): Promise<void> {
+    this.plannedRestart = true;
+    this.cleanupReconnectTimer();
     this.cleanupStream();
-    setTimeout(() => void this.subscribe().catch((e) => this.onError(e as Error)), delay);
+    const targetCount = this.opts.oraclePubkeys.length;
+    const nextSessionId = this.sessionId + 1;
+    logger.info(
+      { listener: 'price', targetCount, sessionId: nextSessionId, reason: 'planned-restart' },
+      'Yellowstone listener planned restart',
+    );
+    try {
+      await sleep(this.opts.resubscribeSettleMs ?? 250);
+      if (!this.running) return;
+      await this.subscribe('planned-restart');
+    } finally {
+      this.plannedRestart = false;
+    }
   }
 
   async stop(): Promise<void> {
@@ -232,12 +251,12 @@ export class YellowstonePriceListener extends EventEmitter {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.pending = [];
     this.lastSeenByOracle.clear();
+    this.cleanupReconnectTimer();
     this.cleanupStream();
     this.client = null;
   }
 
-  // Test injection helper: simulate a price update arriving from stream
-  simulatePriceUpdate(ev: PriceUpdateEvent & { price?: number; prevPrice?: number; pctChange?: number }) {
+  simulatePriceUpdate(ev: PriceUpdateEvent & { price?: number; prevPrice?: number; pctChange?: number }): void {
     if (!this.running) return;
     const pct =
       ev.prevPrice && ev.prevPrice > 0 && ev.price

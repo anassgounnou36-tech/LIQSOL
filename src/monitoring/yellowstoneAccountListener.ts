@@ -15,19 +15,25 @@ export interface AccountUpdateEvent {
 }
 
 export interface AccountListenerOptions {
-  grpcUrl: string; // YELLOWSTONE_GRPC_URL
-  authToken?: string; // YELLOWSTONE_X_TOKEN (optional)
-  accountPubkeys: string[]; // explicit obligation/reserve pubkeys to subscribe to
-  reconnectMs?: number; // base reconnect delay
-  debounceMs?: number; // burst coalescing window (100–250ms)
+  grpcUrl: string;
+  authToken?: string;
+  accountPubkeys: string[];
+  reconnectMs?: number;
+  reconnectBaseMs?: number;
+  reconnectMaxMs?: number;
+  resubscribeSettleMs?: number;
+  debounceMs?: number;
 }
 
-// CommitmentLevel enum values from @triton-one/yellowstone-grpc
 const CommitmentLevel = {
   PROCESSED: 0,
   CONFIRMED: 1,
   FINALIZED: 2,
 } as const;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 export class YellowstoneAccountListener extends EventEmitter {
   private opts: AccountListenerOptions;
@@ -35,14 +41,15 @@ export class YellowstoneAccountListener extends EventEmitter {
   private reconnectCount = 0;
   private messagesReceived = 0;
   private lastMessageAt = 0;
-  
-  // Dedupe eviction: track last processed (slot, writeVersion) per pubkey (no memory leak)
   private lastSeenByPubkey = new Map<string, { slot: number; writeVersion: number }>();
-  
   private debounceTimer: NodeJS.Timeout | null = null;
   private pendingEvents: AccountUpdateEvent[] = [];
   private client: YellowstoneClientInstance | null = null;
   private stream: Duplex | null = null;
+  private sessionHasData = false;
+  private sessionId = 0;
+  private plannedRestart = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: AccountListenerOptions) {
     super();
@@ -52,21 +59,19 @@ export class YellowstoneAccountListener extends EventEmitter {
   async start(): Promise<void> {
     this.running = true;
     this.emit('ready', { endpoint: this.opts.grpcUrl, tracked: this.opts.accountPubkeys.length });
-    await this.subscribe();
+    await this.subscribe('start');
   }
 
-  async subscribe(): Promise<void> {
+  private async subscribe(reason: string): Promise<void> {
     if (!this.running) return;
     const { grpcUrl, authToken, accountPubkeys } = this.opts;
+    this.cleanupReconnectTimer();
+    this.cleanupStream();
+    this.sessionId += 1;
+    this.sessionHasData = false;
 
     try {
-      // Clean up existing stream before creating new one
-      this.cleanupStream();
-
-      // Create Yellowstone client
       this.client = await createYellowstoneClient(grpcUrl, authToken ?? '');
-
-      // Create subscription request with explicit account pubkeys
       const request = {
         commitment: CommitmentLevel.CONFIRMED,
         accounts: {
@@ -83,109 +88,75 @@ export class YellowstoneAccountListener extends EventEmitter {
         entry: {},
       };
 
-      logger.debug({ accountCount: accountPubkeys.length }, 'Subscribing to explicit account pubkeys');
-
       this.stream = await this.client.subscribe();
-
       this.stream.on('data', (data: any) => {
         if (!this.running) return;
-
-        // Handle account updates
         if (data.account) {
           const accountInfo = data.account.account;
           if (!accountInfo) return;
-
           try {
-            const pubkeyBytes = Buffer.from(accountInfo.pubkey);
-            const pubkey = new PublicKey(pubkeyBytes);
+            const pubkey = new PublicKey(Buffer.from(accountInfo.pubkey)).toString();
             const slot = Number(data.account.slot ?? 0);
-
-            let owner: string | undefined;
-            let dataBase64: string | undefined;
             const ownerBytes = accountInfo.owner ? Buffer.from(accountInfo.owner) : undefined;
-            if (ownerBytes && ownerBytes.length > 0) {
-              owner = new PublicKey(ownerBytes).toString();
-            }
+            const owner = ownerBytes && ownerBytes.length > 0 ? new PublicKey(ownerBytes).toString() : undefined;
             const dataBytes = accountInfo.data ? Buffer.from(accountInfo.data) : undefined;
-            if (dataBytes && dataBytes.length > 0) {
-              dataBase64 = dataBytes.toString('base64');
-            }
+            const dataBase64 = dataBytes && dataBytes.length > 0 ? dataBytes.toString('base64') : undefined;
             const writeVersionRaw = Number(data.account.writeVersion ?? accountInfo.writeVersion);
             const writeVersion = Number.isFinite(writeVersionRaw) ? writeVersionRaw : undefined;
-
-            this.onMessage(pubkey.toString(), { slot, owner, dataBase64, writeVersion });
+            this.onMessage(pubkey, { slot, owner, dataBase64, writeVersion });
           } catch (err) {
             logger.error({ err }, 'Error processing account update');
           }
         }
-
-        // Handle ping updates (keep-alive)
-        if (data.ping) {
-          logger.debug('Received ping from Yellowstone gRPC');
-        }
       });
 
       this.stream.on('error', (err: Error) => {
-        logger.error({ err }, 'Yellowstone account stream error');
-        this.onError(err);
+        this.handleStreamFailure('error', err);
       });
-
       this.stream.on('end', () => {
-        logger.info('Yellowstone account stream ended');
-        this.reconnect();
+        this.handleStreamFailure('end');
       });
-
       this.stream.on('close', () => {
-        logger.info('Yellowstone account stream closed');
-        this.reconnect();
+        this.handleStreamFailure('close');
       });
 
-      // Write subscription request
       this.stream.write(request);
-
       this.emit('subscriptions-started', { count: accountPubkeys.length });
-      logger.info({ count: accountPubkeys.length }, 'Account subscriptions started');
-    } catch (e) {
-      this.onError(e as Error);
+      logger.info(
+        { listener: 'account', reason, targetCount: accountPubkeys.length, sessionId: this.sessionId },
+        'Yellowstone account session started',
+      );
+    } catch (err) {
+      this.handleStreamFailure('error', err as Error);
     }
   }
 
-  private onMessage(pubkey: string, msg: { slot: number; owner?: string; dataBase64?: string; writeVersion?: number; before?: any; after?: any }) {
+  private onMessage(pubkey: string, msg: { slot: number; owner?: string; dataBase64?: string; writeVersion?: number }) {
     if (!this.running) return;
     const slot = Number(msg.slot ?? 0);
-    
-    // Dedupe eviction: ignore stale/duplicate updates by (slot, writeVersion)
     const writeVersion = Number(msg.writeVersion ?? -1);
     const last = this.lastSeenByPubkey.get(pubkey);
-    const isNewer =
-      !last ||
-      slot > last.slot ||
-      (slot === last.slot && writeVersion > last.writeVersion);
+    const isNewer = !last || slot > last.slot || (slot === last.slot && writeVersion > last.writeVersion);
     if (!isNewer) return;
     this.lastSeenByPubkey.set(pubkey, { slot, writeVersion });
 
-    // Reset reconnect backoff after first successful message
-    if (this.messagesReceived === 0) {
+    if (!this.sessionHasData) {
+      this.sessionHasData = true;
       this.reconnectCount = 0;
     }
-
     this.messagesReceived++;
     this.lastMessageAt = Date.now();
-
-    const ev: AccountUpdateEvent = {
+    this.pendingEvents.push({
       pubkey,
       slot,
       owner: msg.owner,
       dataBase64: msg.dataBase64,
       writeVersion: msg.writeVersion,
-      before: msg.before,
-      after: msg.after,
-    };
-    this.pendingEvents.push(ev);
+    });
     this.coalesce();
   }
 
-  private coalesce() {
+  private coalesce(): void {
     const debounceMs = this.opts.debounceMs ?? 150;
     if (this.debounceTimer) return;
     this.debounceTimer = setTimeout(() => {
@@ -200,43 +171,76 @@ export class YellowstoneAccountListener extends EventEmitter {
     }, debounceMs);
   }
 
-  private onError(err: Error) {
-    this.emit('error', err);
-    this.reconnect();
+  private handleStreamFailure(kind: 'error' | 'end' | 'close', err?: Error): void {
+    if (!this.running) return;
+    if (this.plannedRestart) return;
+    if (kind === 'error' && err) {
+      this.emit('error', err);
+    }
+    this.scheduleReconnect();
   }
 
-  private cleanupStream() {
-    // Best-effort destroy/close old stream to avoid leaks
+  private scheduleReconnect(): void {
+    if (!this.running) return;
+    this.cleanupReconnectTimer();
+    const base = this.opts.reconnectBaseMs ?? this.opts.reconnectMs ?? 1_000;
+    const max = this.opts.reconnectMaxMs ?? 30_000;
+    const delayMs = Math.min(max, base * Math.pow(2, this.reconnectCount));
+    this.reconnectCount++;
+    logger.info(
+      { listener: 'account', reconnectCount: this.reconnectCount, delayMs, sessionId: this.sessionId },
+      'Yellowstone listener reconnect scheduled',
+    );
+    this.cleanupStream();
+    this.reconnectTimer = setTimeout(() => {
+      void this.subscribe('reconnect');
+    }, delayMs);
+  }
+
+  private cleanupReconnectTimer(): void {
+    if (!this.reconnectTimer) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  private cleanupStream(): void {
+    const stream = this.stream;
+    this.stream = null;
     try {
-      if (this.stream) {
-        if (typeof this.stream.destroy === 'function') {
-          this.stream.destroy();
+      if (stream) {
+        stream.removeAllListeners();
+        if (typeof stream.destroy === 'function') {
+          stream.destroy();
         }
-        this.stream = null;
       }
     } catch {
       // ignore cleanup errors
     }
   }
 
-  private reconnect() {
-    if (!this.running) return;
-    const base = this.opts.reconnectMs ?? 1000;
-    // Exponential backoff capped to 30s (increment happens before delay calculation)
-    const delay = Math.min(30000, base * Math.pow(2, this.reconnectCount));
-    this.reconnectCount++;
-    logger.info({ reconnectCount: this.reconnectCount, delayMs: delay }, 'Reconnecting account listener');
-    // Cleanup before resubscribe
-    this.cleanupStream();
-    setTimeout(() => void this.subscribe().catch((e) => this.onError(e as Error)), delay);
-  }
-
-  // Public API to update account targets and resubscribe
   updateTargets(accountPubkeys: string[]): void {
     this.opts.accountPubkeys = accountPubkeys;
-    logger.info({ count: accountPubkeys.length }, 'Updating account targets and resubscribing');
-    // Resubscribe using the updated targets (cleanup is handled in subscribe)
-    void this.subscribe();
+    if (!this.running) return;
+    void this.restartPlanned();
+  }
+
+  private async restartPlanned(): Promise<void> {
+    this.plannedRestart = true;
+    this.cleanupReconnectTimer();
+    this.cleanupStream();
+    const targetCount = this.opts.accountPubkeys.length;
+    const nextSessionId = this.sessionId + 1;
+    logger.info(
+      { listener: 'account', targetCount, sessionId: nextSessionId, reason: 'planned-restart' },
+      'Yellowstone listener planned restart',
+    );
+    try {
+      await sleep(this.opts.resubscribeSettleMs ?? 250);
+      if (!this.running) return;
+      await this.subscribe('planned-restart');
+    } finally {
+      this.plannedRestart = false;
+    }
   }
 
   async stop(): Promise<void> {
@@ -245,12 +249,12 @@ export class YellowstoneAccountListener extends EventEmitter {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.pendingEvents = [];
     this.lastSeenByPubkey.clear();
+    this.cleanupReconnectTimer();
     this.cleanupStream();
     this.client = null;
   }
 
-  // Test injection helper: simulate an account update arriving from stream
-  simulateAccountUpdate(ev: AccountUpdateEvent) {
+  simulateAccountUpdate(ev: AccountUpdateEvent): void {
     if (!this.running) return;
     this.emit('account-update', ev);
   }
