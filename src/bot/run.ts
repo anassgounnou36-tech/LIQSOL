@@ -78,21 +78,9 @@ async function main() {
   // Start integrated live runner (snapshot + candidates + queue + scheduler/listeners)
   await startIntegratedLiveRunner({
     broadcast: opts.broadcast ?? false,
-    refreshIntervalMs: Number(process.env.LIVE_CANDIDATE_REFRESH_INTERVAL_MS ?? 120000),
   });
   
   logger.info('Bot running - press Ctrl+C to stop');
-  
-  // Keep process alive
-  process.on('SIGINT', () => {
-    console.log('\n[Bot] Shutting down gracefully...');
-    process.exit(0);
-  });
-  
-  process.on('SIGTERM', () => {
-    console.log('\n[Bot] Shutting down gracefully...');
-    process.exit(0);
-  });
 }
 
 main().catch(err => {

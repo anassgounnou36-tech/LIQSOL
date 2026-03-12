@@ -24,6 +24,7 @@ import type { TxSendTransport } from './broadcastRetry.js';
 import type { BotEvent } from '../observability/botTelemetry.js';
 import { emitBotEvent } from '../observability/botTelemetry.js';
 import { maybeNotifyForBotEvent } from '../notify/notificationRouter.js';
+import { logger } from '../observability/logger.js';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
@@ -38,6 +39,28 @@ const obligationHealthyCooldown = new Map<string, number>(); // planKey -> absol
 const klendHealthyCooldown = new Map<string, KlendHealthyCooldownEntry>();
 let presubmitterSingleton: Presubmitter | undefined;
 let executorLutWarmupAttempted = false;
+let lastExecutorThresholdSignature: string | null = null;
+
+function buildExecutorThresholdSnapshot(env: ReturnType<typeof loadEnv>) {
+  return {
+    EXEC_MIN_EV: Number(env.EXEC_MIN_EV ?? 0),
+    EXEC_MAX_TTL_MIN: Number(env.EXEC_MAX_TTL_MIN ?? 0),
+    EXEC_MIN_FEE_PAYER_SOL: Number(env.EXEC_MIN_FEE_PAYER_SOL ?? 0),
+    TTL_GRACE_MS: Number(env.TTL_GRACE_MS ?? 0),
+    EXEC_READY_TTL_MAX_MIN: Number(env.EXEC_READY_TTL_MAX_MIN ?? 0),
+    EXEC_EARLY_GRACE_MS: Number(env.EXEC_EARLY_GRACE_MS ?? 0),
+    TTL_UNKNOWN_PASSES: String(env.TTL_UNKNOWN_PASSES) === 'true',
+    SCHED_FORCE_INCLUDE_LIQUIDATABLE: String(env.SCHED_FORCE_INCLUDE_LIQUIDATABLE) === 'true',
+  };
+}
+
+function logExecutorThresholdsIfChanged(env: ReturnType<typeof loadEnv>): void {
+  const snapshot = buildExecutorThresholdSnapshot(env);
+  const sig = JSON.stringify(snapshot);
+  if (sig === lastExecutorThresholdSignature) return;
+  lastExecutorThresholdSignature = sig;
+  logger.info({ executorFilters: snapshot }, '[Executor] Filter thresholds');
+}
 
 function dedupeLookupTables(
   lookupTables: Array<AddressLookupTableAccount | undefined>
@@ -458,6 +481,7 @@ async function buildFullTransaction(
 interface ExecutorOpts {
   dry?: boolean;
   broadcast?: boolean;
+  queueEmptyLogIntervalMs?: number;
 }
 
 // ExecutorResult interface for consistent return type
@@ -528,19 +552,10 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
     const warmupTopKRaw = Number(env.EXECUTOR_LUT_WARMUP_TOPK ?? DEFAULT_EXECUTOR_LUT_WARMUP_TOPK);
     const warmupTopK = Number.isFinite(warmupTopKRaw) && warmupTopKRaw >= 0 ? warmupTopKRaw : DEFAULT_EXECUTOR_LUT_WARMUP_TOPK;
 
-    console.log('[Executor] Filter thresholds:');
-    console.log(`  EXEC_MIN_EV: ${minEv}`);
-    console.log(`  EXEC_MAX_TTL_MIN: ${maxTtlMin}`);
-    console.log(`  EXEC_MIN_FEE_PAYER_SOL: ${Number(env.EXEC_MIN_FEE_PAYER_SOL ?? 0.05)}`);
-    console.log(`  TTL_GRACE_MS: ${ttlGraceMs}`);
-    console.log(`  EXEC_READY_TTL_MAX_MIN: ${execReadyTtlMaxMin}`);
-    console.log(`  EXEC_EARLY_GRACE_MS: ${execEarlyGraceMs}`);
-    console.log(`  TTL_UNKNOWN_PASSES: ${ttlUnknownPasses}`);
-    console.log(`  SCHED_FORCE_INCLUDE_LIQUIDATABLE: ${forceIncludeLiquidatable}`);
+    logExecutorThresholdsIfChanged(env);
 
     const plans = loadPlans();
     if (!Array.isArray(plans) || plans.length === 0) {
-      console.log('No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
       return { status: 'no-plans' };
     }
 

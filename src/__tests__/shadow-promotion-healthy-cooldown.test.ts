@@ -31,6 +31,17 @@ describe('shadow promotion healthy cooldown helpers', () => {
     expect(active).toBeDefined();
   });
 
+  it('same key and same anchor is not skipped after cooldown expiry', () => {
+    const map = new Map();
+    const key = 'obligation-B-expired';
+    const nowMs = 5_000;
+    const anchorMs = getShadowPromotionAnchorMs({ predictedLiquidationAtMs: 42_000 });
+    setShadowPromotionHealthyCooldown(map, key, anchorMs, nowMs, 3_000, 1.02);
+
+    const active = shouldSkipForShadowPromotionHealthyCooldown(map, key, anchorMs, nowMs + 3_001);
+    expect(active).toBeUndefined();
+  });
+
   it('same key with changed anchor is not skipped', () => {
     const map = new Map();
     const key = 'obligation-C';

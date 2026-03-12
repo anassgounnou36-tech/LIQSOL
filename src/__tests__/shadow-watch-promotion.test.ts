@@ -11,12 +11,15 @@ const mocks = vi.hoisted(() => ({
   emitBotEvent: vi.fn(),
   maybeNotifyForBotEvent: vi.fn(),
   getKlendSdkVerifier: vi.fn(),
+  loggerInfo: vi.fn(),
+  loggerWarn: vi.fn(),
 }));
 const envState = vi.hoisted(() => ({
   SHADOW_PROMOTION_KLEND_VERIFY_ENABLED: 'true',
   SHADOW_PROMOTION_KLEND_VERIFY_TOPK: '5',
   SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN: '15',
   SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS: '0',
+  LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS: '10000',
 }));
 
 vi.mock('../config/env.js', () => ({
@@ -43,6 +46,7 @@ vi.mock('../config/env.js', () => ({
     SHADOW_PROMOTION_KLEND_VERIFY_TOPK: envState.SHADOW_PROMOTION_KLEND_VERIFY_TOPK,
     SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN: envState.SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN,
     SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS: envState.SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS,
+    LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS: envState.LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS,
     LIQSOL_RECOMPUTED_VERIFY_TTL_MS: '15000',
     RPC_PRIMARY: 'http://rpc.local',
   })),
@@ -94,6 +98,15 @@ vi.mock('../engine/klendSdkVerifier.js', () => ({
   getKlendSdkVerifier: mocks.getKlendSdkVerifier,
 }));
 
+vi.mock('../observability/logger.js', () => ({
+  logger: {
+    info: mocks.loggerInfo,
+    warn: mocks.loggerWarn,
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
 import { promoteWatchedCandidatesToQueue } from '../monitoring/shadowWatchPromotion.js';
 
 function makeCandidate(overrides: Partial<CandidateLike> = {}): CandidateLike {
@@ -127,6 +140,7 @@ describe('promoteWatchedCandidatesToQueue', () => {
     envState.SHADOW_PROMOTION_KLEND_VERIFY_TOPK = '5';
     envState.SHADOW_PROMOTION_KLEND_VERIFY_MAX_TTL_MIN = '15';
     envState.SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS = '0';
+    envState.LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS = '10000';
     mocks.loadQueue.mockReset();
     mocks.enqueuePlans.mockReset();
     mocks.selectCandidates.mockReset();
@@ -136,6 +150,8 @@ describe('promoteWatchedCandidatesToQueue', () => {
     mocks.emitBotEvent.mockReset();
     mocks.maybeNotifyForBotEvent.mockReset();
     mocks.getKlendSdkVerifier.mockReset();
+    mocks.loggerInfo.mockReset();
+    mocks.loggerWarn.mockReset();
 
     mocks.loadQueue.mockReturnValue([]);
     mocks.selectCandidates.mockImplementation((candidates) => candidates);
@@ -308,6 +324,57 @@ describe('promoteWatchedCandidatesToQueue', () => {
     expect(first.rejectedReasons.shadowPromotionKlendHealthy).toBe(1);
     expect(second.skippedByHealthyCooldown).toBe(1);
     expect(second.rejectedReasons.shadowPromotionHealthyCooldown).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it('collapses repeated cooldown-skip chatter and emits cooldown summary on state change/throttle', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-10T00:00:00.000Z'));
+    envState.SHADOW_PROMOTION_KLEND_HEALTHY_COOLDOWN_MS = '15000';
+    envState.LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS = '10000';
+    const verify = vi.fn().mockResolvedValue({
+      ok: true,
+      healthRatioSdk: 1.02,
+      healthRatioSdkRaw: 1.02,
+    });
+    mocks.getKlendSdkVerifier.mockReturnValue({ verify });
+
+    const candidatesByKey = new Map([
+      ['k-cooldown-agg', makeCandidate({
+        key: 'k-cooldown-agg',
+        obligationPubkey: 'k-cooldown-agg',
+        rankBucket: 'near-ready',
+        forecast: { ttlMinutes: 5 },
+        createdAtMs: 2222,
+      })],
+    ]);
+
+    await promoteWatchedCandidatesToQueue({ keys: ['k-cooldown-agg'], candidatesByKey });
+    await promoteWatchedCandidatesToQueue({ keys: ['k-cooldown-agg'], candidatesByKey });
+    await promoteWatchedCandidatesToQueue({ keys: ['k-cooldown-agg'], candidatesByKey });
+
+    const admissionHealthyLogs = mocks.loggerInfo.mock.calls.filter(
+      ([message]) => typeof message === 'string' && message.includes('klend-admission') && message.includes('admitted=false reason=healthy'),
+    );
+    expect(admissionHealthyLogs.length).toBeGreaterThanOrEqual(1);
+
+    const cooldownSkipLogs = mocks.loggerInfo.mock.calls.filter(
+      ([message]) => typeof message === 'string' && message.includes('[ShadowPromotion] cooldown-skip'),
+    );
+    expect(cooldownSkipLogs).toHaveLength(1);
+
+    const summaryLogsBeforeThrottle = mocks.loggerInfo.mock.calls.filter(
+      ([message]) => typeof message === 'string' && message.includes('[ShadowPromotion] cooldown-summary'),
+    );
+    expect(summaryLogsBeforeThrottle.length).toBeGreaterThanOrEqual(2);
+
+    await vi.advanceTimersByTimeAsync(10001);
+    await promoteWatchedCandidatesToQueue({ keys: ['k-cooldown-agg'], candidatesByKey });
+
+    const summaryLogsAfterThrottle = mocks.loggerInfo.mock.calls.filter(
+      ([message]) => typeof message === 'string' && message.includes('[ShadowPromotion] cooldown-summary'),
+    );
+    expect(summaryLogsAfterThrottle.length).toBeGreaterThan(summaryLogsBeforeThrottle.length);
     vi.useRealTimers();
   });
 });

@@ -14,7 +14,7 @@ import { buildPlanAwareEvContext, type PlanAwareEvContext } from '../predict/evC
 import { buildPairAwareTtlContext, type PairAwareTtlContext } from '../predict/ttlContext.js';
 import { loadQueue } from '../scheduler/txScheduler.js';
 import type { ShadowWatchTarget } from './shadowWatchlist.js';
-import { promoteWatchedCandidatesToQueue } from './shadowWatchPromotion.js';
+import { buildShadowPromotionSummarySignature, promoteWatchedCandidatesToQueue } from './shadowWatchPromotion.js';
 
 export type CandidateLike = {
   key?: string;
@@ -64,6 +64,9 @@ export class RealtimeForecastUpdater {
   private pendingKeys = new Set<string>();
   private pendingReason: string | undefined;
   private flushTimer: NodeJS.Timeout | null = null;
+  private lastPromotionSummarySignature = '';
+  private lastPromotionSummaryLoggedAtMs = 0;
+  private promotionSummaryLogIntervalMs: number;
 
   constructor(opts: {
     connection: Connection;
@@ -71,12 +74,14 @@ export class RealtimeForecastUpdater {
     programId: PublicKey;
     reserveCache: ReserveCache;
     oracleCache: OracleCache;
+    promotionSummaryLogIntervalMs?: number;
   }) {
     this.connection = opts.connection;
     this.marketPubkey = opts.marketPubkey;
     this.programId = opts.programId;
     this.reserveCache = opts.reserveCache;
     this.oracleCache = opts.oracleCache;
+    this.promotionSummaryLogIntervalMs = opts.promotionSummaryLogIntervalMs ?? Number(process.env.LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS ?? 10_000);
     this.orchestrator = new EventRefreshOrchestrator({}, (keys, reason) => {
       this.enqueueRefresh(keys, reason);
     });
@@ -99,14 +104,23 @@ export class RealtimeForecastUpdater {
       if (queuedBatch.length > 0) {
         refreshSubset(queuedBatch, this.candidatesByKey, batchReason);
       }
-      if (watchOnlyBatch.length > 0) {
-        void promoteWatchedCandidatesToQueue({
-          keys: watchOnlyBatch,
-          candidatesByKey: this.candidatesByKey,
-        }).then((result) => {
-          logger.info(
-            {
-              watchOnlyKeys: watchOnlyBatch.length,
+        if (watchOnlyBatch.length > 0) {
+          void promoteWatchedCandidatesToQueue({
+            keys: watchOnlyBatch,
+            candidatesByKey: this.candidatesByKey,
+          }).then((result) => {
+            const signature = buildShadowPromotionSummarySignature(result);
+            const now = Date.now();
+            const signatureChanged = signature !== this.lastPromotionSummarySignature;
+            const shouldLog = signatureChanged || now - this.lastPromotionSummaryLoggedAtMs >= this.promotionSummaryLogIntervalMs;
+            if (!shouldLog) {
+              return;
+            }
+            this.lastPromotionSummarySignature = signature;
+            this.lastPromotionSummaryLoggedAtMs = now;
+            logger.info(
+              {
+                watchOnlyKeys: watchOnlyBatch.length,
               considered: result.considered,
               ranked: result.ranked,
               queueEligible: result.queueEligible,
