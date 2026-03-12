@@ -113,7 +113,7 @@ export const EnvSchema = z.object({
 
   // PR12: Execution thresholds for dry-run executor
   EXEC_MIN_EV: z.string().optional().default('0'),
-  EXEC_MAX_TTL_MIN: z.string().optional().default('10'),
+  EXEC_MAX_TTL_MIN: z.string().optional().default('120'),
   EXEC_READY_TTL_MAX_MIN: z.string().optional().default('0.25'),
   EXEC_KLEND_VERIFY_ENABLED: z.string().optional().default('false'),
   EXEC_KLEND_VERIFY_TOPK: z.string().optional().default('3'),
@@ -131,7 +131,7 @@ export const EnvSchema = z.object({
   JITO_TIP_LAMPORTS: z.string().optional().default('1000'),
   JITO_TIP_ACCOUNT_CACHE_MS: z.string().optional().default('300000'),
   EXEC_EARLY_GRACE_MS: z.string().optional().default('3000'),
-  EXEC_MIN_FEE_PAYER_SOL: z.string().optional().default('0.05'),
+  EXEC_MIN_FEE_PAYER_SOL: z.string().optional().default('0.01'),
   EXEC_DRY_RUN_SETUP_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).optional().default(300),
   EXECUTOR_LUT_ADDRESS: z.string().optional(),
   EXECUTOR_LUT_MANAGE: z.string().optional().default('false'),
@@ -149,7 +149,7 @@ export const EnvSchema = z.object({
 
   // TTL expiry configuration
   TTL_GRACE_MS: z.string().optional().default('60000'), // 60 seconds grace period after predicted liquidation
-  TTL_UNKNOWN_PASSES: z.string().optional().default('true'), // Whether plans with unknown TTL should pass (not be marked expired)
+  TTL_UNKNOWN_PASSES: z.string().optional().default('false'), // Prefer false for execution path
 
   // Presubmit cache
   PRESUBMIT_ENABLED: z.string().optional().default('false'),

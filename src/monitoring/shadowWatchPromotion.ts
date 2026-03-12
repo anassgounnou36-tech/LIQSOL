@@ -44,6 +44,31 @@ export function buildShadowPromotionSummarySignature(result: ShadowPromotionResu
 }
 
 const shadowPromotionHealthyCooldown = new Map<string, ShadowPromotionHealthyCooldownEntry>();
+const loggedCooldownSkipAnchorByObligation = new Map<string, number>();
+let lastCooldownSkipSummarySig: string | null = null;
+let lastCooldownSkipSummaryAtMs = 0;
+const COOLDOWN_SKIP_LOG_TRACK_MAX_ENTRIES = 5_000;
+
+function pruneCooldownSkipLogTrackerIfNeeded(): void {
+  if (loggedCooldownSkipAnchorByObligation.size <= COOLDOWN_SKIP_LOG_TRACK_MAX_ENTRIES) return;
+  const toDelete = loggedCooldownSkipAnchorByObligation.size - Math.floor(COOLDOWN_SKIP_LOG_TRACK_MAX_ENTRIES / 2);
+  let deleted = 0;
+  for (const key of loggedCooldownSkipAnchorByObligation.keys()) {
+    loggedCooldownSkipAnchorByObligation.delete(key);
+    deleted++;
+    if (deleted >= toDelete) break;
+  }
+}
+
+function buildCooldownSkipSummarySignature(result: Pick<ShadowPromotionResult, 'skippedByHealthyCooldown' | 'verifiedByKlend' | 'admittedByKlend' | 'enqueued' | 'rejectedReasons'>): string {
+  return JSON.stringify({
+    skippedByHealthyCooldown: result.skippedByHealthyCooldown,
+    rejectedReasonKeys: Object.keys(result.rejectedReasons).sort(),
+    verifiedByKlend: result.verifiedByKlend,
+    admittedByKlend: result.admittedByKlend,
+    enqueued: result.enqueued,
+  });
+}
 
 type PromotionCandidate = ScoredObligation & {
   rankBucket?: 'liquidatable' | 'near-ready' | 'medium-horizon' | 'far-horizon' | 'legacy-or-unknown';
@@ -208,9 +233,14 @@ export async function promoteWatchedCandidatesToQueue(args: {
         skippedByHealthyCooldown++;
         rejectedReasons.shadowPromotionHealthyCooldown++;
         const remainingMs = Math.max(0, activeCooldown.untilMs - nowMs);
-        logger.info(
-          `[ShadowPromotion] cooldown-skip obligation=${obligationId} remainingMs=${remainingMs} sdkHr=${activeCooldown.healthRatioSdk.toFixed(6)}`,
-        );
+        const previouslyLoggedAnchor = loggedCooldownSkipAnchorByObligation.get(candidateKey);
+        if (previouslyLoggedAnchor !== anchorMs) {
+          loggedCooldownSkipAnchorByObligation.set(candidateKey, anchorMs);
+          pruneCooldownSkipLogTrackerIfNeeded();
+          logger.info(
+            `[ShadowPromotion] cooldown-skip obligation=${obligationId} remainingMs=${remainingMs} sdkHr=${activeCooldown.healthRatioSdk.toFixed(6)}`,
+          );
+        }
         continue;
       }
       if (!candidate.ownerPubkey) {
@@ -348,6 +378,26 @@ export async function promoteWatchedCandidatesToQueue(args: {
     },
     'Shadow watch promotion batch',
   );
+
+  const cooldownSummarySig = buildCooldownSkipSummarySignature({
+    skippedByHealthyCooldown,
+    rejectedReasons,
+    verifiedByKlend,
+    admittedByKlend,
+    enqueued: newlyAdded.length,
+  });
+  const now = Date.now();
+  const cooldownSummaryIntervalMs = Number(env.LIVE_PROMOTION_SUMMARY_LOG_INTERVAL_MS ?? 10_000);
+  const shouldLogCooldownSummary =
+    cooldownSummarySig !== lastCooldownSkipSummarySig ||
+    now - lastCooldownSkipSummaryAtMs >= cooldownSummaryIntervalMs;
+  if (shouldLogCooldownSummary) {
+    lastCooldownSkipSummarySig = cooldownSummarySig;
+    lastCooldownSkipSummaryAtMs = now;
+    logger.info(
+      `[ShadowPromotion] cooldown-summary skippedByHealthyCooldown=${skippedByHealthyCooldown} verifiedByKlend=${verifiedByKlend} admittedByKlend=${admittedByKlend} enqueued=${newlyAdded.length} rejectedReasons=${JSON.stringify(rejectedReasons)}`,
+    );
+  }
 
   return {
     considered: consideredCandidates.length,
