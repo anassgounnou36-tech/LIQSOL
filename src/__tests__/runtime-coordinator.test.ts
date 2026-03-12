@@ -13,6 +13,7 @@ const mockState = vi.hoisted(() => ({
   updaterBootstraps: 0,
   accountStarts: 0,
   accountStops: 0,
+  accountListenerConfigs: [] as Array<{ accountPubkeys: string[] }>,
   accountTargetUpdates: [] as string[][],
 }));
 
@@ -74,6 +75,9 @@ vi.mock('../monitoring/realtimeForecastUpdater.js', () => ({
 
 vi.mock('../monitoring/yellowstoneAccountListener.js', () => ({
   YellowstoneAccountListener: class {
+    constructor(cfg: { accountPubkeys: string[] }) {
+      mockState.accountListenerConfigs.push(cfg);
+    }
     on() {}
     async start() {
       mockState.accountStarts++;
@@ -124,6 +128,7 @@ describe('RuntimeCoordinator', () => {
     mockState.updaterBootstraps = 0;
     mockState.accountStarts = 0;
     mockState.accountStops = 0;
+    mockState.accountListenerConfigs = [];
     mockState.accountTargetUpdates = [];
     process.env.SCHEDULER_ENABLE_EXECUTOR = 'true';
     process.env.SCHEDULER_ENABLE_AUDIT = 'false';
@@ -204,6 +209,32 @@ describe('RuntimeCoordinator', () => {
     await coordinator.start({ broadcast: false });
     await coordinator.reloadWatchTargets('same');
     expect(mockState.accountTargetUpdates).toHaveLength(0);
+  });
+
+  it('queue-empty with shadow-watch entries still initializes active watch state', async () => {
+    mockState.watchTargets = {
+      queueTargets: [],
+      shadowOnlyTargets: [{ key: 's-only', obligationPubkey: 's-only' }],
+      allTargets: [{ key: 's-only', obligationPubkey: 's-only' }],
+    };
+    const { RuntimeCoordinator } = await import('../live/runtimeCoordinator.js');
+    const coordinator = new RuntimeCoordinator(
+      {
+        marketPubkey: PublicKey.unique(),
+        programId: PublicKey.unique(),
+      },
+      {
+        rebuildIntervalMs: 120000,
+        heartbeatIntervalMs: 60000,
+        tickDebounceMs: 200,
+        queueEmptyLogIntervalMs: 30000,
+        promotionSummaryLogIntervalMs: 10000,
+        realtimeEnabled: true,
+      },
+    );
+    await coordinator.start({ broadcast: false });
+    expect(mockState.accountListenerConfigs[0]?.accountPubkeys).toEqual(['s-only']);
+    expect(mockState.updaterBootstraps).toBeGreaterThan(0);
   });
 
   it('queue-empty logs are throttled by forwarding configured interval to executor', async () => {

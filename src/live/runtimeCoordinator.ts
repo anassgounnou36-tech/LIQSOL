@@ -324,11 +324,20 @@ export class RuntimeCoordinator {
     const enableExecutorFlag = process.env.SCHEDULER_ENABLE_EXECUTOR ?? process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true';
     if (enableExecutorFlag === 'true') {
       console.log(`[Scheduler] Invoking executor (dry=${dry}, broadcast=${this.broadcast})`);
-      await runDryExecutor({
-        dry,
-        broadcast: this.broadcast,
-        queueEmptyLogIntervalMs: this.config.queueEmptyLogIntervalMs,
-      });
+      try {
+        await runDryExecutor({
+          dry,
+          broadcast: this.broadcast,
+          queueEmptyLogIntervalMs: this.config.queueEmptyLogIntervalMs,
+        });
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        console.warn('[Executor] Failed:', err.message);
+        if (err.stack) {
+          console.warn('[Executor] Stack trace:');
+          console.warn(err.stack);
+        }
+      }
     } else {
       console.log('[Scheduler] Executor disabled (SCHEDULER_ENABLE_EXECUTOR=false)');
     }
