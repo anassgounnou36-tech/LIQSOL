@@ -61,17 +61,22 @@ async function deriveOraclePubkeysFromReserves(marketPubkey: PublicKey): Promise
 
 export class RuntimeCoordinator {
   private readonly watchStateStore = new WatchStateStore();
+  private readonly runtimeEnvConfig = loadLiveRuntimeConfig();
   private accountListener: YellowstoneAccountListener | null = null;
   private priceListener: YellowstonePriceListener | null = null;
   private updater: RealtimeForecastUpdater | null = null;
+  private startupSchedulerConfig = loadStartupSchedulerConfig();
   private started = false;
+  private stopping = false;
   private startPromise: Promise<void> | null = null;
+  private stopPromise: Promise<void> | null = null;
   private cycleInProgress = false;
   private tickDebounceTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private rebuildTimer: NodeJS.Timeout | null = null;
   private rebuildInProgress = false;
   private broadcast = false;
+  private lastRebuildAtMs: number | null = null;
 
   constructor(
     private readonly deps: RuntimeCoordinatorDeps,
@@ -79,7 +84,10 @@ export class RuntimeCoordinator {
   ) {}
 
   async start(opts: { broadcast: boolean }): Promise<void> {
-    if (this.started) return;
+    if (this.started) {
+      if (this.startPromise) return this.startPromise;
+      return;
+    }
     if (this.startPromise) return this.startPromise;
     this.startPromise = this.startInternal(opts).finally(() => {
       this.startPromise = null;
@@ -89,9 +97,10 @@ export class RuntimeCoordinator {
 
   private async startInternal(opts: { broadcast: boolean }): Promise<void> {
     this.broadcast = opts.broadcast;
+    this.stopping = false;
     this.started = true;
     loadEnv();
-    loadStartupSchedulerConfig();
+    this.startupSchedulerConfig = loadStartupSchedulerConfig();
 
     if (this.config.realtimeEnabled) {
       try {
@@ -103,10 +112,11 @@ export class RuntimeCoordinator {
       logger.info('Realtime refresh disabled via LIVE_REALTIME_ENABLED=false');
     }
 
-    await this.runCycleGuarded();
+    await this.runCycle('startup');
 
     this.heartbeatTimer = setInterval(() => {
-      this.scheduleTick();
+      this.emitHeartbeatSummary('heartbeat');
+      this.scheduleCycle('heartbeat');
     }, this.config.heartbeatIntervalMs);
     this.rebuildTimer = setInterval(() => {
       void this.runPeriodicRebuild('periodic-rebuild');
@@ -114,6 +124,16 @@ export class RuntimeCoordinator {
   }
 
   async stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+    if (!this.started && !this.stopping) return;
+    this.stopPromise = this.stopInternal().finally(() => {
+      this.stopPromise = null;
+    });
+    return this.stopPromise;
+  }
+
+  private async stopInternal(): Promise<void> {
+    this.stopping = true;
     this.started = false;
     if (this.tickDebounceTimer) {
       clearTimeout(this.tickDebounceTimer);
@@ -130,10 +150,11 @@ export class RuntimeCoordinator {
     const listeners = [this.accountListener, this.priceListener];
     this.accountListener = null;
     this.priceListener = null;
+    this.updater = null;
     for (const listener of listeners) {
       if (listener) await listener.stop();
     }
-    this.updater = null;
+    this.stopping = false;
   }
 
   async runPeriodicRebuild(reason: string): Promise<void> {
@@ -152,7 +173,9 @@ export class RuntimeCoordinator {
         nearThreshold: Number(env.CAND_NEAR ?? 1.02),
         flashloanMint: 'USDC',
       });
+      this.lastRebuildAtMs = Date.now();
       await this.reloadWatchTargets(reason);
+      logger.info({ reason }, 'Runtime rebuild complete');
     } finally {
       this.rebuildInProgress = false;
     }
@@ -184,22 +207,23 @@ export class RuntimeCoordinator {
     }
   }
 
-  private scheduleTick(debounceMs = this.config.tickDebounceMs): void {
-    if (!this.started || this.tickDebounceTimer) return;
+  private scheduleCycle(reason: string, debounceMs = this.config.tickDebounceMs): void {
+    if (!this.started || this.stopping || this.tickDebounceTimer) return;
     this.tickDebounceTimer = setTimeout(async () => {
       this.tickDebounceTimer = null;
-      await this.runCycleGuarded();
+      await this.runCycle(reason);
     }, debounceMs);
   }
 
-  private async runCycleGuarded(): Promise<void> {
+  private async runCycle(reason: string): Promise<void> {
+    if (!this.started || this.stopping) return;
     if (this.cycleInProgress) {
-      logger.warn('Tick skipped: previous cycle still in progress');
+      logger.debug({ reason }, 'Runtime cycle skipped: previous cycle still in progress');
       return;
     }
     this.cycleInProgress = true;
     try {
-      await this.cycleOnce();
+      await this.cycleOnce(reason);
     } finally {
       this.cycleInProgress = false;
     }
@@ -208,7 +232,6 @@ export class RuntimeCoordinator {
   private async initRealtime(): Promise<void> {
     if (this.updater && this.accountListener && this.priceListener) return;
     const env = loadEnv();
-    const runtimeEnvConfig = loadLiveRuntimeConfig();
     const grpcUrl = env.YELLOWSTONE_GRPC_URL;
     if (!grpcUrl) {
       throw new Error('YELLOWSTONE_GRPC_URL is missing');
@@ -233,45 +256,44 @@ export class RuntimeCoordinator {
       grpcUrl,
       authToken: env.YELLOWSTONE_X_TOKEN,
       accountPubkeys: obligationPubkeys,
-      reconnectBaseMs: runtimeEnvConfig.yellowstoneReconnectBaseMs,
-      reconnectMaxMs: runtimeEnvConfig.yellowstoneReconnectMaxMs,
-      resubscribeSettleMs: runtimeEnvConfig.yellowstoneResubscribeSettleMs,
+      reconnectBaseMs: this.runtimeEnvConfig.yellowstoneReconnectBaseMs,
+      reconnectMaxMs: this.runtimeEnvConfig.yellowstoneReconnectMaxMs,
+      resubscribeSettleMs: this.runtimeEnvConfig.yellowstoneResubscribeSettleMs,
       debounceMs: this.config.tickDebounceMs,
     });
     const priceListener = new YellowstonePriceListener({
       grpcUrl,
       authToken: env.YELLOWSTONE_X_TOKEN,
       oraclePubkeys,
-      reconnectBaseMs: runtimeEnvConfig.yellowstoneReconnectBaseMs,
-      reconnectMaxMs: runtimeEnvConfig.yellowstoneReconnectMaxMs,
-      resubscribeSettleMs: runtimeEnvConfig.yellowstoneResubscribeSettleMs,
+      reconnectBaseMs: this.runtimeEnvConfig.yellowstoneReconnectBaseMs,
+      reconnectMaxMs: this.runtimeEnvConfig.yellowstoneReconnectMaxMs,
+      resubscribeSettleMs: this.runtimeEnvConfig.yellowstoneResubscribeSettleMs,
       debounceMs: this.config.tickDebounceMs,
     });
 
     accountListener.on('ready', info => logger.info(info, 'Account listener ready'));
     accountListener.on('account-update', ev => {
-      updater.handleObligationAccountUpdate(ev);
-      this.scheduleTick();
+      this.updater?.handleObligationAccountUpdate(ev);
+      this.scheduleCycle('account-update');
     });
     accountListener.on('error', err => logger.error({ err }, 'Account listener error'));
 
     priceListener.on('ready', info => logger.info(info, 'Price listener ready'));
     priceListener.on('price-update', ev => {
-      updater.handleOracleAccountUpdate(ev);
-      this.scheduleTick();
+      this.updater?.handleOracleAccountUpdate(ev);
+      this.scheduleCycle('price-update');
     });
     priceListener.on('error', err => logger.error({ err }, 'Price listener error'));
 
     await accountListener.start();
     await priceListener.start();
 
-    this.updater = updater;
     this.accountListener = accountListener;
     this.priceListener = priceListener;
+    this.updater = updater;
   }
 
-  private async cycleOnce(): Promise<void> {
-    console.log('\n[Scheduler] Cycle start');
+  private async cycleOnce(reason: string): Promise<void> {
     const ttlGraceMs = getEnvNum('TTL_GRACE_MS', 60_000);
     const ttlUnknownPasses = (process.env.TTL_UNKNOWN_PASSES ?? 'true') === 'true';
     const ttlParams: TtlManagerParams = {
@@ -283,14 +305,12 @@ export class RuntimeCoordinator {
       minEv: getEnvNum('SCHED_MIN_EV', 0),
     };
 
-    if ((process.env.SCHEDULER_ENABLE_REFRESH ?? 'false') === 'true') {
+    if (this.startupSchedulerConfig.enableRefresh) {
       const updated = refreshQueue(ttlParams, []);
-      console.log(`[Scheduler] Refresh complete: queue size ${updated.length}`);
-    } else {
-      console.log('[Scheduler] Event-driven refresh enabled (cron refresh disabled).');
+      logger.debug({ reason, queueSize: updated.length }, 'Runtime refresh queue pass complete');
     }
 
-    if ((process.env.SCHEDULER_ENABLE_AUDIT ?? 'true') === 'true') {
+    if (this.startupSchedulerConfig.enableAudit) {
       const queue = loadQueue();
       const total = queue.length;
       const nowMs = Date.now();
@@ -316,14 +336,11 @@ export class RuntimeCoordinator {
         if (isExpired) expired++;
         else active++;
       }
-      console.log(`[Audit] Total: ${total} | Active: ${active} | Expired: ${expired}`);
-      if (expired > 0) console.log('[Audit] Expired reasons:', expiredReasons);
+      logger.debug({ reason, total, active, expired, expiredReasons }, 'Runtime queue audit summary');
     }
 
     const dry = !this.broadcast;
-    const enableExecutorFlag = process.env.SCHEDULER_ENABLE_EXECUTOR ?? process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true';
-    if (enableExecutorFlag === 'true') {
-      console.log(`[Scheduler] Invoking executor (dry=${dry}, broadcast=${this.broadcast})`);
+    if (this.startupSchedulerConfig.enableExecutor) {
       try {
         await runDryExecutor({
           dry,
@@ -332,16 +349,27 @@ export class RuntimeCoordinator {
         });
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
-        console.warn('[Executor] Failed:', err.message);
-        if (err.stack) {
-          console.warn('[Executor] Stack trace:');
-          console.warn(err.stack);
-        }
+        logger.warn({ err, reason }, 'Runtime executor pass failed');
       }
-    } else {
-      console.log('[Scheduler] Executor disabled (SCHEDULER_ENABLE_EXECUTOR=false)');
     }
+  }
 
-    console.log('[Scheduler] Cycle end');
+  private emitHeartbeatSummary(reason: string): void {
+    const snapshot = this.watchStateStore.getCurrent();
+    const queueSize = loadQueue().length;
+    logger.info(
+      {
+        reason,
+        queueSize,
+        queueTargets: snapshot.queueTargets.length,
+        shadowOnlyTargets: snapshot.shadowOnlyTargets.length,
+        allWatchTargets: snapshot.allWatchTargets.length,
+        cycleInProgress: this.cycleInProgress,
+        lastRebuildAtMs: this.lastRebuildAtMs,
+        lastRebuildAgeMs: this.lastRebuildAtMs === null ? null : Date.now() - this.lastRebuildAtMs,
+        realtimeEnabled: this.config.realtimeEnabled,
+      },
+      'Runtime heartbeat summary',
+    );
   }
 }

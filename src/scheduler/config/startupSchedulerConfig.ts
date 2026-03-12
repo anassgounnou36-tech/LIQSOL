@@ -3,6 +3,7 @@ import { loadEnv } from '../../config/env.js';
 export interface StartupSchedulerConfig {
   enableRefresh: boolean;
   enableAudit: boolean;
+  enableExecutor: boolean;
   enableDryRun: boolean;
   loopIntervalMs: number;
   minEv: number;
@@ -15,6 +16,7 @@ export function loadStartupSchedulerConfig(): StartupSchedulerConfig {
   return {
     enableRefresh: (process.env.SCHEDULER_ENABLE_REFRESH ?? 'true') === 'true',
     enableAudit: (process.env.SCHEDULER_ENABLE_AUDIT ?? 'true') === 'true',
+    enableExecutor: (process.env.SCHEDULER_ENABLE_EXECUTOR ?? process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true') === 'true',
     enableDryRun: (process.env.SCHEDULER_ENABLE_DRYRUN ?? 'true') === 'true',
     loopIntervalMs: Number(process.env.SCHEDULER_MAIN_INTERVAL_MS ?? process.env.SCHED_REFRESH_INTERVAL_MS ?? 30000),
     minEv: Number(env.EXEC_MIN_EV ?? 0),

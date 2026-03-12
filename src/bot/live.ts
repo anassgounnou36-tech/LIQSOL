@@ -6,6 +6,8 @@ import { logger } from '../observability/logger.js';
 import { RuntimeCoordinator } from '../live/runtimeCoordinator.js';
 import { loadLiveRuntimeConfig } from '../live/runtimeConfig.js';
 
+let shutdownInFlight: Promise<void> | null = null;
+
 function parseMintAllowlistCsv(s?: string): string[] | undefined {
   if (!s) return undefined;
   const items = s.split(',').map(x => x.trim()).filter(Boolean);
@@ -35,6 +37,7 @@ function parseMintAllowlistCsv(s?: string): string[] | undefined {
 export async function startIntegratedLiveRunner(opts: {
   broadcast: boolean;
 }): Promise<void> {
+  shutdownInFlight = null;
   console.log('╔════════════════════════════════════════════════╗');
   console.log('║  LIQSOL Bot - Professional Live Runner        ║');
   console.log('║  Integrated Candidate + Queue + Executor      ║');
@@ -113,20 +116,34 @@ export async function startIntegratedLiveRunner(opts: {
   );
 
   console.log('[Live] Building initial candidates and queue via runtime coordinator...\n');
-  await coordinator.runPeriodicRebuild('live-startup');
+  await coordinator.runPeriodicRebuild('startup-rebuild');
   await coordinator.start({ broadcast });
 
   logger.info('Live runner active - press Ctrl+C to stop');
 
-  // Graceful shutdown handlers
-  process.on('SIGINT', () => {
-    console.log('\n[Live] Shutting down gracefully...');
-    process.exit(0);
-  });
+  async function shutdownFromSignal(signal: string): Promise<void> {
+    if (shutdownInFlight) return shutdownInFlight;
+    shutdownInFlight = (async () => {
+      logger.info({ signal }, '[Live] Shutting down gracefully...');
+      try {
+        await coordinator.stop();
+        logger.info('[Live] Shutdown complete');
+        process.exitCode = 0;
+      } catch (err) {
+        logger.error({ err, signal }, '[Live] Graceful shutdown failed');
+        process.exitCode = 1;
+      } finally {
+        process.exit();
+      }
+    })();
+    return shutdownInFlight;
+  }
 
-  process.on('SIGTERM', () => {
-    console.log('\n[Live] Shutting down gracefully...');
-    process.exit(0);
+  process.once('SIGINT', () => {
+    void shutdownFromSignal('SIGINT');
+  });
+  process.once('SIGTERM', () => {
+    void shutdownFromSignal('SIGTERM');
   });
 }
 

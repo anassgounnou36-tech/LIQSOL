@@ -24,6 +24,7 @@ import type { TxSendTransport } from './broadcastRetry.js';
 import type { BotEvent } from '../observability/botTelemetry.js';
 import { emitBotEvent } from '../observability/botTelemetry.js';
 import { maybeNotifyForBotEvent } from '../notify/notificationRouter.js';
+import { logger } from '../observability/logger.js';
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const ATA_ACCOUNT_SIZE = 165;
@@ -548,7 +549,7 @@ export async function runDryExecutor(opts?: ExecutorOpts): Promise<ExecutorResul
       );
       const now = Date.now();
       if (now - lastQueueEmptyLogAtMs >= queueEmptyLogIntervalMs) {
-        console.log('No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
+        logger.info({ queueEmptyLogIntervalMs }, 'No plans available. Ensure data/tx_queue.json exists (PR10/PR11).');
         lastQueueEmptyLogAtMs = now;
       }
       return { status: 'no-plans' };

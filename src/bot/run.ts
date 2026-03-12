@@ -81,17 +81,6 @@ async function main() {
   });
   
   logger.info('Bot running - press Ctrl+C to stop');
-  
-  // Keep process alive
-  process.on('SIGINT', () => {
-    console.log('\n[Bot] Shutting down gracefully...');
-    process.exit(0);
-  });
-  
-  process.on('SIGTERM', () => {
-    console.log('\n[Bot] Shutting down gracefully...');
-    process.exit(0);
-  });
 }
 
 main().catch(err => {

@@ -27,7 +27,16 @@ vi.mock('../config/env.js', () => ({
 }));
 
 vi.mock('../scheduler/config/startupSchedulerConfig.js', () => ({
-  loadStartupSchedulerConfig: vi.fn(() => ({})),
+  loadStartupSchedulerConfig: vi.fn(() => ({
+    enableRefresh: false,
+    enableAudit: false,
+    enableExecutor: true,
+    enableDryRun: true,
+    loopIntervalMs: 30000,
+    minEv: 0,
+    maxTtlMin: 10,
+    minDelayMs: 0,
+  })),
 }));
 
 vi.mock('../live/runtimeConfig.js', () => ({
@@ -211,6 +220,33 @@ describe('RuntimeCoordinator', () => {
     expect(mockState.accountTargetUpdates).toHaveLength(0);
   });
 
+  it('reload with changed watch fingerprints updates listeners and updater', async () => {
+    const { RuntimeCoordinator } = await import('../live/runtimeCoordinator.js');
+    const coordinator = new RuntimeCoordinator(
+      {
+        marketPubkey: PublicKey.unique(),
+        programId: PublicKey.unique(),
+      },
+      {
+        rebuildIntervalMs: 120000,
+        heartbeatIntervalMs: 60000,
+        tickDebounceMs: 200,
+        queueEmptyLogIntervalMs: 30000,
+        promotionSummaryLogIntervalMs: 10000,
+        realtimeEnabled: true,
+      },
+    );
+    await coordinator.start({ broadcast: false });
+    mockState.watchTargets = {
+      queueTargets: [{ key: 'q2', obligationPubkey: 'q2' }],
+      shadowOnlyTargets: [],
+      allTargets: [{ key: 'q2', obligationPubkey: 'q2' }],
+    };
+    await coordinator.reloadWatchTargets('changed');
+    expect(mockState.accountTargetUpdates).toContainEqual(['q2']);
+    expect(mockState.updaterRefreshes).toBeGreaterThanOrEqual(2);
+  });
+
   it('queue-empty with shadow-watch entries still initializes active watch state', async () => {
     mockState.watchTargets = {
       queueTargets: [],
@@ -282,6 +318,28 @@ describe('RuntimeCoordinator', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(mockState.accountStops).toBe(1);
     expect(mockState.executorCalls.length).toBe(callsAtStop);
+  });
+
+  it('stop() is idempotent', async () => {
+    const { RuntimeCoordinator } = await import('../live/runtimeCoordinator.js');
+    const coordinator = new RuntimeCoordinator(
+      {
+        marketPubkey: PublicKey.unique(),
+        programId: PublicKey.unique(),
+      },
+      {
+        rebuildIntervalMs: 120000,
+        heartbeatIntervalMs: 200,
+        tickDebounceMs: 10,
+        queueEmptyLogIntervalMs: 30000,
+        promotionSummaryLogIntervalMs: 10000,
+        realtimeEnabled: true,
+      },
+    );
+    await coordinator.start({ broadcast: false });
+    await coordinator.stop();
+    await coordinator.stop();
+    expect(mockState.accountStops).toBe(1);
   });
 
   it('promotion-summary logs are throttled by signature stability but emit on state change', async () => {

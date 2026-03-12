@@ -121,4 +121,21 @@ describe('Yellowstone listener restart lifecycle', () => {
     await vi.advanceTimersByTimeAsync(20);
     expect(mockState.loggerError).not.toHaveBeenCalled();
   });
+
+  it('price listener planned restart does not use failure reconnect path', async () => {
+    const { YellowstonePriceListener } = await import('../monitoring/yellowstonePriceListener.js');
+    const listener = new YellowstonePriceListener({
+      grpcUrl: 'grpc://local',
+      oraclePubkeys: ['o1'],
+      reconnectBaseMs: 100,
+      reconnectMaxMs: 500,
+      resubscribeSettleMs: 10,
+    });
+    await listener.start();
+    listener.updateTargets(['o2']);
+    await vi.advanceTimersByTimeAsync(20);
+    const reconnectLogs = mockState.loggerInfo.mock.calls.filter(call => call[1] === 'Yellowstone listener reconnect scheduled');
+    expect(reconnectLogs).toHaveLength(0);
+    expect(mockState.loggerError).not.toHaveBeenCalled();
+  });
 });
